@@ -1,0 +1,9 @@
+{
+  "name": "entry",
+  "version": "1.0.0",
+  "description": "StarFinding 平板端 AR 星图与设备控制模块",
+  "main": "",
+  "author": "StarFinding Team",
+  "license": "Apache-2.0",
+  "dependencies": {}
+}

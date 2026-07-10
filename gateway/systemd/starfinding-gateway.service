@@ -1,0 +1,25 @@
+[Unit]
+Description=StarFinding Raspberry Pi Camera Gateway
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=starfinding
+Group=starfinding
+WorkingDirectory=/opt/starfinding-gateway
+EnvironmentFile=-/etc/starfinding-gateway.env
+Environment=PYTHONUNBUFFERED=1
+Environment=STARFINDING_DATA_DIR=/var/lib/starfinding-gateway
+ExecStart=/opt/starfinding-gateway/.venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=30
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/starfinding-gateway
+
+[Install]
+WantedBy=multi-user.target

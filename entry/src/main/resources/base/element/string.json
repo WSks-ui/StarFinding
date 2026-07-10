@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "AR 寻星、赤道仪控制与智能星空摄影"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "StarFinding 主界面"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "StarFinding"
+    },
+    {
+      "name": "camera_permission_reason",
+      "value": "用于 AR 星空叠加和普通星图手势控制"
+    },
+    {
+      "name": "location_permission_reason",
+      "value": "用于计算当前地点可见天体和赤道仪目标坐标"
+    }
+  ]
+}
