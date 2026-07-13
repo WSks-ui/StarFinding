@@ -18,6 +18,16 @@
         "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
       },
       {
+        "name": "ohos.permission.GYROSCOPE",
+        "reason": "$string:gyroscope_permission_reason",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
+      },
+      {
+        "name": "ohos.permission.ACCELEROMETER",
+        "reason": "$string:accelerometer_permission_reason",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
+      },
+      {
         "name": "ohos.permission.APPROXIMATELY_LOCATION",
         "reason": "$string:location_permission_reason",
         "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
