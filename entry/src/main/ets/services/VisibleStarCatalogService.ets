@@ -139,6 +139,16 @@ export class VisibleStarCatalogService {
     return this.stars.length;
   }
 
+  /** Canvas 天穹命中后按稳定目录 ID 取回原始恒星，避免页面为每颗星维护额外点击节点。 */
+  getById(id: string): VisibleStar | undefined {
+    for (let index: number = 0; index < this.stars.length; index++) {
+      if (this.stars[index].id === id) {
+        return this.stars[index];
+      }
+    }
+    return undefined;
+  }
+
   /** 按视星等从亮到暗返回恒星，供目录搜索或普通星图分层渲染使用。 */
   filterByMagnitude(maxMagnitude: number = VisibleStarCatalogService.DEFAULT_MAX_MAGNITUDE,
     maxResults: number = VisibleStarCatalogService.MAX_CATALOG_RESULTS): VisibleStar[] {
