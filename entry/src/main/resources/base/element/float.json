@@ -1,8 +1,72 @@
 {
   "float": [
     {
-      "name": "page_text_font_size",
-      "value": "50fp"
+      "name": "corner_tag",
+      "value": "4vp"
+    },
+    {
+      "name": "corner_small",
+      "value": "8vp"
+    },
+    {
+      "name": "corner_card",
+      "value": "16vp"
+    },
+    {
+      "name": "corner_control",
+      "value": "20vp"
+    },
+    {
+      "name": "corner_modal",
+      "value": "32vp"
+    },
+    {
+      "name": "space_xs",
+      "value": "4vp"
+    },
+    {
+      "name": "space_sm",
+      "value": "8vp"
+    },
+    {
+      "name": "space_md",
+      "value": "12vp"
+    },
+    {
+      "name": "space_lg",
+      "value": "16vp"
+    },
+    {
+      "name": "space_xl",
+      "value": "24vp"
+    },
+    {
+      "name": "screen_margin_phone",
+      "value": "16vp"
+    },
+    {
+      "name": "screen_margin_tablet",
+      "value": "32vp"
+    },
+    {
+      "name": "touch_target",
+      "value": "48vp"
+    },
+    {
+      "name": "font_caption",
+      "value": "12fp"
+    },
+    {
+      "name": "font_body",
+      "value": "14fp"
+    },
+    {
+      "name": "font_title",
+      "value": "20fp"
+    },
+    {
+      "name": "font_page_title",
+      "value": "24fp"
     }
   ]
 }

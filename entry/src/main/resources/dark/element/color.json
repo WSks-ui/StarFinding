@@ -2,7 +2,99 @@
   "color": [
     {
       "name": "start_window_background",
-      "value": "#080A10"
+      "value": "#03060A"
+    },
+    {
+      "name": "app_background_primary",
+      "value": "#080B10"
+    },
+    {
+      "name": "app_background_secondary",
+      "value": "#111418"
+    },
+    {
+      "name": "app_surface_primary",
+      "value": "#202224"
+    },
+    {
+      "name": "app_surface_secondary",
+      "value": "#191A1C"
+    },
+    {
+      "name": "app_surface_tertiary",
+      "value": "#2E3033"
+    },
+    {
+      "name": "app_divider",
+      "value": "#33FFFFFF"
+    },
+    {
+      "name": "app_text_primary",
+      "value": "#E5FFFFFF"
+    },
+    {
+      "name": "app_text_secondary",
+      "value": "#99FFFFFF"
+    },
+    {
+      "name": "app_text_tertiary",
+      "value": "#66FFFFFF"
+    },
+    {
+      "name": "app_brand",
+      "value": "#72D3F5"
+    },
+    {
+      "name": "app_on_brand",
+      "value": "#061017"
+    },
+    {
+      "name": "app_success",
+      "value": "#57C995"
+    },
+    {
+      "name": "app_warning",
+      "value": "#F4BA58"
+    },
+    {
+      "name": "app_error",
+      "value": "#E05B64"
+    },
+    {
+      "name": "app_error_container",
+      "value": "#7A2F38"
+    },
+    {
+      "name": "sky_background",
+      "value": "#03060A"
+    },
+    {
+      "name": "sky_surface",
+      "value": "#E6111720"
+    },
+    {
+      "name": "sky_surface_strong",
+      "value": "#F211151B"
+    },
+    {
+      "name": "sky_surface_soft",
+      "value": "#CC111720"
+    },
+    {
+      "name": "sky_border",
+      "value": "#33FFFFFF"
+    },
+    {
+      "name": "sky_text_primary",
+      "value": "#E5FFFFFF"
+    },
+    {
+      "name": "sky_text_secondary",
+      "value": "#A9FFFFFF"
+    },
+    {
+      "name": "sky_text_tertiary",
+      "value": "#66FFFFFF"
     }
   ]
 }

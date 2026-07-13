@@ -296,3 +296,133 @@ export interface AiEndpointConfig {
   accessToken: string;
   requestTimeoutMs: number;
 }
+
+/** 天气数据的可信来源状态。缓存数据必须与实时预报明确区分。 */
+export enum WeatherDataStatus {
+  NOT_REQUESTED = 'not_requested',
+  LOADING = 'loading',
+  LIVE = 'live',
+  CACHED = 'cached',
+  UNAVAILABLE = 'unavailable'
+}
+
+/**
+ * 单小时天气样本。所有百分比均为 0-100；缺失字段保留 undefined，不能用 0 冒充实测值。
+ */
+export interface WeatherHourlySample {
+  timestampMs: number;
+  temperatureCelsius?: number;
+  dewPointCelsius?: number;
+  weatherCode?: number;
+  pressureMslHpa?: number;
+  cloudCoverPercent?: number;
+  cloudCoverLowPercent?: number;
+  cloudCoverMidPercent?: number;
+  cloudCoverHighPercent?: number;
+  precipitationProbabilityPercent?: number;
+  precipitationMillimeters?: number;
+  humidityPercent?: number;
+  visibilityMeters?: number;
+  windSpeedKph?: number;
+  windGustKph?: number;
+}
+
+/** Open-Meteo 预报在应用内部的统一形式。天文规划算法只依赖此模型，不依赖具体网络客户端。 */
+export interface WeatherForecast {
+  status: WeatherDataStatus;
+  sourceName: string;
+  sourceUrl: string;
+  fetchedAtMs: number;
+  latitudeDegrees: number;
+  longitudeDegrees: number;
+  timezone: string;
+  utcOffsetSeconds: number;
+  forecastDays: number;
+  hourly: WeatherHourlySample[];
+  errorMessage: string;
+}
+
+/** 规划算法的可调边界。首版默认适合城市环境与 18mm 广角摄影。 */
+export interface ObservationPlanningConstraints {
+  horizonHours: number;
+  sampleMinutes: number;
+  minAltitudeDegrees: number;
+  maxSunAltitudeDegrees: number;
+}
+
+/** 某一时刻的目标、太阳、月球和天气联合状态。 */
+export interface ObservationSample {
+  timestampMs: number;
+  altitudeDegrees: number;
+  azimuthDegrees: number;
+  sunAltitudeDegrees: number;
+  moonAltitudeDegrees: number;
+  moonIlluminationPercent: number;
+  moonSeparationDegrees: number;
+  astronomyScore: number;
+  weatherScore?: number;
+  overallScore?: number;
+}
+
+export enum VisibilityStatus {
+  NORMAL = 'normal',
+  ALWAYS_ABOVE_HORIZON = 'always_above_horizon',
+  NEVER_RISE = 'never_rise',
+  COORDINATE_UNAVAILABLE = 'coordinate_unavailable',
+  NO_DARK_WINDOW = 'no_dark_window'
+}
+
+/** 未来规划范围内的首次升起、最高点和首次落下。undefined 表示范围内没有对应事件。 */
+export interface RiseTransitSet {
+  status: VisibilityStatus;
+  riseAtMs?: number;
+  transitAtMs?: number;
+  setAtMs?: number;
+  maxAltitudeDegrees: number;
+}
+
+/** 连续满足目标高度和暮光边界的可用观测窗口。 */
+export interface ObservationWindow {
+  startAtMs: number;
+  endAtMs: number;
+  peakAtMs: number;
+  peakAltitudeDegrees: number;
+  minMoonSeparationDegrees: number;
+  astronomyScore: number;
+  weatherScore?: number;
+  overallScore?: number;
+}
+
+export enum OutingRecommendation {
+  GOOD = 'good',
+  CAUTION = 'caution',
+  POOR = 'poor',
+  ASTRONOMY_ONLY = 'astronomy_only',
+  UNAVAILABLE = 'unavailable'
+}
+
+/**
+ * 单个天体的完整软件规划结果。硬件执行层可以消费该结果，但不得反向限制它的生成。
+ */
+export interface ObservationPlanningResult {
+  targetId: string;
+  targetName: string;
+  generatedAtMs: number;
+  startAtMs: number;
+  endAtMs: number;
+  constraints: ObservationPlanningConstraints;
+  riseTransitSet: RiseTransitSet;
+  moonIlluminationPercent: number;
+  moonPhaseName: string;
+  moonSeparationDegrees?: number;
+  samples: ObservationSample[];
+  windows: ObservationWindow[];
+  bestWindow?: ObservationWindow;
+  astronomyScore?: number;
+  weatherScore?: number;
+  overallScore?: number;
+  recommendation: OutingRecommendation;
+  summary: string;
+  warnings: string[];
+  weatherStatus: WeatherDataStatus;
+}
