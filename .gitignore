@@ -10,6 +10,7 @@
 /.clang-tidy
 **/.test
 /.appanalyzer
+/.artifacts
 /gateway/data
 /gateway/.venv
 /gateway/__pycache__

@@ -1,6 +1,6 @@
-# StarFinding 星空智控
+# 探星（StarFinding）
 
-StarFinding 是面向 HarmonyOS 6 平板的 AR 寻星与低成本星空摄影控制系统。应用负责星图交互、OnStepX 赤道仪控制、拍摄任务编排与结果查看；树莓派网关通过 USB 控制 Canon EOS R7，并完成板解析、堆栈和延时视频生成。
+探星（StarFinding）是面向 HarmonyOS 6 平板的 AR 寻星与低成本星空摄影控制系统。应用负责星图交互、OnStepX 赤道仪控制、拍摄任务编排与结果查看；Linux 网关通过 USB 控制 Canon EOS R7，并完成板解析、堆栈和延时视频生成。
 
 ## 目录
 
