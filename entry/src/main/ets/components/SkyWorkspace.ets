@@ -1,4 +1,9 @@
 import { ConnectionState, TaskStatus } from '../models';
+import {
+  NormalSkyViewport,
+  SkyMapOrientation,
+  SkyOrientationSnapshot
+} from '../models/NormalSkyModels';
 import { MotionTokens } from '../utils/MotionTokens';
 import { WorkspaceNavigationDock } from './WorkspaceNavigationDock';
 
@@ -32,10 +37,26 @@ export struct SkyWorkspace {
   @Prop arTrackingText: string = '';
   @Prop domeRevealLevel: number = 2;
   @Prop gestureEnabled: boolean = false;
+  @Prop normalViewport: NormalSkyViewport = {
+    centerRaHours: 0.0,
+    centerDecDegrees: 0.0,
+    fieldOfViewDegrees: 100.0,
+    rotationDegrees: 0.0,
+    orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+  };
+  @Prop normalOrientationSnapshot: SkyOrientationSnapshot = {
+    orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP,
+    centerRaHours: 0.0,
+    centerDecDegrees: 0.0,
+    northScreenAngleDegrees: 0.0,
+    eastScreenAngleDegrees: -90.0,
+    markers: []
+  };
 
   @BuilderParam skyCanvas: () => void = this.EmptyBuilder;
   @BuilderParam gesturePreview: () => void = this.EmptyBuilder;
   @BuilderParam normalControls: () => void = this.EmptyBuilder;
+  @BuilderParam normalOrientation: () => void = this.EmptyBuilder;
   @BuilderParam targetDrawer: () => void = this.EmptyBuilder;
   @BuilderParam planningDrawer: () => void = this.EmptyBuilder;
 
@@ -57,6 +78,10 @@ export struct SkyWorkspace {
   build() {
     Stack() {
       this.skyCanvas()
+
+      if (this.skyMode === 1) {
+        this.normalOrientation()
+      }
 
       if (this.chromeVisible) {
         this.SkyBrandPill()
@@ -277,7 +302,18 @@ export struct SkyWorkspace {
     Row({ space: 8 }) {
       this.ModeTab('AR', 0)
       this.ModeTab('星图', 1)
-      if (this.isVeryNarrow()) {
+      if (this.skyMode === 1) {
+        Rect().width(1).height(22).fill($r('app.color.sky_border'))
+        Text(this.normalViewport.orientation === SkyMapOrientation.EQUATORIAL_NORTH_UP ?
+          $r('app.string.normal_sky_equatorial_mode') : $r('app.string.normal_sky_horizon_mode'))
+          .fontSize(12).fontColor($r('app.color.sky_text_secondary'))
+        if (!this.isVeryNarrow()) {
+          Text(this.normalCenterDirectionText()).fontSize(12)
+            .fontColor($r('app.color.sky_text_secondary')).maxLines(1)
+        }
+        Text(`${this.normalViewport.fieldOfViewDegrees.toFixed(0)}°`)
+          .fontSize(12).fontWeight(FontWeight.Bold).fontColor($r('app.color.app_brand'))
+      } else if (this.isVeryNarrow()) {
         Text(this.poseReady ? `${this.poseHeading.toFixed(0)}°` : '姿态 --')
           .fontSize(12).fontColor($r('app.color.sky_text_secondary'))
       } else {
@@ -305,6 +341,18 @@ export struct SkyWorkspace {
     .borderRadius($r('app.float.corner_control'))
     .position({ x: this.bottomControlX(), y: this.bottomControlY() })
     .transition(MotionTokens.capsule())
+  }
+
+  private normalCenterDirectionText(): string {
+    if (this.normalViewport.orientation === SkyMapOrientation.HORIZON_ZENITH &&
+      this.normalOrientationSnapshot.centerAzimuthDegrees !== undefined &&
+      this.normalOrientationSnapshot.centerAltitudeDegrees !== undefined) {
+      return `${this.normalOrientationSnapshot.centerAzimuthDegrees.toFixed(0)}° / ` +
+        `${this.normalOrientationSnapshot.centerAltitudeDegrees.toFixed(0)}°`;
+    }
+    const sign: string = this.normalOrientationSnapshot.centerDecDegrees >= 0.0 ? '+' : '';
+    return `${this.normalOrientationSnapshot.centerRaHours.toFixed(2)}h / ` +
+      `${sign}${this.normalOrientationSnapshot.centerDecDegrees.toFixed(1)}°`;
   }
 
   @Builder

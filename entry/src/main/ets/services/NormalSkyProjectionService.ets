@@ -258,6 +258,24 @@ export class NormalSkyProjectionService {
     return selected;
   }
 
+  /** 返回目标相对屏幕正上方的顺时针方向角，可用于视口外的方位箭头。 */
+  static screenDirectionAngle(coordinate: EquatorialCoordinate, viewport: NormalSkyViewport): number {
+    const normalized: NormalSkyViewport = NormalSkyProjectionService.normalizeViewport(viewport);
+    const basis: SkyVector3[] = NormalSkyProjectionService.viewBasis(normalized);
+    const target: SkyVector3 = NormalSkyProjectionService.equatorialVector(coordinate);
+    const planeEast: number = NormalSkyProjectionService.dot(target, basis[1]);
+    const planeNorth: number = NormalSkyProjectionService.dot(target, basis[2]);
+    const rawX: number = -planeEast;
+    const rawY: number = -planeNorth;
+    const rotated: SkyVector3 = NormalSkyProjectionService.rotateScreen(
+      rawX, rawY, normalized.rotationDegrees);
+    if (Math.abs(rotated.x) + Math.abs(rotated.y) < 0.0000001) {
+      return normalized.rotationDegrees;
+    }
+    return NormalSkyProjectionService.normalizeSignedDegrees(
+      Math.atan2(rotated.x, -rotated.y) * 180.0 / Math.PI);
+  }
+
   static normalizeViewport(viewport: NormalSkyViewport): NormalSkyViewport {
     return {
       centerRaHours: AstronomyService.normalizeHours(viewport.centerRaHours),

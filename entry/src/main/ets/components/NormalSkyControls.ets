@@ -22,6 +22,8 @@ export struct NormalSkyControls {
   onZoomOut: () => void = (): void => {};
   onToggleOrientation: () => void = (): void => {};
   onTogglePanel: () => void = (): void => {};
+  onFieldOfViewChange: (fieldOfViewDegrees: number) => void =
+    (_fieldOfViewDegrees: number): void => {};
   onLayerChange: (layer: number, enabled: boolean) => void =
     (_layer: number, _enabled: boolean): void => {};
 
@@ -36,16 +38,37 @@ export struct NormalSkyControls {
             Text(`${this.viewport.fieldOfViewDegrees.toFixed(0)}°`)
               .fontSize(12).fontColor($r('app.color.app_brand'))
           }.width('100%')
-          this.LayerToggle('星座连线', 0, this.layers.constellationLines)
-          this.LayerToggle('赤道网格', 1, this.layers.equatorialGrid)
-          this.LayerToggle('黄道', 2, this.layers.ecliptic)
-          this.LayerToggle('地平线', 3, this.layers.horizon)
-          this.LayerToggle('深空天体', 4, this.layers.deepSky)
-          this.LayerToggle('太阳系', 5, this.layers.solarSystem)
-          Text(`${this.catalogStatus} · ${this.lineCatalogStatus}`)
-            .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).maxLines(2)
+          Column({ space: 4 }) {
+            Row() {
+              Text($r('app.string.normal_sky_field_of_view')).fontSize(11)
+                .fontColor($r('app.color.sky_text_secondary'))
+              Blank()
+              Text(`${this.viewport.fieldOfViewDegrees.toFixed(0)}°`).fontSize(11)
+                .fontWeight(FontWeight.Bold).fontColor($r('app.color.app_brand'))
+            }.width('100%')
+            Slider({ value: this.viewport.fieldOfViewDegrees, min: 8.0, max: 160.0, step: 2.0 })
+              .width('100%')
+              .selectedColor($r('app.color.app_brand'))
+              .trackColor($r('app.color.sky_border'))
+              .onChange((value: number) => { this.onFieldOfViewChange(value); })
+          }.width('100%')
+          Scroll() {
+            Column({ space: 3 }) {
+              this.LayerToggle('星座连线', 0, this.layers.constellationLines)
+              this.LayerToggle('赤道网格', 1, this.layers.equatorialGrid)
+              this.LayerToggle('黄道', 2, this.layers.ecliptic)
+              this.LayerToggle('地平线', 3, this.layers.horizon)
+              this.LayerToggle('深空天体', 4, this.layers.deepSky)
+              this.LayerToggle('太阳系', 5, this.layers.solarSystem)
+              this.LayerToggle($r('app.string.normal_sky_direction_guides'), 6, this.layers.directionGuides)
+              Text(`${this.catalogStatus} · ${this.lineCatalogStatus}`)
+                .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).maxLines(2)
+                .width('100%').padding({ top: 4, bottom: 4 })
+            }.width('100%')
+          }
+          .layoutWeight(1).width('100%')
         }
-        .width(this.panelWidth())
+        .width(this.panelWidth()).height(this.panelHeight())
         .padding(12).backgroundColor($r('app.color.sky_surface_strong'))
         .backgroundBlurStyle(BlurStyle.Regular)
         .border({ width: 1, color: $r('app.color.sky_border') })
@@ -90,15 +113,15 @@ export struct NormalSkyControls {
       .border({ width: 1, color: $r('app.color.sky_border') }).borderRadius(26)
       .position({ x: this.controlWidth() - 56, y: 0 })
     }
-    .width(this.controlWidth()).height(310)
+    .width(this.controlWidth()).height(this.rootHeight())
     .position({
       x: Math.max(8, this.viewportWidth - this.controlWidth() - 8),
-      y: Math.max(86, this.viewportHeight / 2 - 150)
+      y: Math.max(72, (this.viewportHeight - this.rootHeight()) / 2.0)
     })
   }
 
   @Builder
-  private LayerToggle(label: string, layer: number, enabled: boolean) {
+  private LayerToggle(label: ResourceStr, layer: number, enabled: boolean) {
     Row() {
       Text(label).fontSize(12).fontColor($r('app.color.sky_text_secondary'))
       Blank()
@@ -115,5 +138,13 @@ export struct NormalSkyControls {
 
   private panelWidth(): number {
     return Math.min(206.0, Math.max(160.0, this.controlWidth() - 68.0));
+  }
+
+  private panelHeight(): number {
+    return Math.min(440.0, Math.max(250.0, this.viewportHeight - 130.0));
+  }
+
+  private rootHeight(): number {
+    return this.panelOpen ? this.panelHeight() + 34.0 : 310.0;
   }
 }

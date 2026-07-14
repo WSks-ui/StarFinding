@@ -35,6 +35,13 @@ export interface SkyScreenRect {
   opacity: number;
 }
 
+export interface SkyGuideInsets {
+  leftPixels: number;
+  rightPixels: number;
+  topPixels: number;
+  bottomPixels: number;
+}
+
 export interface NormalSkyProjection {
   xPixels: number;
   yPixels: number;
@@ -49,6 +56,38 @@ export interface SkyLayerVisibility {
   horizon: boolean;
   deepSky: boolean;
   solarSystem: boolean;
+  directionGuides: boolean;
+}
+
+export enum SkyDirectionKind {
+  NORTH_CELESTIAL_POLE = 'north_celestial_pole',
+  SOUTH_CELESTIAL_POLE = 'south_celestial_pole',
+  NORTH = 'north',
+  EAST = 'east',
+  SOUTH = 'south',
+  WEST = 'west',
+  ZENITH = 'zenith'
+}
+
+export interface SkyDirectionMarker {
+  kind: SkyDirectionKind;
+  xPixels: number;
+  yPixels: number;
+  angleDegrees: number;
+  inViewport: boolean;
+  atEdge: boolean;
+}
+
+/** 普通星图当前中心和方向的只读快照，供 Canvas 标记与 ArkUI 状态胶囊共同消费。 */
+export interface SkyOrientationSnapshot {
+  orientation: SkyMapOrientation;
+  centerRaHours: number;
+  centerDecDegrees: number;
+  centerAzimuthDegrees?: number;
+  centerAltitudeDegrees?: number;
+  northScreenAngleDegrees: number;
+  eastScreenAngleDegrees: number;
+  markers: SkyDirectionMarker[];
 }
 
 export enum SkyPolylineKind {
@@ -114,6 +153,7 @@ export interface NormalSkyScene {
   eclipticLines: SkyPolyline[];
   horizonLines: SkyPolyline[];
   horizonMask: SkyScreenRect[];
+  orientationSnapshot: SkyOrientationSnapshot;
   generatedAtMs: number;
 }
 
@@ -123,5 +163,6 @@ export const DEFAULT_SKY_LAYERS: SkyLayerVisibility = {
   ecliptic: false,
   horizon: true,
   deepSky: true,
-  solarSystem: true
+  solarSystem: true,
+  directionGuides: true
 };

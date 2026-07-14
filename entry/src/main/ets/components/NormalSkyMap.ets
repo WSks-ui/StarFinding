@@ -2,6 +2,8 @@ import { CelestialType } from '../models/DomainModels';
 import {
   NormalSkyScene,
   ProjectedSkyObject,
+  SkyDirectionKind,
+  SkyDirectionMarker,
   SkyObjectGlyphKind,
   SkyPolyline,
   SkyScreenPoint,
@@ -74,6 +76,7 @@ export struct NormalSkyMap {
     this.drawHorizonMask(this.scene.horizonMask);
     this.drawPolylines(this.scene.horizonLines, '#78C9C5', 0.88, 1.4);
     this.drawObjects(this.scene.objects, width, height);
+    this.drawDirectionMarkers(this.scene.orientationSnapshot.markers);
     this.resetContextState();
   }
 
@@ -411,6 +414,54 @@ export struct NormalSkyMap {
     this.context.bezierCurveTo(x + radiusX * control, y - radiusY,
       x + radiusX, y - radiusY * control, x + radiusX, y);
     this.context.closePath();
+  }
+
+  private drawDirectionMarkers(markers: SkyDirectionMarker[]): void {
+    this.context.save();
+    this.context.font = '600 10px sans-serif';
+    this.context.textAlign = 'center';
+    this.context.textBaseline = 'middle';
+    for (let index: number = 0; index < markers.length; index++) {
+      const marker: SkyDirectionMarker = markers[index];
+      const radians: number = marker.angleDegrees * Math.PI / 180.0;
+      const directionX: number = Math.sin(radians);
+      const directionY: number = -Math.cos(radians);
+      this.context.globalAlpha = marker.inViewport ? 0.88 : 0.72;
+      this.context.strokeStyle = '#72D3F5';
+      this.context.fillStyle = '#BDEFFF';
+      this.context.lineWidth = 1.1;
+      if (marker.atEdge) {
+        const normalX: number = -directionY;
+        const normalY: number = directionX;
+        this.context.beginPath();
+        this.context.moveTo(marker.xPixels + directionX * 7.0, marker.yPixels + directionY * 7.0);
+        this.context.lineTo(marker.xPixels - directionX * 4.0 + normalX * 4.0,
+          marker.yPixels - directionY * 4.0 + normalY * 4.0);
+        this.context.lineTo(marker.xPixels - directionX * 4.0 - normalX * 4.0,
+          marker.yPixels - directionY * 4.0 - normalY * 4.0);
+        this.context.closePath();
+        this.context.fill();
+      } else {
+        this.context.beginPath();
+        this.context.arc(marker.xPixels, marker.yPixels, 7.0, 0.0, Math.PI * 2.0);
+        this.context.stroke();
+      }
+      const labelX: number = marker.xPixels - directionX * (marker.atEdge ? 16.0 : -15.0);
+      const labelY: number = marker.yPixels - directionY * (marker.atEdge ? 16.0 : -15.0);
+      this.context.globalAlpha = 0.92;
+      this.context.fillText(this.directionMarkerLabel(marker.kind), labelX, labelY);
+    }
+    this.context.restore();
+  }
+
+  private directionMarkerLabel(kind: SkyDirectionKind): string {
+    if (kind === SkyDirectionKind.NORTH_CELESTIAL_POLE) return 'NCP';
+    if (kind === SkyDirectionKind.SOUTH_CELESTIAL_POLE) return 'SCP';
+    if (kind === SkyDirectionKind.NORTH) return 'N';
+    if (kind === SkyDirectionKind.EAST) return 'E';
+    if (kind === SkyDirectionKind.SOUTH) return 'S';
+    if (kind === SkyDirectionKind.WEST) return 'W';
+    return 'Z';
   }
 
   private drawLabel(object: ProjectedSkyObject, occupied: SkyLabelBox[], width: number, height: number): void {

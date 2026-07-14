@@ -5,6 +5,7 @@ import { DeviceWorkspace } from '../components/DeviceWorkspace';
 import lazy { HuaweiArCameraView } from '../components/HuaweiArCameraView';
 import { NormalSkyControls } from '../components/NormalSkyControls';
 import { NormalSkyMap } from '../components/NormalSkyMap';
+import { NormalSkyOrientationOverlay } from '../components/NormalSkyOrientationOverlay';
 import { PostWorkspace } from '../components/PostWorkspace';
 import { SkyWorkspace } from '../components/SkyWorkspace';
 import { TaskWorkspace } from '../components/TaskWorkspace';
@@ -38,6 +39,7 @@ import {
   OutingRecommendation,
   ProjectedSkyObject,
   SkyLayerVisibility,
+  SkyGuideInsets,
   SkyMapOrientation,
   SkyMapSize,
   TrackingMode,
@@ -123,6 +125,14 @@ function emptyNormalSkyScene(): NormalSkyScene {
     eclipticLines: [],
     horizonLines: [],
     horizonMask: [],
+    orientationSnapshot: {
+      orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP,
+      centerRaHours: 0.0,
+      centerDecDegrees: 0.0,
+      northScreenAngleDegrees: 0.0,
+      eastScreenAngleDegrees: -90.0,
+      markers: []
+    },
     generatedAtMs: 0
   };
 }
@@ -256,6 +266,7 @@ struct Index {
   // 每次开始拍摄分配一个代次；取消或急停递增代次，使所有 await 之后的旧流程立即失效。
   private captureRunGeneration: number = 0;
   private normalSceneTimer: number = -1;
+  private normalSceneUpdateTimer: number = -1;
   private normalInertiaTimer: number = -1;
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
@@ -596,9 +607,12 @@ struct Index {
       arTrackingText: this.arTrackingText,
       domeRevealLevel: this.skyDomeRevealLevel,
       gestureEnabled: this.gestureEnabled,
+      normalViewport: this.normalViewport,
+      normalOrientationSnapshot: this.normalScene.orientationSnapshot,
       skyCanvas: (): void => { this.SkyCanvas(); },
       gesturePreview: (): void => { this.SkyGesturePreview(); },
       normalControls: (): void => { this.NormalSkyControlOverlay(); },
+      normalOrientation: (): void => { this.NormalSkyDirectionOverlay(); },
       targetDrawer: (): void => { this.SkyTargetDrawer(); },
       planningDrawer: (): void => { this.SkyPlanningDrawer(); },
       onViewportChange: (width: number, height: number): void => {
@@ -616,6 +630,7 @@ struct Index {
       onNavigate: (section: number): void => { this.navigateToSection(section); },
       onChromeVisibleChange: (visible: boolean): void => {
         this.getUIContext().animateTo(MotionTokens.standard(), () => { this.skyChromeVisible = visible; });
+        if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
       },
       onNoticeDismiss: (): void => {
         this.emergencyMessage = '';
@@ -707,7 +722,7 @@ struct Index {
               this.lastPanOffsetY = event.offsetY;
               this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport,
                 this.normalSkySize(), deltaX, deltaY);
-              this.updateNormalScene();
+              this.scheduleNormalSceneUpdate();
             }
           })
           .onActionEnd((event: GestureEvent) => {
@@ -726,7 +741,7 @@ struct Index {
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
               if (update.changed) {
                 this.normalViewport = update.viewport;
-                this.updateNormalScene();
+                this.scheduleNormalSceneUpdate();
               }
             }
           })
@@ -744,7 +759,7 @@ struct Index {
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
               if (update.changed) {
                 this.normalViewport = update.viewport;
-                this.updateNormalScene();
+                this.scheduleNormalSceneUpdate();
               }
             }
           })
@@ -768,8 +783,25 @@ struct Index {
       onZoomIn: (): void => { this.zoomNormalSky(1.35); },
       onZoomOut: (): void => { this.zoomNormalSky(0.74); },
       onToggleOrientation: (): void => { this.toggleNormalSkyOrientation(); },
-      onTogglePanel: (): void => { this.normalLayerPanelOpen = !this.normalLayerPanelOpen; },
+      onTogglePanel: (): void => {
+        this.normalLayerPanelOpen = !this.normalLayerPanelOpen;
+        this.scheduleNormalSceneUpdate();
+      },
+      onFieldOfViewChange: (fieldOfViewDegrees: number): void => {
+        this.setNormalSkyFieldOfView(fieldOfViewDegrees);
+      },
       onLayerChange: (layer: number, enabled: boolean): void => { this.setNormalLayer(layer, enabled); }
+    })
+  }
+
+  @Builder
+  private NormalSkyDirectionOverlay() {
+    NormalSkyOrientationOverlay({
+      snapshot: this.normalScene.orientationSnapshot,
+      viewportWidth: this.skyViewportWidth,
+      viewportHeight: this.skyViewportHeight,
+      guideInsets: this.normalSkyGuideInsets(),
+      onResetNorth: (): void => { this.resetNormalSkyNorth(); }
     })
   }
 
@@ -1382,6 +1414,7 @@ struct Index {
     });
     if (panel === 2) this.refreshPlanning();
     if (this.skyMode === 0) this.updateProjectedTargets(true);
+    if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
 
   private navigateToImmersiveSky(): void {
@@ -1392,6 +1425,7 @@ struct Index {
       this.skyChromeVisible = false;
     });
     if (this.skyMode === 0) this.updateProjectedTargets(true);
+    if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
 
   private openSkyPanel(panel: number): void {
@@ -1401,6 +1435,7 @@ struct Index {
       this.skyOverlayPanel = this.skyOverlayPanel === panel ? 0 : panel;
     });
     if (this.skyOverlayPanel === 2) this.refreshPlanning();
+    if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
 
   /** 点选和搜索必须显式打开面板，不能复用再次点击关闭的交互。 */
@@ -1411,6 +1446,7 @@ struct Index {
       this.skyOverlayPanel = panel;
     });
     if (panel === 2) this.refreshPlanning();
+    if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
 
   private selectSkyMode(mode: number): void {
@@ -2134,6 +2170,26 @@ struct Index {
   }
 
   private updateNormalScene(): void {
+    this.clearScheduledNormalSceneUpdate();
+    this.rebuildNormalScene();
+  }
+
+  private scheduleNormalSceneUpdate(): void {
+    if (this.normalSceneUpdateTimer >= 0) return;
+    this.normalSceneUpdateTimer = setTimeout(() => {
+      this.normalSceneUpdateTimer = -1;
+      this.rebuildNormalScene();
+    }, 16);
+  }
+
+  private clearScheduledNormalSceneUpdate(): void {
+    if (this.normalSceneUpdateTimer >= 0) {
+      clearTimeout(this.normalSceneUpdateTimer);
+      this.normalSceneUpdateTimer = -1;
+    }
+  }
+
+  private rebuildNormalScene(): void {
     const timestampMs: number = Date.now();
     this.normalScene = this.normalSkySceneService.build({
       viewport: this.normalViewport,
@@ -2141,7 +2197,8 @@ struct Index {
       layers: this.normalLayers,
       selectedTargetId: this.selectedTargetId,
       timestampMs: timestampMs,
-      observer: this.normalObserver(timestampMs)
+      observer: this.normalObserver(timestampMs),
+      guideInsets: this.normalSkyGuideInsets()
     });
   }
 
@@ -2160,7 +2217,8 @@ struct Index {
       ecliptic: this.normalLayers.ecliptic,
       horizon: this.normalLayers.horizon,
       deepSky: this.normalLayers.deepSky,
-      solarSystem: this.normalLayers.solarSystem
+      solarSystem: this.normalLayers.solarSystem,
+      directionGuides: this.normalLayers.directionGuides
     };
     if (layer === 0) next.constellationLines = enabled;
     if (layer === 1) next.equatorialGrid = enabled;
@@ -2168,8 +2226,24 @@ struct Index {
     if (layer === 3) next.horizon = enabled;
     if (layer === 4) next.deepSky = enabled;
     if (layer === 5) next.solarSystem = enabled;
+    if (layer === 6) next.directionGuides = enabled;
     this.normalLayers = next;
     this.updateNormalScene();
+  }
+
+  private normalSkyGuideInsets(): SkyGuideInsets {
+    if (!this.skyChromeVisible) {
+      return { leftPixels: 24.0, rightPixels: 24.0, topPixels: 24.0, bottomPixels: 24.0 };
+    }
+    const compact: boolean = this.useSkyBottomSheet();
+    const drawerInset: number = !compact && this.skyOverlayPanel > 0 ? this.skyDrawerWidth() + 28.0 : 76.0;
+    const layerInset: number = this.normalLayerPanelOpen && !compact ? 286.0 : 76.0;
+    return {
+      leftPixels: compact ? 24.0 : 96.0,
+      rightPixels: compact ? 24.0 : Math.max(drawerInset, layerInset),
+      topPixels: compact ? 102.0 : 112.0,
+      bottomPixels: compact ? 116.0 : 88.0
+    };
   }
 
   private homeNormalSky(): void {
@@ -2216,7 +2290,18 @@ struct Index {
     this.clearNormalMotion();
     this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
       this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0);
-    this.updateNormalScene();
+    this.scheduleNormalSceneUpdate();
+  }
+
+  private setNormalSkyFieldOfView(fieldOfViewDegrees: number): void {
+    this.clearNormalMotion();
+    const target: number = this.clamp(fieldOfViewDegrees,
+      NormalSkyProjectionService.MIN_FIELD_OF_VIEW_DEGREES,
+      NormalSkyProjectionService.MAX_FIELD_OF_VIEW_DEGREES);
+    const scale: number = this.normalViewport.fieldOfViewDegrees / Math.max(0.001, target);
+    this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
+      this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0);
+    this.scheduleNormalSceneUpdate();
   }
 
   private selectNormalSkyObject(objectId: string): void {
@@ -2278,7 +2363,7 @@ struct Index {
       const linearProgress: number = Math.min(1.0, elapsed / 350.0);
       const easedProgress: number = 1.0 - Math.pow(1.0 - linearProgress, 3.0);
       this.normalViewport = NormalSkyProjectionService.interpolate(source, destination, easedProgress);
-      this.updateNormalScene();
+      this.scheduleNormalSceneUpdate();
       if (linearProgress >= 1.0) {
         this.stopNormalFly();
       }
@@ -2297,7 +2382,7 @@ struct Index {
         this.normalSkySize(), currentVelocityX * 0.016, currentVelocityY * 0.016);
       currentVelocityX *= 0.86;
       currentVelocityY *= 0.86;
-      this.updateNormalScene();
+      this.scheduleNormalSceneUpdate();
       if (Math.abs(currentVelocityX) + Math.abs(currentVelocityY) < 18.0) {
         this.stopNormalInertia();
       }
@@ -2334,6 +2419,7 @@ struct Index {
   }
 
   private clearNormalSceneTimer(): void {
+    this.clearScheduledNormalSceneUpdate();
     if (this.normalSceneTimer >= 0) {
       clearInterval(this.normalSceneTimer);
       this.normalSceneTimer = -1;
@@ -2385,7 +2471,7 @@ struct Index {
       this.gestureStatus = '等待手部进入画面';
     }
     if (normalSkyChanged) {
-      this.updateNormalScene();
+      this.scheduleNormalSceneUpdate();
     }
   }
 

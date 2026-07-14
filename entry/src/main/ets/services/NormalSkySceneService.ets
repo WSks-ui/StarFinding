@@ -11,6 +11,7 @@ import {
   NormalSkyViewport,
   ProjectedSkyObject,
   SkyLayerVisibility,
+  SkyGuideInsets,
   SkyMapSize,
   SkyObjectGlyphKind,
   SkyPolyline,
@@ -21,6 +22,7 @@ import {
 import { AstronomyService } from './AstronomyService';
 import { ConstellationLineGroup, NormalSkyCatalogService } from './NormalSkyCatalogService';
 import { NormalSkyProjectionService } from './NormalSkyProjectionService';
+import { NormalSkyOrientationService } from './NormalSkyOrientationService';
 import { VisibleStar, VisibleStarCatalogService } from './VisibleStarCatalogService';
 
 export interface NormalSkySceneQuery {
@@ -30,6 +32,7 @@ export interface NormalSkySceneQuery {
   selectedTargetId: string;
   timestampMs: number;
   observer?: ObserverState;
+  guideInsets?: SkyGuideInsets;
 }
 
 /** 把多个离线目录合成为 Canvas 一次可绘制的场景。 */
@@ -64,6 +67,13 @@ export class NormalSkySceneService {
       eclipticLines: query.layers.ecliptic ? this.buildEcliptic(query) : [],
       horizonLines: query.layers.horizon && query.observer !== undefined ? this.buildHorizon(query) : [],
       horizonMask: query.layers.horizon && query.observer !== undefined ? this.buildHorizonMask(query) : [],
+      orientationSnapshot: NormalSkyOrientationService.build({
+        viewport: query.viewport,
+        size: query.size,
+        directionGuides: query.layers.directionGuides,
+        observer: query.observer,
+        guideInsets: query.guideInsets
+      }),
       generatedAtMs: query.timestampMs
     };
   }

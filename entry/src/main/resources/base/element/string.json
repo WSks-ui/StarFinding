@@ -27,6 +27,22 @@
     {
       "name": "location_permission_reason",
       "value": "用于计算当前地点可见天体和赤道仪目标坐标"
+    },
+    {
+      "name": "normal_sky_equatorial_mode",
+      "value": "赤道"
+    },
+    {
+      "name": "normal_sky_horizon_mode",
+      "value": "地平"
+    },
+    {
+      "name": "normal_sky_direction_guides",
+      "value": "方位辅助"
+    },
+    {
+      "name": "normal_sky_field_of_view",
+      "value": "视场范围"
     }
   ]
 }
