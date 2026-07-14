@@ -58,6 +58,30 @@ export enum SkyPolylineKind {
   HORIZON = 'horizon'
 }
 
+/** 天体在普通星图中的语义图符。图符用于辨识，不代表目标的真实角直径。 */
+export enum SkyObjectGlyphKind {
+  STAR = 'star',
+  CONSTELLATION = 'constellation',
+  SUN = 'sun',
+  MOON = 'moon',
+  MERCURY = 'mercury',
+  VENUS = 'venus',
+  MARS = 'mars',
+  JUPITER = 'jupiter',
+  SATURN = 'saturn',
+  URANUS = 'uranus',
+  NEPTUNE = 'neptune',
+  SOLAR_SYSTEM_GENERIC = 'solar_system_generic',
+  GALAXY = 'galaxy',
+  NEBULA = 'nebula',
+  DARK_NEBULA = 'dark_nebula',
+  OPEN_CLUSTER = 'open_cluster',
+  GLOBULAR_CLUSTER = 'globular_cluster',
+  PLANETARY_NEBULA = 'planetary_nebula',
+  SUPERNOVA_REMNANT = 'supernova_remnant',
+  DEEP_SKY_GENERIC = 'deep_sky_generic'
+}
+
 export interface SkyPolyline {
   id: string;
   kind: SkyPolylineKind;
@@ -68,6 +92,7 @@ export interface SkyPolyline {
 export interface ProjectedSkyObject {
   id: string;
   type: CelestialType;
+  glyphKind: SkyObjectGlyphKind;
   coordinate: EquatorialCoordinate;
   xPixels: number;
   yPixels: number;

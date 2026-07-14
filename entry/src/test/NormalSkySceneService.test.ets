@@ -1,7 +1,12 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { CelestialCatalog } from '../main/ets/data/CelestialCatalog';
 import { CelestialObject, ObserverState } from '../main/ets/models/DomainModels';
-import { DEFAULT_SKY_LAYERS, NormalSkyViewport, SkyMapOrientation } from '../main/ets/models/NormalSkyModels';
+import {
+  DEFAULT_SKY_LAYERS,
+  NormalSkyViewport,
+  SkyMapOrientation,
+  SkyObjectGlyphKind
+} from '../main/ets/models/NormalSkyModels';
 import { NormalSkyCatalogService } from '../main/ets/services/NormalSkyCatalogService';
 import { NormalSkyProjectionService } from '../main/ets/services/NormalSkyProjectionService';
 import { NormalSkySceneService } from '../main/ets/services/NormalSkySceneService';
@@ -57,6 +62,28 @@ export default function normalSkySceneServiceTest(): void {
       });
       expect(scene.horizonLines.length > 0).assertTrue();
       expect(scene.horizonMask.length > 0).assertTrue();
+    });
+
+    it('太阳系目标均映射为确定图符且土星保留星环语义', 0, () => {
+      const solarSystem: CelestialObject[] = CelestialCatalog.solarSystem();
+      for (let index: number = 0; index < solarSystem.length; index++) {
+        const glyph: SkyObjectGlyphKind = NormalSkySceneService.glyphKindFor(solarSystem[index]);
+        expect(glyph !== SkyObjectGlyphKind.DEEP_SKY_GENERIC).assertTrue();
+      }
+      const saturn: CelestialObject | undefined = CelestialCatalog.getById('planet-saturn');
+      expect(saturn !== undefined &&
+        NormalSkySceneService.glyphKindFor(saturn) === SkyObjectGlyphKind.SATURN).assertTrue();
+    });
+
+    it('一百一十个梅西耶目标均映射为深空图符', 0, () => {
+      const messier: CelestialObject[] = CelestialCatalog.messierObjects();
+      expect(messier.length).assertEqual(110);
+      for (let index: number = 0; index < messier.length; index++) {
+        const glyph: SkyObjectGlyphKind = NormalSkySceneService.glyphKindFor(messier[index]);
+        expect(glyph !== SkyObjectGlyphKind.STAR &&
+          glyph !== SkyObjectGlyphKind.CONSTELLATION &&
+          glyph !== SkyObjectGlyphKind.SOLAR_SYSTEM_GENERIC).assertTrue();
+      }
     });
   });
 }

@@ -12,6 +12,7 @@ import {
   ProjectedSkyObject,
   SkyLayerVisibility,
   SkyMapSize,
+  SkyObjectGlyphKind,
   SkyPolyline,
   SkyPolylineKind,
   SkyScreenPoint,
@@ -102,6 +103,7 @@ export class NormalSkySceneService {
       result.push({
         id: id,
         type: CelestialType.STAR,
+        glyphKind: SkyObjectGlyphKind.STAR,
         coordinate: coordinate,
         xPixels: projection.xPixels,
         yPixels: projection.yPixels,
@@ -136,16 +138,17 @@ export class NormalSkySceneService {
       result.push({
         id: object.id,
         type: object.type,
+        glyphKind: NormalSkySceneService.glyphKindFor(object),
         coordinate: coordinate,
         xPixels: projection.xPixels,
         yPixels: projection.yPixels,
-        sizePixels: this.objectSize(object, selected),
+        sizePixels: this.objectSize(object, selected, query.viewport.fieldOfViewDegrees),
         hitRadiusPixels: object.type === CelestialType.CONSTELLATION ? 24.0 : 20.0,
         hitPriority: selected ? 100 : this.hitPriority(object.type),
         magnitude: object.magnitude,
-        label: this.objectLabel(object, query.viewport.fieldOfViewDegrees),
+        label: this.objectLabel(object, query.viewport.fieldOfViewDegrees, selected),
         designation: object.designation,
-        color: this.objectColor(object.type),
+        color: this.objectColor(object),
         aboveHorizon: this.aboveHorizon(coordinate, query.observer),
         selected: selected
       });
@@ -160,10 +163,10 @@ export class NormalSkySceneService {
       return true;
     }
     const magnitude: number = object.magnitude === undefined ? 99.0 : object.magnitude;
-    if (query.viewport.fieldOfViewDegrees >= 100.0) {
+    if (query.viewport.fieldOfViewDegrees >= 90.0) {
       return magnitude <= 5.5 || (object.angularSizeDegrees !== undefined && object.angularSizeDegrees >= 1.0);
     }
-    if (query.viewport.fieldOfViewDegrees >= 55.0) {
+    if (query.viewport.fieldOfViewDegrees >= 30.0) {
       return magnitude <= 7.5 || (object.angularSizeDegrees !== undefined && object.angularSizeDegrees >= 0.5);
     }
     return true;
@@ -327,15 +330,14 @@ export class NormalSkySceneService {
   }
 
   private maximumMagnitude(fieldOfViewDegrees: number): number {
-    if (fieldOfViewDegrees >= 120.0) return 4.5;
-    if (fieldOfViewDegrees >= 70.0) return 5.2;
-    if (fieldOfViewDegrees >= 35.0) return 5.8;
+    if (fieldOfViewDegrees >= 90.0) return 4.7;
+    if (fieldOfViewDegrees >= 30.0) return 5.7;
     return 6.5;
   }
 
   private maximumStarCount(fieldOfViewDegrees: number): number {
-    if (fieldOfViewDegrees >= 120.0) return 700;
-    if (fieldOfViewDegrees >= 70.0) return 1000;
+    if (fieldOfViewDegrees >= 90.0) return 700;
+    if (fieldOfViewDegrees >= 30.0) return 1100;
     return 1600;
   }
 
@@ -346,14 +348,21 @@ export class NormalSkySceneService {
     return AstronomyService.equatorialToHorizontal(coordinate, observer).aboveHorizon;
   }
 
-  private objectSize(object: CelestialObject, selected: boolean): number {
-    if (selected) return 12.0;
-    if (object.type === CelestialType.SUN || object.type === CelestialType.MOON) return 12.0;
-    if (object.type === CelestialType.PLANET) return 9.0;
-    if (object.type === CelestialType.MESSIER) return 7.0;
+  private objectSize(object: CelestialObject, selected: boolean, fieldOfViewDegrees: number): number {
+    const detailScale: number = fieldOfViewDegrees <= 30.0 ? 1.32 :
+      (fieldOfViewDegrees < 90.0 ? 1.14 : 1.0);
+    if (object.type === CelestialType.SUN || object.type === CelestialType.MOON) {
+      return (selected ? 17.0 : 14.0) * detailScale;
+    }
+    if (object.type === CelestialType.PLANET) {
+      const baseSize: number = object.id === 'planet-saturn' ? 14.0 : 12.0;
+      return (selected ? baseSize + 3.0 : baseSize) * detailScale;
+    }
+    if (object.type === CelestialType.MESSIER) return (selected ? 13.0 : 9.0) * detailScale;
     if (object.type === CelestialType.CONSTELLATION) return 0.0;
     const magnitude: number = object.magnitude === undefined ? 3.0 : object.magnitude;
-    return Math.max(2.0, 7.0 - magnitude * 0.8);
+    return (selected ? 9.0 : Math.max(2.0, 7.0 - magnitude * 0.8)) *
+      (fieldOfViewDegrees <= 30.0 ? 1.12 : 1.0);
   }
 
   private hitPriority(type: CelestialType): number {
@@ -363,24 +372,71 @@ export class NormalSkySceneService {
     return 15;
   }
 
-  private objectLabel(object: CelestialObject, fieldOfViewDegrees: number): string {
+  private objectLabel(object: CelestialObject, fieldOfViewDegrees: number, selected: boolean): string {
+    if (selected) return object.nameZh;
     if (object.type === CelestialType.CONSTELLATION) return object.nameZh;
     if (object.type === CelestialType.SUN || object.type === CelestialType.MOON ||
       object.type === CelestialType.PLANET) return object.nameZh;
     if (object.type === CelestialType.MESSIER) {
       const magnitude: number = object.magnitude === undefined ? 99.0 : object.magnitude;
-      return fieldOfViewDegrees <= 70.0 || magnitude <= 5.0 ? object.designation : '';
+      if (fieldOfViewDegrees <= 30.0) return object.designation;
+      if (fieldOfViewDegrees < 90.0) {
+        return magnitude <= 7.0 || (object.angularSizeDegrees !== undefined && object.angularSizeDegrees >= 0.5) ?
+          object.designation : '';
+      }
+      return magnitude <= 5.0 ? object.designation : '';
     }
+    const magnitude: number = object.magnitude === undefined ? 99.0 : object.magnitude;
+    if (fieldOfViewDegrees >= 90.0) return magnitude <= 1.5 ? object.nameZh : '';
+    if (fieldOfViewDegrees >= 30.0) return magnitude <= 2.5 ? object.nameZh : '';
     return object.nameZh;
   }
 
-  private objectColor(type: CelestialType): string {
-    if (type === CelestialType.SUN) return '#FFD56A';
-    if (type === CelestialType.MOON) return '#E8EEF7';
-    if (type === CelestialType.PLANET) return '#F3B75F';
-    if (type === CelestialType.MESSIER) return '#67D4B1';
-    if (type === CelestialType.CONSTELLATION) return '#86A9C4';
+  private objectColor(object: CelestialObject): string {
+    if (object.type === CelestialType.SUN) return '#FFD56A';
+    if (object.type === CelestialType.MOON) return '#E8EEF7';
+    if (object.id === 'planet-mercury') return '#B9B4AB';
+    if (object.id === 'planet-venus') return '#F6DB9C';
+    if (object.id === 'planet-mars') return '#E7805C';
+    if (object.id === 'planet-jupiter') return '#E8C39B';
+    if (object.id === 'planet-saturn') return '#E9CF8C';
+    if (object.id === 'planet-uranus') return '#8EDDE0';
+    if (object.id === 'planet-neptune') return '#739CEC';
+    if (object.type === CelestialType.PLANET) return '#F3B75F';
+    if (object.type === CelestialType.MESSIER) return '#67D4B1';
+    if (object.type === CelestialType.CONSTELLATION) return '#86A9C4';
     return '#FFFFFF';
+  }
+
+  static glyphKindFor(object: CelestialObject): SkyObjectGlyphKind {
+    if (object.type === CelestialType.STAR) return SkyObjectGlyphKind.STAR;
+    if (object.type === CelestialType.CONSTELLATION) return SkyObjectGlyphKind.CONSTELLATION;
+    if (object.type === CelestialType.SUN) return SkyObjectGlyphKind.SUN;
+    if (object.type === CelestialType.MOON) return SkyObjectGlyphKind.MOON;
+    if (object.id === 'planet-mercury') return SkyObjectGlyphKind.MERCURY;
+    if (object.id === 'planet-venus') return SkyObjectGlyphKind.VENUS;
+    if (object.id === 'planet-mars') return SkyObjectGlyphKind.MARS;
+    if (object.id === 'planet-jupiter') return SkyObjectGlyphKind.JUPITER;
+    if (object.id === 'planet-saturn') return SkyObjectGlyphKind.SATURN;
+    if (object.id === 'planet-uranus') return SkyObjectGlyphKind.URANUS;
+    if (object.id === 'planet-neptune') return SkyObjectGlyphKind.NEPTUNE;
+    if (object.type === CelestialType.PLANET) return SkyObjectGlyphKind.SOLAR_SYSTEM_GENERIC;
+    if (NormalSkySceneService.hasTag(object, '星系')) return SkyObjectGlyphKind.GALAXY;
+    if (NormalSkySceneService.hasTag(object, '疏散星团')) return SkyObjectGlyphKind.OPEN_CLUSTER;
+    if (NormalSkySceneService.hasTag(object, '球状星团')) return SkyObjectGlyphKind.GLOBULAR_CLUSTER;
+    if (NormalSkySceneService.hasTag(object, '行星状星云')) return SkyObjectGlyphKind.PLANETARY_NEBULA;
+    if (NormalSkySceneService.hasTag(object, '超新星遗迹')) return SkyObjectGlyphKind.SUPERNOVA_REMNANT;
+    if (NormalSkySceneService.hasTag(object, '暗星云')) return SkyObjectGlyphKind.DARK_NEBULA;
+    if (NormalSkySceneService.hasTag(object, '星云') ||
+      NormalSkySceneService.hasTag(object, '反射星云')) return SkyObjectGlyphKind.NEBULA;
+    return SkyObjectGlyphKind.DEEP_SKY_GENERIC;
+  }
+
+  private static hasTag(object: CelestialObject, expected: string): boolean {
+    for (let index: number = 0; index < object.tags.length; index++) {
+      if (object.tags[index] === expected) return true;
+    }
+    return false;
   }
 
   private starColor(spectralType: string): string {

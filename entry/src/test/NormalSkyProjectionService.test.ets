@@ -6,6 +6,7 @@ import {
 import {
   NormalSkyViewport,
   ProjectedSkyObject,
+  SkyObjectGlyphKind,
   SkyMapOrientation,
   SkyMapSize
 } from '../main/ets/models/NormalSkyModels';
@@ -36,6 +37,7 @@ function object(id: string, x: number, y: number, priority: number): ProjectedSk
   return {
     id: id,
     type: CelestialType.STAR,
+    glyphKind: SkyObjectGlyphKind.STAR,
     coordinate: coordinate(0.0, 0.0),
     xPixels: x,
     yPixels: y,
