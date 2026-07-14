@@ -1,7 +1,9 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { CelestialCatalog } from '../main/ets/data/CelestialCatalog';
 import {
+  CatalogPrecision,
   CelestialObject,
+  CelestialType,
   ObservationPlanningResult,
   ObserverState,
   OutingRecommendation,
@@ -72,8 +74,21 @@ export default function observationPlanningServiceTest(): void {
 
     it('缺少坐标的目录条目只展示资料且不伪造窗口', 0, () => {
       const startAtMs: number = Date.UTC(2026, 6, 12, 8, 0, 0);
+      const indexOnlyTarget: CelestialObject = {
+        id: 'index-only-test',
+        type: CelestialType.MESSIER,
+        nameZh: '仅索引测试目标',
+        nameEn: 'Index-only target',
+        designation: 'TEST',
+        constellation: '',
+        description: '验证缺少坐标时的规划降级。',
+        tags: ['测试'],
+        precision: CatalogPrecision.INDEX_ONLY,
+        gotoAllowed: false,
+        recommendedFor18mm: false
+      };
       const result: ObservationPlanningResult = ObservationPlanningService.plan(
-        requireTarget('messier-2'), zhengzhouObserver(startAtMs), startAtMs);
+        indexOnlyTarget, zhengzhouObserver(startAtMs), startAtMs);
       expect(result.riseTransitSet.status).assertEqual(VisibilityStatus.COORDINATE_UNAVAILABLE);
       expect(result.windows.length).assertEqual(0);
       expect(result.overallScore === undefined).assertTrue();

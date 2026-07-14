@@ -5,6 +5,12 @@ import {
   CelestialType,
   EquatorialCoordinate
 } from '../models/DomainModels';
+import {
+  GENERATED_CONSTELLATIONS,
+  GENERATED_MESSIER,
+  GeneratedConstellationData,
+  GeneratedMessierData
+} from './GeneratedSkyCatalog';
 
 function coordinate(raHours: number, decDegrees: number): EquatorialCoordinate {
   return { raHours: raHours, decDegrees: decDegrees, epoch: 2000.0 };
@@ -185,6 +191,15 @@ function findExactConstellation(nameEn: string): CelestialObject | undefined {
   return undefined;
 }
 
+function findGeneratedConstellation(nameEn: string): GeneratedConstellationData | undefined {
+  for (let index: number = 0; index < GENERATED_CONSTELLATIONS.length; index++) {
+    if (GENERATED_CONSTELLATIONS[index].nameEn === nameEn) {
+      return GENERATED_CONSTELLATIONS[index];
+    }
+  }
+  return undefined;
+}
+
 function findExactMessier(number: number): CelestialObject | undefined {
   const id: string = `messier-${number}`;
   for (let index: number = 0; index < EXACT_MESSIER.length; index++) {
@@ -195,37 +210,92 @@ function findExactMessier(number: number): CelestialObject | undefined {
   return undefined;
 }
 
+function findGeneratedMessier(number: number): GeneratedMessierData | undefined {
+  for (let index: number = 0; index < GENERATED_MESSIER.length; index++) {
+    if (GENERATED_MESSIER[index].number === number) {
+      return GENERATED_MESSIER[index];
+    }
+  }
+  return undefined;
+}
+
 function buildConstellations(): CelestialObject[] {
   const result: CelestialObject[] = [];
   for (let index: number = 0; index < CONSTELLATION_NAMES.length; index++) {
     const parts: string[] = CONSTELLATION_NAMES[index].split('|');
     const exact: CelestialObject | undefined = findExactConstellation(parts[0]);
-    if (exact !== undefined) {
-      result.push(exact);
-    } else {
+    const generated: GeneratedConstellationData | undefined = findGeneratedConstellation(parts[0]);
+    if (generated === undefined) {
+      // 固定版本数据若缺项应明确降级，不能伪造星座中心。
       result.push(indexObject(`constellation-${slugify(parts[0])}`, CelestialType.CONSTELLATION,
-        parts[1], parts[0], parts[0], 'IAU 88 星座离线索引；该条目暂不用于设备 GOTO。'));
+        parts[1], parts[0], parts[0], 'IAU 星座索引；当前离线数据缺少可靠中心坐标。'));
+      continue;
     }
+    result.push(exactObject(`constellation-${slugify(parts[0])}`, CelestialType.CONSTELLATION,
+      parts[1], parts[0], generated.designation, parts[1],
+      generated.centerRaHours, generated.centerDecDegrees, 0.0,
+      exact === undefined || exact.angularSizeDegrees === undefined ?
+        generated.angularSizeDegrees : exact.angularSizeDegrees,
+      exact === undefined ? `IAU 88 星座之一；离线星图包含其中心和主要连线。` : exact.description,
+      exact === undefined ? ['星座', parts[1], parts[0]] : exact.tags,
+      exact === undefined ? generated.angularSizeDegrees >= 20.0 : exact.recommendedFor18mm));
   }
   return result;
 }
 
-function buildMessier(): CelestialObject[] {
+function constellationNameByDesignation(designation: string, constellations: CelestialObject[]): string {
+  for (let index: number = 0; index < constellations.length; index++) {
+    if (constellations[index].designation === designation) {
+      return constellations[index].nameZh;
+    }
+  }
+  return '';
+}
+
+function messierTypeName(type: string): string {
+  if (type === 'g' || type === 's' || type === 's0' || type === 'sd' || type === 'i' || type === 'e') {
+    return '星系';
+  }
+  if (type === 'oc') return '疏散星团';
+  if (type === 'gc') return '球状星团';
+  if (type === 'pn') return '行星状星云';
+  if (type === 'snr') return '超新星遗迹';
+  if (type === 'dn') return '暗星云';
+  if (type === 'rn') return '反射星云';
+  if (type === 'bn' || type === 'en' || type === 'sfr') return '星云';
+  return '深空天体';
+}
+
+function buildMessier(constellations: CelestialObject[]): CelestialObject[] {
   const result: CelestialObject[] = [];
   for (let number: number = 1; number <= 110; number++) {
     const exact: CelestialObject | undefined = findExactMessier(number);
-    if (exact !== undefined) {
-      result.push(exact);
-    } else {
+    const generated: GeneratedMessierData | undefined = findGeneratedMessier(number);
+    if (generated === undefined) {
       result.push(indexObject(`messier-${number}`, CelestialType.MESSIER, `梅西耶 ${number}`,
-        `Messier ${number}`, `M${number}`, 'Messier M1-M110 完整离线索引；待导入可靠坐标前不用于设备 GOTO。'));
+        `Messier ${number}`, `M${number}`, '离线数据缺少可靠坐标，当前仅允许检索。'));
+      continue;
     }
+    const typeName: string = messierTypeName(generated.objectType);
+    const constellation: string = constellationNameByDesignation(
+      generated.constellationDesignation, constellations);
+    const alternateName: string = generated.alternateName.length > 0 ?
+      generated.alternateName : `Messier ${number}`;
+    result.push(exactObject(`messier-${number}`, CelestialType.MESSIER,
+      exact === undefined ? `梅西耶 ${number}` : exact.nameZh,
+      exact === undefined ? alternateName : exact.nameEn,
+      generated.designation, constellation,
+      generated.raHours, generated.decDegrees, generated.magnitude, generated.angularSizeDegrees,
+      exact === undefined ? `${generated.designation} 是位于${constellation}的${typeName}，可离线查看和规划。` : exact.description,
+      exact === undefined ? ['Messier', typeName, generated.catalogDesignation] : exact.tags,
+      exact === undefined ? generated.angularSizeDegrees >= 0.75 && generated.magnitude <= 7.0 :
+        exact.recommendedFor18mm));
   }
   return result;
 }
 
 const CONSTELLATIONS: CelestialObject[] = buildConstellations();
-const MESSIER_OBJECTS: CelestialObject[] = buildMessier();
+const MESSIER_OBJECTS: CelestialObject[] = buildMessier(CONSTELLATIONS);
 const ALL_OBJECTS: CelestialObject[] = BRIGHT_STARS.concat(CONSTELLATIONS, MESSIER_OBJECTS, SOLAR_SYSTEM);
 
 export class CelestialCatalog {
@@ -298,11 +368,11 @@ export class CelestialCatalog {
     return {
       exactBrightStars: BRIGHT_STARS.length,
       constellationIndexCount: CONSTELLATIONS.length,
-      exactConstellationAnchors: EXACT_CONSTELLATIONS.length,
+      exactConstellationAnchors: CONSTELLATIONS.length,
       messierIndexCount: MESSIER_OBJECTS.length,
-      exactMessierTargets: EXACT_MESSIER.length,
+      exactMessierTargets: MESSIER_OBJECTS.length,
       dynamicSolarSystemCount: SOLAR_SYSTEM.length,
-      strategy: '完整覆盖 IAU 88 星座与 M1-M110 的离线检索；比赛常用亮星、星座锚点和广角目标保存可靠坐标。索引级条目禁止 GOTO，后续可无损替换为完整授权星表。'
+      strategy: '完整离线覆盖 IAU 88 星座中心与连线、M1-M110 精确坐标、肉眼恒星和动态太阳系目标。'
     };
   }
 }

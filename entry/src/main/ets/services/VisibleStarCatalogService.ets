@@ -87,6 +87,14 @@ export interface EquatorialViewportQuery {
   maxResults?: number;
 }
 
+/** 普通星图球面查询；与矩形窗口不同，它在赤经回绕和天极附近不会漏星。 */
+export interface SphericalSkyQuery {
+  center: EquatorialCoordinate;
+  radiusDegrees: number;
+  maxMagnitude?: number;
+  maxResults?: number;
+}
+
 /**
  * 加载并查询 resources/rawfile/visible_stars.json。
  *
@@ -208,6 +216,31 @@ export class VisibleStarCatalogService {
       const raDifference: number = Math.abs(AstronomyService.normalizeSignedDegrees(
         star.raHours * 15.0 - centerRaDegrees)) * declinationScale;
       if (raDifference <= halfWidth) {
+        result.push(star);
+      }
+    }
+    return result;
+  }
+
+  filterSphericalViewport(query: SphericalSkyQuery): VisibleStar[] {
+    this.ensureLoaded();
+    const radius: number = this.clamp(Math.abs(query.radiusDegrees), 0.0, 180.0);
+    const maxMagnitude: number = this.normalizeMagnitude(query.maxMagnitude === undefined ?
+      VisibleStarCatalogService.DEFAULT_MAX_MAGNITUDE : query.maxMagnitude);
+    const maxResults: number = this.normalizeLimit(query.maxResults === undefined ?
+      VisibleStarCatalogService.DEFAULT_MAX_RESULTS : query.maxResults);
+    const center: EquatorialCoordinate = {
+      raHours: AstronomyService.normalizeHours(query.center.raHours),
+      decDegrees: this.clamp(query.center.decDegrees, -90.0, 90.0),
+      epoch: query.center.epoch
+    };
+    const result: VisibleStar[] = [];
+    for (let index: number = 0; index < this.stars.length && result.length < maxResults; index++) {
+      const star: VisibleStar = this.stars[index];
+      if (star.magnitude > maxMagnitude || !this.passesEquatorialPrefilter(star, center, radius)) {
+        continue;
+      }
+      if (AstronomyService.angularSeparation(this.coordinateOf(star), center) <= radius) {
         result.push(star);
       }
     }

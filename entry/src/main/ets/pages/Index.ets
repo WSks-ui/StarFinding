@@ -3,6 +3,7 @@ import { ArSkyDome } from '../components/ArSkyDome';
 import { DeviceCameraPreview } from '../components/DeviceCameraPreview';
 import { DeviceWorkspace } from '../components/DeviceWorkspace';
 import lazy { HuaweiArCameraView } from '../components/HuaweiArCameraView';
+import { NormalSkyMap } from '../components/NormalSkyMap';
 import { PostWorkspace } from '../components/PostWorkspace';
 import { SkyWorkspace } from '../components/SkyWorkspace';
 import { TaskWorkspace } from '../components/TaskWorkspace';
@@ -27,11 +28,17 @@ import {
   HorizontalCoordinate,
   ImageFormat,
   MountState,
+  NormalSkyScene,
+  NormalSkyViewport,
   ObservationPlanningConstraints,
   ObservationPlanningResult,
   ObservationWindow,
   ObserverState,
   OutingRecommendation,
+  ProjectedSkyObject,
+  SkyLayerVisibility,
+  SkyMapOrientation,
+  SkyMapSize,
   TrackingMode,
   TaskStatus,
   VisibilityStatus,
@@ -39,6 +46,7 @@ import {
   WeatherForecast,
   WeatherHourlySample
 } from '../models';
+import { DEFAULT_SKY_LAYERS } from '../models/NormalSkyModels';
 import {
   ArTrackingQuality,
   ArTrackingSource,
@@ -62,6 +70,10 @@ import {
   GestureInterpreter,
   HandFrameSourceStatus,
   HandLandmarkAnalysisResult,
+  NormalSkyCatalogMetadata,
+  NormalSkyCatalogService,
+  NormalSkyProjectionService,
+  NormalSkySceneService,
   ObserverLocationResult,
   ObserverLocationService,
   OnStepLX200Client,
@@ -78,22 +90,6 @@ import { HuaweiArPoseAdapter } from '../services/HuaweiArPoseAdapter';
 import { SkyDomeProjectionService } from '../services/SkyDomeProjectionService';
 import { SkyDomeSceneService } from '../services/SkyDomeSceneService';
 import { MotionTokens } from '../utils/MotionTokens';
-
-interface DisplayStar {
-  id: string;
-  name: string;
-  x: number;
-  y: number;
-  size: number;
-  color: string;
-  catalogStar?: VisibleStar;
-}
-
-interface ProjectedTarget {
-  targetId: string;
-  x: number;
-  y: number;
-}
 
 /** 星图首屏只展示少量重点目标；详情、搜索和规划统一使用 CelestialCatalog 的规范 ID。 */
 const FEATURED_TARGET_IDS: string[] = [
@@ -116,18 +112,17 @@ interface PlanningHeightBar {
   color: ResourceColor;
 }
 
-const DISPLAY_STARS: DisplayStar[] = [
-  { id: 's1', name: '织女星', x: 378, y: 138, size: 9, color: '#FFFFFF' },
-  { id: 's2', name: '天津四', x: 468, y: 204, size: 7, color: '#D8ECFF' },
-  { id: 's3', name: '牛郎星', x: 315, y: 346, size: 8, color: '#FFF3D1' },
-  { id: 's4', name: '', x: 185, y: 110, size: 4, color: '#B9D5F0' },
-  { id: 's5', name: '', x: 118, y: 260, size: 3, color: '#D8ECFF' },
-  { id: 's6', name: '', x: 535, y: 92, size: 4, color: '#B9D5F0' },
-  { id: 's7', name: '', x: 565, y: 318, size: 3, color: '#FFF3D1' },
-  { id: 's8', name: '', x: 242, y: 414, size: 3, color: '#B9D5F0' },
-  { id: 's9', name: '', x: 92, y: 72, size: 2, color: '#D8ECFF' },
-  { id: 's10', name: '', x: 505, y: 432, size: 3, color: '#D8ECFF' }
-];
+function emptyNormalSkyScene(): NormalSkyScene {
+  return {
+    objects: [],
+    constellationLines: [],
+    gridLines: [],
+    eclipticLines: [],
+    horizonLines: [],
+    horizonMask: [],
+    generatedAtMs: 0
+  };
+}
 
 @Entry
 @Component
@@ -138,11 +133,11 @@ struct Index {
   @State private selectedTargetId: string = 'star-vega';
   @State private targetSearch: string = '';
   @State private gestureEnabled: boolean = false;
-  @State private gestureStatus: string = '未启用';
-  @State private mapOffsetX: number = 0;
-  @State private mapOffsetY: number = 0;
-  @State private mapScale: number = 1;
-  @State private mapRotation: number = 0;
+  @State private gestureStatus: string = '未安装手势模型';
+  @State private normalViewport: NormalSkyViewport = NormalSkyProjectionService.defaultViewport();
+  @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
+  @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
+  @State private normalLayerPanelOpen: boolean = false;
   @State private skyViewportWidth: number = 600;
   @State private skyViewportHeight: number = 500;
   // 非星图页面也需要知道可用宽度，避免手机和分屏窗口继续沿用 Pad 固定布局。
@@ -192,9 +187,8 @@ struct Index {
   @State private gatewayDetail: string = '10.42.0.1:8000';
   @State private taskStage: string = '等待创建';
   @State private activeTaskId: string = '';
-  @State private normalStars: DisplayStar[] = [];
-  @State private normalTargets: ProjectedTarget[] = [];
   @State private catalogStatus: string = '星表加载中';
+  @State private normalCatalogStatus: string = '星座线加载中';
   @State private plateSolveCount: number = 0;
   @State private correctionCount: number = 0;
   @State private stackFileUrl: string = '';
@@ -235,6 +229,9 @@ struct Index {
     new CaptureWorkflowCoordinator(this.mountClient, this.gatewayClient);
   private readonly poseService: DevicePoseService = new DevicePoseService();
   private readonly visibleStarCatalog: VisibleStarCatalogService = new VisibleStarCatalogService();
+  private readonly normalSkyCatalog: NormalSkyCatalogService = new NormalSkyCatalogService();
+  private readonly normalSkySceneService: NormalSkySceneService =
+    new NormalSkySceneService(this.visibleStarCatalog, this.normalSkyCatalog);
   private readonly skyDomeSceneService: SkyDomeSceneService = new SkyDomeSceneService();
   private readonly gestureInterpreter: GestureInterpreter = new GestureInterpreter();
   private readonly handFrameSource: CameraHandFrameSource = new CameraHandFrameSource(
@@ -254,10 +251,13 @@ struct Index {
   private locationRequestGeneration: number = 0;
   // 每次开始拍摄分配一个代次；取消或急停递增代次，使所有 await 之后的旧流程立即失效。
   private captureRunGeneration: number = 0;
-  private panStartOffsetX: number = 0;
-  private panStartOffsetY: number = 0;
-  private pinchStartScale: number = 1;
-  private rotationStartAngle: number = 0;
+  private normalSceneTimer: number = -1;
+  private normalInertiaTimer: number = -1;
+  private normalFlyTimer: number = -1;
+  private lastPanOffsetX: number = 0.0;
+  private lastPanOffsetY: number = 0.0;
+  private lastPinchScale: number = 1.0;
+  private lastRotationAngle: number = 0.0;
   aboutToAppear(): void {
     const arCapability = ArEngineCapabilityService.inspect();
     this.huaweiArViewEnabled = arCapability.available;
@@ -281,6 +281,9 @@ struct Index {
       this.operationMessage = `姿态传感器不可用：${error}`;
     }
     this.loadVisibleStarCatalog();
+    this.loadNormalSkyCatalog();
+    this.updateNormalScene();
+    this.startNormalSceneTimer();
     this.updateProjectedTargets(true);
   }
 
@@ -288,7 +291,10 @@ struct Index {
     this.poseService.stop();
     this.clearMountPolling();
     this.clearTaskPolling();
+    this.clearNormalMotion();
+    this.clearNormalSceneTimer();
     this.visibleStarCatalog.clear();
+    this.normalSkyCatalog.clear();
     this.domeCatalogStars = [];
     this.lastSensorPose = undefined;
     this.arEngineOrientation = undefined;
@@ -590,12 +596,13 @@ struct Index {
       gestureEnabled: this.gestureEnabled,
       skyCanvas: (): void => { this.SkyCanvas(); },
       gesturePreview: (): void => { this.SkyGesturePreview(); },
+      normalControls: (): void => { this.NormalSkyControls(); },
       targetDrawer: (): void => { this.SkyTargetDrawer(); },
       planningDrawer: (): void => { this.SkyPlanningDrawer(); },
       onViewportChange: (width: number, height: number): void => {
         this.skyViewportWidth = width;
         this.skyViewportHeight = height;
-        this.updateNormalMap();
+        this.updateNormalScene();
         this.updateProjectedTargets(true);
       },
       onSearchChange: (value: string): void => { this.targetSearch = value; },
@@ -659,19 +666,25 @@ struct Index {
         .height('100%')
         .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       } else {
-        Stack() {
-          Rect().width('100%').height('100%').fill($r('app.color.sky_background'))
-          this.NormalMapLayer()
-        }
+        NormalSkyMap({
+          scene: this.normalScene,
+          widthPixels: this.skyViewportWidth,
+          heightPixels: this.skyViewportHeight,
+          onObjectSelected: (objectId: string): void => {
+            this.selectNormalSkyObject(objectId);
+          }
+        })
         .width('100%')
         .height('100%')
         .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       }
 
-      Text('+')
-        .fontSize(24).fontColor($r('app.color.app_brand'))
-        .width(30).height(30).textAlign(TextAlign.Center)
-        .position({ x: this.skyViewportWidth / 2 - 15, y: this.skyViewportHeight / 2 - 15 })
+      if (this.skyMode === 0) {
+        Text('+')
+          .fontSize(24).fontColor($r('app.color.app_brand'))
+          .width(30).height(30).textAlign(TextAlign.Center)
+          .position({ x: this.skyViewportWidth / 2 - 15, y: this.skyViewportHeight / 2 - 15 })
+      }
     }
     .width('100%')
     .height('100%')
@@ -679,29 +692,135 @@ struct Index {
       GestureGroup(GestureMode.Parallel,
         PanGesture({ fingers: 1, direction: PanDirection.All })
           .onActionStart(() => {
-            this.panStartOffsetX = this.mapOffsetX;
-            this.panStartOffsetY = this.mapOffsetY;
+            this.stopNormalInertia();
+            this.stopNormalFly();
+            this.lastPanOffsetX = 0.0;
+            this.lastPanOffsetY = 0.0;
           })
           .onActionUpdate((event: GestureEvent) => {
             if (this.skyMode === 1) {
-              this.mapOffsetX = this.panStartOffsetX + event.offsetX;
-              this.mapOffsetY = this.panStartOffsetY + event.offsetY;
+              const deltaX: number = event.offsetX - this.lastPanOffsetX;
+              const deltaY: number = event.offsetY - this.lastPanOffsetY;
+              this.lastPanOffsetX = event.offsetX;
+              this.lastPanOffsetY = event.offsetY;
+              this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport,
+                this.normalSkySize(), deltaX, deltaY);
+              this.updateNormalScene();
             }
+          })
+          .onActionEnd((event: GestureEvent) => {
+            if (this.skyMode === 1) this.startNormalInertia(event.velocityX, event.velocityY);
           }),
         PinchGesture({ fingers: 2 })
-          .onActionStart(() => { this.pinchStartScale = this.mapScale; })
+          .onActionStart(() => {
+            this.stopNormalInertia();
+            this.stopNormalFly();
+            this.lastPinchScale = 1.0;
+          })
           .onActionUpdate((event: GestureEvent) => {
             if (this.skyMode === 1) {
-              this.mapScale = Math.max(0.6, Math.min(3, this.pinchStartScale * event.scale));
+              const incrementalScale: number = event.scale / Math.max(0.001, this.lastPinchScale);
+              this.lastPinchScale = event.scale;
+              this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
+                this.normalSkySize(), incrementalScale,
+                this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
+              this.updateNormalScene();
             }
           }),
         RotationGesture({ fingers: 2 })
-          .onActionStart(() => { this.rotationStartAngle = this.mapRotation; })
+          .onActionStart(() => {
+            this.stopNormalInertia();
+            this.stopNormalFly();
+            this.lastRotationAngle = 0.0;
+          })
           .onActionUpdate((event: GestureEvent) => {
-            if (this.skyMode === 1) this.mapRotation = this.rotationStartAngle + event.angle;
+            if (this.skyMode === 1) {
+              const incrementalAngle: number = event.angle - this.lastRotationAngle;
+              this.lastRotationAngle = event.angle;
+              this.normalViewport = NormalSkyProjectionService.rotateAt(this.normalViewport,
+                this.normalSkySize(), incrementalAngle,
+                this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
+              this.updateNormalScene();
+            }
           })
       )
     )
+  }
+
+  @Builder
+  private NormalSkyControls() {
+    Column({ space: 6 }) {
+      Button() {
+        SymbolGlyph($r('sys.symbol.house')).fontSize(20).fontColor([$r('app.color.sky_text_primary')])
+      }
+        .width(44).height(44).backgroundColor($r('app.color.sky_surface')).borderRadius(22)
+        .onClick(() => { this.homeNormalSky(); })
+      Button('N')
+        .width(44).height(44).fontSize(15).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.sky_text_primary'))
+        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
+        .onClick(() => { this.resetNormalSkyNorth(); })
+      Button('+')
+        .width(44).height(44).fontSize(22).fontColor($r('app.color.sky_text_primary'))
+        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
+        .onClick(() => { this.zoomNormalSky(1.35); })
+      Button('-')
+        .width(44).height(44).fontSize(22).fontColor($r('app.color.sky_text_primary'))
+        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
+        .onClick(() => { this.zoomNormalSky(0.74); })
+      Button(this.normalViewport.orientation === SkyMapOrientation.EQUATORIAL_NORTH_UP ? '地平' : '赤道')
+        .width(52).height(44).fontSize(11).fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.sky_text_primary'))
+        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
+        .onClick(() => { this.toggleNormalSkyOrientation(); })
+      Button() {
+        SymbolGlyph($r('sys.symbol.adjustment')).fontSize(20)
+          .fontColor([this.normalLayerPanelOpen ? $r('app.color.app_brand') : $r('app.color.sky_text_primary')])
+      }
+        .width(44).height(44).backgroundColor($r('app.color.sky_surface')).borderRadius(22)
+        .onClick(() => { this.normalLayerPanelOpen = !this.normalLayerPanelOpen; })
+    }
+    .padding(4).backgroundColor($r('app.color.sky_surface_soft')).backgroundBlurStyle(BlurStyle.Thin)
+    .border({ width: 1, color: $r('app.color.sky_border') }).borderRadius(26)
+    .position({ x: Math.max(8, this.skyViewportWidth - 68),
+      y: Math.max(86, this.skyViewportHeight / 2 - 150) })
+
+    if (this.normalLayerPanelOpen) {
+      Column({ space: 7 }) {
+        Row() {
+          Text('星图图层').fontSize(14).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary'))
+          Blank()
+          Text(`${this.normalViewport.fieldOfViewDegrees.toFixed(0)}°`)
+            .fontSize(12).fontColor($r('app.color.app_brand'))
+        }.width('100%')
+        this.NormalLayerToggle('星座连线', 0, this.normalLayers.constellationLines)
+        this.NormalLayerToggle('赤道网格', 1, this.normalLayers.equatorialGrid)
+        this.NormalLayerToggle('黄道', 2, this.normalLayers.ecliptic)
+        this.NormalLayerToggle('地平线', 3, this.normalLayers.horizon)
+        this.NormalLayerToggle('深空天体', 4, this.normalLayers.deepSky)
+        this.NormalLayerToggle('太阳系', 5, this.normalLayers.solarSystem)
+        Text(`${this.catalogStatus} · ${this.normalCatalogStatus}`)
+          .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).maxLines(2)
+      }
+      .width(Math.min(206, Math.max(170, this.skyViewportWidth - 92)))
+      .padding(12).backgroundColor($r('app.color.sky_surface_strong')).backgroundBlurStyle(BlurStyle.Regular)
+      .border({ width: 1, color: $r('app.color.sky_border') })
+      .borderRadius($r('app.float.corner_card'))
+      .position({ x: Math.max(8, this.skyViewportWidth - 286),
+        y: Math.max(86, this.skyViewportHeight / 2 - 116) })
+      .transition(MotionTokens.capsule())
+    }
+  }
+
+  @Builder
+  private NormalLayerToggle(label: string, layer: number, enabled: boolean) {
+    Row() {
+      Text(label).fontSize(12).fontColor($r('app.color.sky_text_secondary'))
+      Blank()
+      Toggle({ type: ToggleType.Switch, isOn: enabled })
+        .selectedColor($r('app.color.app_brand'))
+        .onChange((value: boolean) => { this.setNormalLayer(layer, value); })
+    }.width('100%').height(34)
   }
 
   @Builder
@@ -809,9 +928,14 @@ struct Index {
             }
           } else {
             Row() {
-              Text('前摄手势').fontSize(14).fontColor($r('app.color.sky_text_secondary'))
+              Column({ space: 2 }) {
+                Text('前摄手势').fontSize(14).fontColor($r('app.color.sky_text_secondary'))
+                Text(this.gestureModelAvailable() ? this.gestureStatus : '未安装手势模型')
+                  .fontSize(10).fontColor($r('app.color.sky_text_tertiary'))
+              }.alignItems(HorizontalAlign.Start)
               Blank()
               Toggle({ type: ToggleType.Switch, isOn: this.gestureEnabled })
+                .enabled(this.gestureModelAvailable())
                 .selectedColor('#57C995')
                 .onChange((value: boolean) => { this.setGestureEnabled(value); })
             }.width('100%').height(48)
@@ -1033,100 +1157,6 @@ struct Index {
     }
     .layoutWeight(1).height(58).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
     .backgroundColor($r('app.color.sky_background')).borderRadius($r('app.float.corner_card'))
-  }
-
-  @Builder
-  private NormalMapLayer() {
-    Stack() {
-      ForEach([1, 2, 3, 4], (item: number) => {
-        Circle()
-          .width(item * 118)
-          .height(item * 118)
-          .fill('transparent')
-          .stroke('#1D2731')
-          .strokeWidth(1)
-          .position({
-            x: this.skyViewportWidth / 2.0 - item * 59,
-            y: this.skyViewportHeight / 2.0 - item * 59
-          })
-      })
-      Rect().width(1).height(Math.max(1, this.skyViewportHeight - 20)).fill('#1D2731')
-        .position({ x: this.skyViewportWidth / 2.0, y: 10 })
-      Rect().width(Math.max(1, this.skyViewportWidth - 30)).height(1).fill('#1D2731')
-        .position({ x: 15, y: this.skyViewportHeight / 2.0 })
-
-      ForEach(this.normalStars, (star: DisplayStar) => {
-        this.StarPoint(star)
-      }, (star: DisplayStar) => star.id)
-      ForEach(this.normalTargets, (projected: ProjectedTarget) => {
-        this.TargetMarker(this.targetById(projected.targetId), projected.x, projected.y)
-      }, (projected: ProjectedTarget) => projected.targetId)
-    }
-    .width('100%')
-    .height('100%')
-    .translate({ x: this.mapOffsetX, y: this.mapOffsetY })
-    .scale({ x: this.mapScale, y: this.mapScale })
-    .rotate({ angle: this.mapRotation })
-  }
-
-  @Builder
-  private StarPoint(star: DisplayStar) {
-    Stack({ alignContent: Alignment.Center }) {
-      Circle().width(star.size).height(star.size).fill(star.color)
-      if (star.name.length > 0) {
-        Text(star.name).fontSize(9).fontColor('#BFC9D8')
-          .width(120).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-          .position({ x: 22, y: 18 })
-      }
-    }
-    // 视觉星点保持原尺寸，外层 36vp 透明热区让手机也能稳定点选暗星。
-    .width(36).height(36)
-    .position({ x: star.x - 18, y: star.y - 18 })
-    .onClick(() => {
-      if (star.catalogStar === undefined) {
-        return;
-      }
-      this.selectedCustomTarget = this.visibleStarCatalog.toCelestialObject(star.catalogStar);
-      this.selectedTargetId = this.selectedCustomTarget.id;
-      this.operationMessage = `已选择 ${this.selectedCustomTarget.nameZh}`;
-      if (this.skyMode === 1) {
-        this.updateNormalMap();
-      }
-      this.refreshPlanning();
-      this.revealSkyPanel(1);
-    })
-  }
-
-  @Builder
-  private TargetMarker(target: CelestialObject, x: number, y: number) {
-    Row({ space: 5 }) {
-      Circle()
-        .width(target.id === this.selectedTargetId ? 12 : 8)
-        .height(target.id === this.selectedTargetId ? 12 : 8)
-        .fill(target.id === this.selectedTargetId ? '#72D3F5' : '#F4BA58')
-        .stroke('#071017')
-        .strokeWidth(2)
-      Text(target.designation)
-        .fontSize(11)
-        .fontWeight(target.id === this.selectedTargetId ? FontWeight.Bold : FontWeight.Medium)
-        .fontColor(target.id === this.selectedTargetId ? '#72D3F5' : '#E4E9F1')
-        .padding({ left: 5, right: 5, top: 2, bottom: 2 })
-        .backgroundColor('#10141B')
-        .borderRadius(3)
-    }
-    .position({ x: x - 4, y: y - 4 })
-    .scale({
-      x: target.id === this.selectedTargetId ? 1.06 : 1,
-      y: target.id === this.selectedTargetId ? 1.06 : 1
-    })
-    .animation(MotionTokens.spring())
-    .onClick(() => {
-      this.selectedCustomTarget = undefined;
-      this.selectedTargetId = target.id;
-      this.updateNormalMap();
-      this.refreshPlanning();
-      this.revealSkyPanel(1);
-    })
   }
 
   @Builder
@@ -1424,10 +1454,11 @@ struct Index {
       this.skyMode = mode;
     });
     if (mode === 0) {
+      this.clearNormalMotion();
       this.setGestureEnabled(false);
       this.updateProjectedTargets(true);
     } else {
-      this.updateNormalMap();
+      this.updateNormalScene();
     }
   }
 
@@ -1448,11 +1479,21 @@ struct Index {
   }
 
   private setGestureEnabled(value: boolean): void {
-    const enabled: boolean = value && this.skyMode === 1;
+    const analyzerAvailable: boolean = this.gestureModelAvailable();
+    const enabled: boolean = value && this.skyMode === 1 && analyzerAvailable;
     this.gestureEnabled = enabled;
-    // 当前仓库没有经过授权和精度验收的手部关键点模型，不能把前摄预览冒充为识别结果。
-    this.gestureStatus = enabled ? '等待手部模型' : '未启用';
+    if (value && !analyzerAvailable) {
+      this.gestureStatus = '未安装手势模型';
+      this.operationMessage = '手势控制未启动：当前版本未安装经过许可和精度验收的手部模型';
+    } else {
+      this.gestureStatus = enabled ? '正在启动前摄识别' : '未启用';
+    }
     if (!enabled) this.gestureInterpreter.reset();
+  }
+
+  private gestureModelAvailable(): boolean {
+    return this.handFrameSource.getStatus().analyzer.available &&
+      this.handFrameSource.getStatus().analyzer.modelLoaded;
   }
 
   private selectedTarget(): CelestialObject {
@@ -1481,7 +1522,7 @@ struct Index {
       this.selectedCustomTarget = catalogMatches[0];
       this.selectedTargetId = catalogMatches[0].id;
       this.operationMessage = `已从离线天体目录选择 ${catalogMatches[0].nameZh}`;
-      this.updateNormalMap();
+      this.focusNormalSkyOnSelected();
       this.refreshPlanning();
       this.revealSkyPanel(1);
       return;
@@ -1492,18 +1533,13 @@ struct Index {
         this.selectedCustomTarget = this.visibleStarCatalog.toCelestialObject(stars[0]);
         this.selectedTargetId = this.selectedCustomTarget.id;
         this.operationMessage = `已从 HYG 离线星表选择 ${this.selectedCustomTarget.nameZh}`;
-        this.updateNormalMap();
+        this.focusNormalSkyOnSelected();
         this.refreshPlanning();
         this.revealSkyPanel(1);
         return;
       }
     }
     this.operationMessage = `离线目录中未找到“${keyword}”`;
-  }
-
-  private targetById(id: string): CelestialObject {
-    const target: CelestialObject | undefined = CelestialCatalog.getById(id);
-    return target === undefined ? this.selectedTarget() : target;
   }
 
   private selectedCoordinate(): EquatorialCoordinate | undefined {
@@ -1740,7 +1776,7 @@ struct Index {
     this.weatherStatus = WeatherDataStatus.NOT_REQUESTED;
     this.weatherMessage = '地点已改变 · 天气预报待更新';
     this.operationMessage = '手动观测地点已应用；赤道仪位置仍需单独同步';
-    this.updateNormalMap();
+    this.updateNormalScene();
     this.updateProjectedTargets(true);
     this.refreshPlanning();
   }
@@ -2076,11 +2112,249 @@ struct Index {
       this.catalogStatus = `${metadata.loadedCount.toLocaleString()} 星 · 离线`;
       // 星表按星等排序，预先缓存天穹所需上限，姿态刷新时不再复制全部 8921 条记录。
       this.domeCatalogStars = this.visibleStarCatalog.filterByMagnitude(5.8, 860);
-      this.updateNormalMap();
+      this.updateNormalScene();
       this.updateProjectedTargets(true);
     } catch (error) {
       this.catalogStatus = '离线星表加载失败';
       this.operationMessage = `星表加载失败：${error}`;
+    }
+  }
+
+  private async loadNormalSkyCatalog(): Promise<void> {
+    const context: common.UIAbilityContext | undefined =
+      AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
+    if (context === undefined) {
+      this.normalCatalogStatus = '星座线上下文不可用';
+      return;
+    }
+    try {
+      const metadata: NormalSkyCatalogMetadata = await this.normalSkyCatalog.load(context);
+      this.normalCatalogStatus = `${metadata.constellationCount} 星座 · 离线`;
+      this.updateNormalScene();
+    } catch (error) {
+      this.normalCatalogStatus = '离线星座线加载失败';
+      this.operationMessage = `星座线加载失败：${error}`;
+    }
+  }
+
+  private normalSkySize(): SkyMapSize {
+    return {
+      widthPixels: Math.max(1.0, this.skyViewportWidth),
+      heightPixels: Math.max(1.0, this.skyViewportHeight)
+    };
+  }
+
+  private normalObserver(timestampMs: number): ObserverState | undefined {
+    if (this.observer === undefined) {
+      return undefined;
+    }
+    return {
+      latitudeDegrees: this.observer.latitudeDegrees,
+      longitudeDegrees: this.observer.longitudeDegrees,
+      elevationMeters: this.observer.elevationMeters,
+      timestampMs: timestampMs
+    };
+  }
+
+  private updateNormalScene(): void {
+    const timestampMs: number = Date.now();
+    this.normalScene = this.normalSkySceneService.build({
+      viewport: this.normalViewport,
+      size: this.normalSkySize(),
+      layers: this.normalLayers,
+      selectedTargetId: this.selectedTargetId,
+      timestampMs: timestampMs,
+      observer: this.normalObserver(timestampMs)
+    });
+  }
+
+  private normalGestureAnchorX(value: number): number {
+    return Number.isFinite(value) && value > 0.0 ? value : this.skyViewportWidth / 2.0;
+  }
+
+  private normalGestureAnchorY(value: number): number {
+    return Number.isFinite(value) && value > 0.0 ? value : this.skyViewportHeight / 2.0;
+  }
+
+  private setNormalLayer(layer: number, enabled: boolean): void {
+    const next: SkyLayerVisibility = {
+      constellationLines: this.normalLayers.constellationLines,
+      equatorialGrid: this.normalLayers.equatorialGrid,
+      ecliptic: this.normalLayers.ecliptic,
+      horizon: this.normalLayers.horizon,
+      deepSky: this.normalLayers.deepSky,
+      solarSystem: this.normalLayers.solarSystem
+    };
+    if (layer === 0) next.constellationLines = enabled;
+    if (layer === 1) next.equatorialGrid = enabled;
+    if (layer === 2) next.ecliptic = enabled;
+    if (layer === 3) next.horizon = enabled;
+    if (layer === 4) next.deepSky = enabled;
+    if (layer === 5) next.solarSystem = enabled;
+    this.normalLayers = next;
+    this.updateNormalScene();
+  }
+
+  private homeNormalSky(): void {
+    this.clearNormalMotion();
+    this.normalViewport = NormalSkyProjectionService.homeViewport(
+      this.normalObserver(Date.now()), this.normalViewport.orientation);
+    this.updateNormalScene();
+  }
+
+  private resetNormalSkyNorth(): void {
+    this.clearNormalMotion();
+    if (this.normalViewport.orientation === SkyMapOrientation.HORIZON_ZENITH) {
+      this.normalViewport = NormalSkyProjectionService.homeViewport(
+        this.normalObserver(Date.now()), SkyMapOrientation.HORIZON_ZENITH);
+    } else {
+      this.normalViewport = NormalSkyProjectionService.normalizeViewport({
+        centerRaHours: this.normalViewport.centerRaHours,
+        centerDecDegrees: this.normalViewport.centerDecDegrees,
+        fieldOfViewDegrees: this.normalViewport.fieldOfViewDegrees,
+        rotationDegrees: 0.0,
+        orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+      });
+    }
+    this.updateNormalScene();
+  }
+
+  private toggleNormalSkyOrientation(): void {
+    this.clearNormalMotion();
+    const orientation: SkyMapOrientation =
+      this.normalViewport.orientation === SkyMapOrientation.EQUATORIAL_NORTH_UP ?
+        SkyMapOrientation.HORIZON_ZENITH : SkyMapOrientation.EQUATORIAL_NORTH_UP;
+    this.normalViewport = NormalSkyProjectionService.homeViewport(
+      this.normalObserver(Date.now()), orientation);
+    this.operationMessage = orientation === SkyMapOrientation.HORIZON_ZENITH ?
+      '已切换为天顶居中的地平视图' : '已切换为北上东左的赤道视图';
+    this.updateNormalScene();
+  }
+
+  private zoomNormalSky(scale: number): void {
+    this.clearNormalMotion();
+    this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
+      this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0);
+    this.updateNormalScene();
+  }
+
+  private selectNormalSkyObject(objectId: string): void {
+    let target: CelestialObject | undefined = CelestialCatalog.getById(objectId);
+    if (target !== undefined) {
+      this.selectedCustomTarget = undefined;
+    } else {
+      let projected: ProjectedSkyObject | undefined = undefined;
+      for (let index: number = 0; index < this.normalScene.objects.length; index++) {
+        if (this.normalScene.objects[index].id === objectId) {
+          projected = this.normalScene.objects[index];
+          break;
+        }
+      }
+      if (projected !== undefined) {
+        const star: VisibleStar | undefined = this.visibleStarCatalog.getById(projected.designation);
+        if (star !== undefined) {
+          target = this.visibleStarCatalog.toCelestialObject(star);
+          this.selectedCustomTarget = target;
+        }
+      }
+    }
+    if (target === undefined) {
+      return;
+    }
+    this.selectedTargetId = target.id;
+    this.operationMessage = `已在普通星图中选择 ${target.nameZh}`;
+    this.updateNormalScene();
+    this.refreshPlanning();
+    this.revealSkyPanel(1);
+  }
+
+  private focusNormalSkyOnSelected(): void {
+    const coordinate: EquatorialCoordinate | undefined = this.selectedCoordinate();
+    if (coordinate === undefined) {
+      this.updateNormalScene();
+      return;
+    }
+    const target: CelestialObject = this.selectedTarget();
+    const targetField: number = target.type === CelestialType.CONSTELLATION ?
+      this.clamp((target.angularSizeDegrees === undefined ? 35.0 : target.angularSizeDegrees) * 1.8,
+        20.0, 90.0) : 30.0;
+    const destination: NormalSkyViewport = NormalSkyProjectionService.flyTo(
+      this.normalViewport, coordinate, targetField);
+    if (this.skyMode !== 1) {
+      this.normalViewport = destination;
+      this.updateNormalScene();
+      return;
+    }
+    this.startNormalFly(destination);
+  }
+
+  private startNormalFly(destination: NormalSkyViewport): void {
+    this.clearNormalMotion();
+    const source: NormalSkyViewport = this.normalViewport;
+    const startedAtMs: number = Date.now();
+    this.normalFlyTimer = setInterval(() => {
+      const elapsed: number = Date.now() - startedAtMs;
+      const linearProgress: number = Math.min(1.0, elapsed / 350.0);
+      const easedProgress: number = 1.0 - Math.pow(1.0 - linearProgress, 3.0);
+      this.normalViewport = NormalSkyProjectionService.interpolate(source, destination, easedProgress);
+      this.updateNormalScene();
+      if (linearProgress >= 1.0) {
+        this.stopNormalFly();
+      }
+    }, 16);
+  }
+
+  private startNormalInertia(velocityX: number, velocityY: number): void {
+    this.stopNormalInertia();
+    let currentVelocityX: number = this.clamp(velocityX, -2400.0, 2400.0);
+    let currentVelocityY: number = this.clamp(velocityY, -2400.0, 2400.0);
+    if (Math.abs(currentVelocityX) + Math.abs(currentVelocityY) < 120.0) {
+      return;
+    }
+    this.normalInertiaTimer = setInterval(() => {
+      this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport,
+        this.normalSkySize(), currentVelocityX * 0.016, currentVelocityY * 0.016);
+      currentVelocityX *= 0.86;
+      currentVelocityY *= 0.86;
+      this.updateNormalScene();
+      if (Math.abs(currentVelocityX) + Math.abs(currentVelocityY) < 18.0) {
+        this.stopNormalInertia();
+      }
+    }, 16);
+  }
+
+  private stopNormalInertia(): void {
+    if (this.normalInertiaTimer >= 0) {
+      clearInterval(this.normalInertiaTimer);
+      this.normalInertiaTimer = -1;
+    }
+  }
+
+  private stopNormalFly(): void {
+    if (this.normalFlyTimer >= 0) {
+      clearInterval(this.normalFlyTimer);
+      this.normalFlyTimer = -1;
+    }
+  }
+
+  private clearNormalMotion(): void {
+    this.stopNormalInertia();
+    this.stopNormalFly();
+  }
+
+  private startNormalSceneTimer(): void {
+    this.clearNormalSceneTimer();
+    this.normalSceneTimer = setInterval(() => {
+      if (this.activeSection === 0 && this.skyMode === 1) {
+        this.updateNormalScene();
+      }
+    }, 60000);
+  }
+
+  private clearNormalSceneTimer(): void {
+    if (this.normalSceneTimer >= 0) {
+      clearInterval(this.normalSceneTimer);
+      this.normalSceneTimer = -1;
     }
   }
 
@@ -2093,141 +2367,42 @@ struct Index {
     const frame: GestureFrame = this.gestureInterpreter.interpret(
       result.hands, result.frameReceivedAtMs);
     if (frame.gesture === HandGesture.DRAG) {
-      this.mapOffsetX += frame.deltaX * this.skyViewportWidth;
-      this.mapOffsetY += frame.deltaY * this.skyViewportHeight;
+      this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport, this.normalSkySize(),
+        frame.deltaX * this.skyViewportWidth, frame.deltaY * this.skyViewportHeight);
       this.gestureStatus = '单掌拖拽';
     } else if (frame.gesture === HandGesture.ROTATE_SCALE) {
-      this.mapRotation += frame.rotationDegrees;
-      this.mapScale = this.clamp(this.mapScale * frame.scale, 0.6, 3.0);
+      const anchorX: number = frame.selectX * this.skyViewportWidth;
+      const anchorY: number = frame.selectY * this.skyViewportHeight;
+      this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
+        this.normalSkySize(), frame.scale, anchorX, anchorY);
+      this.normalViewport = NormalSkyProjectionService.rotateAt(this.normalViewport,
+        this.normalSkySize(), frame.rotationDegrees, anchorX, anchorY);
       this.gestureStatus = '双掌旋转 / 缩放';
     } else if (frame.gesture === HandGesture.PINCH_SELECT) {
       this.selectNearestGestureTarget(
         frame.selectX * this.skyViewportWidth, frame.selectY * this.skyViewportHeight);
       this.gestureStatus = '捏合选择';
     } else if (frame.gesture === HandGesture.FIST_RESET) {
-      this.mapOffsetX = 0;
-      this.mapOffsetY = 0;
-      this.mapScale = 1;
-      this.mapRotation = 0;
+      this.normalViewport = NormalSkyProjectionService.homeViewport(
+        this.normalObserver(Date.now()), this.normalViewport.orientation);
       this.gestureStatus = '握拳复位';
     } else if (result.hands.length > 0) {
       this.gestureStatus = '已检测手部';
     } else {
       this.gestureStatus = '等待手部进入画面';
     }
+    if (frame.gesture === HandGesture.DRAG || frame.gesture === HandGesture.ROTATE_SCALE ||
+      frame.gesture === HandGesture.FIST_RESET) {
+      this.updateNormalScene();
+    }
   }
 
   private selectNearestGestureTarget(screenX: number, screenY: number): void {
-    let nearest: ProjectedTarget | undefined = undefined;
-    let nearestDistance: number = Number.MAX_VALUE;
-    const centerX: number = this.skyViewportWidth / 2.0;
-    const centerY: number = this.skyViewportHeight / 2.0;
-    const radians: number = this.mapRotation * Math.PI / 180.0;
-    const cosine: number = Math.cos(radians);
-    const sine: number = Math.sin(radians);
-    for (let index: number = 0; index < this.normalTargets.length; index++) {
-      const target: ProjectedTarget = this.normalTargets[index];
-      const scaledX: number = (target.x - centerX) * this.mapScale;
-      const scaledY: number = (target.y - centerY) * this.mapScale;
-      const transformedX: number = scaledX * cosine - scaledY * sine + centerX + this.mapOffsetX;
-      const transformedY: number = scaledX * sine + scaledY * cosine + centerY + this.mapOffsetY;
-      const deltaX: number = transformedX - screenX;
-      const deltaY: number = transformedY - screenY;
-      const distance: number = Math.sqrt(deltaX * deltaX + deltaY * deltaY);
-      if (distance < nearestDistance) {
-        nearest = target;
-        nearestDistance = distance;
-      }
+    const nearest: ProjectedSkyObject | undefined = NormalSkyProjectionService.hitTest(
+      this.normalScene.objects, screenX, screenY, 18.0);
+    if (nearest !== undefined) {
+      this.selectNormalSkyObject(nearest.id);
     }
-    if (nearest !== undefined && nearestDistance <= 70.0) {
-      this.selectedCustomTarget = undefined;
-      this.selectedTargetId = nearest.targetId;
-      this.updateNormalMap();
-    }
-  }
-
-  private updateNormalMap(): void {
-    if (!this.visibleStarCatalog.isLoaded()) {
-      return;
-    }
-    const center: EquatorialCoordinate | undefined = this.selectedCoordinate();
-    if (center === undefined) {
-      return;
-    }
-    const widthDegrees: number = 110.0;
-    // 统一每像素角尺度，避免竖屏把星座沿纵轴拉伸；视口变窄时仅扩大可见高度。
-    const heightDegrees: number = widthDegrees * this.skyViewportHeight / Math.max(1, this.skyViewportWidth);
-    const stars: VisibleStar[] = this.visibleStarCatalog.filterEquatorialViewport({
-      centerRaHours: center.raHours,
-      centerDecDegrees: center.decDegrees,
-      widthDegrees: widthDegrees,
-      heightDegrees: heightDegrees,
-      maxMagnitude: 5.8,
-      maxResults: 500
-    });
-    const cosine: number = Math.max(0.05, Math.cos(center.decDegrees * Math.PI / 180.0));
-    const viewportWidth: number = this.skyViewportWidth;
-    const viewportHeight: number = this.skyViewportHeight;
-    const displayStars: DisplayStar[] = [];
-    for (let index: number = 0; index < stars.length; index++) {
-      const star: VisibleStar = stars[index];
-      const raDifference: number = AstronomyService.normalizeSignedDegrees(
-        star.raHours * 15.0 - center.raHours * 15.0) * cosine;
-      const x: number = viewportWidth / 2.0 - raDifference / widthDegrees * viewportWidth;
-      const y: number = viewportHeight / 2.0 -
-        (star.decDegrees - center.decDegrees) / heightDegrees * viewportHeight;
-      if (x >= 0.0 && x <= viewportWidth && y >= 0.0 && y <= viewportHeight) {
-        displayStars.push({
-          id: `normal-${star.id}`,
-          // 三颗夏季大三角亮星已有更醒目的目标标记，隐藏重复星名可避免标签叠字。
-          name: star.name.length > 0 && star.magnitude <= 2.5 &&
-            !this.isFeaturedBrightStarName(star.name) ? star.name : '',
-          x: x,
-          y: y,
-          size: this.starSize(star.magnitude),
-          color: this.starColor(star.spectralType),
-          catalogStar: star
-        });
-      }
-    }
-    this.normalStars = displayStars;
-
-    const targets: ProjectedTarget[] = [];
-    for (let index: number = 0; index < FEATURED_TARGET_IDS.length; index++) {
-      const target: CelestialObject | undefined = CelestialCatalog.getById(FEATURED_TARGET_IDS[index]);
-      if (target === undefined) continue;
-      const coordinate: EquatorialCoordinate | undefined =
-        AstronomyService.resolveCoordinate(target, Date.now());
-      if (coordinate === undefined) continue;
-      const raDifference: number = AstronomyService.normalizeSignedDegrees(
-        coordinate.raHours * 15.0 - center.raHours * 15.0) * cosine;
-      const x: number = viewportWidth / 2.0 - raDifference / widthDegrees * viewportWidth;
-      const y: number = viewportHeight / 2.0 -
-        (coordinate.decDegrees - center.decDegrees) / heightDegrees * viewportHeight;
-      if (x >= 0.0 && x <= viewportWidth && y >= 0.0 && y <= viewportHeight) {
-        targets.push({ targetId: target.id, x: x, y: y });
-      }
-    }
-    this.normalTargets = targets;
-  }
-
-  private starSize(magnitude: number): number {
-    return this.clamp(6.5 - (magnitude + 1.0) * 0.75, 1.5, 7.0);
-  }
-
-  private isFeaturedBrightStarName(name: string): boolean {
-    const normalized: string = name.trim().toLowerCase();
-    return normalized === 'vega' || normalized === 'altair' || normalized === 'deneb';
-  }
-
-  private starColor(spectralType: string): string {
-    if (spectralType.startsWith('O') || spectralType.startsWith('B')) return '#B9D8FF';
-    if (spectralType.startsWith('A')) return '#E3EDFF';
-    if (spectralType.startsWith('F')) return '#FFF8E8';
-    if (spectralType.startsWith('G')) return '#FFF0B8';
-    if (spectralType.startsWith('K')) return '#FFD0A3';
-    if (spectralType.startsWith('M')) return '#FFB0A5';
-    return '#E5EAF2';
   }
 
   private async refreshLocation(): Promise<void> {
@@ -2246,6 +2421,7 @@ struct Index {
       this.manualLongitudeText = result.observer.longitudeDegrees.toFixed(5);
       this.planningLocationSource = '系统定位';
       this.operationMessage = `定位精度约 ±${result.accuracyMeters.toFixed(0)} 米`;
+      this.updateNormalScene();
       this.updateProjectedTargets(true);
       this.refreshPlanning();
       this.refreshWeatherForecast();
@@ -2257,10 +2433,12 @@ struct Index {
         this.locationText = '定位不可用';
         this.planningLocationSource = '等待手动地点';
         this.operationMessage = `定位失败：${error}`;
+        this.updateNormalScene();
       } else {
         this.observer = previousObserver;
         this.locationText = previousLocationText;
         this.operationMessage = `系统定位失败，已保留${this.planningLocationSource}：${error}`;
+        this.updateNormalScene();
         this.refreshPlanning();
       }
     }

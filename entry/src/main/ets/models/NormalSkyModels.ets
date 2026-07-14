@@ -27,6 +27,14 @@ export interface SkyScreenPoint {
   yPixels: number;
 }
 
+export interface SkyScreenRect {
+  xPixels: number;
+  yPixels: number;
+  widthPixels: number;
+  heightPixels: number;
+  opacity: number;
+}
+
 export interface NormalSkyProjection {
   xPixels: number;
   yPixels: number;
@@ -80,6 +88,7 @@ export interface NormalSkyScene {
   gridLines: SkyPolyline[];
   eclipticLines: SkyPolyline[];
   horizonLines: SkyPolyline[];
+  horizonMask: SkyScreenRect[];
   generatedAtMs: number;
 }
 

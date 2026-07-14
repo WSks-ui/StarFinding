@@ -35,6 +35,7 @@ export struct SkyWorkspace {
 
   @BuilderParam skyCanvas: () => void = this.EmptyBuilder;
   @BuilderParam gesturePreview: () => void = this.EmptyBuilder;
+  @BuilderParam normalControls: () => void = this.EmptyBuilder;
   @BuilderParam targetDrawer: () => void = this.EmptyBuilder;
   @BuilderParam planningDrawer: () => void = this.EmptyBuilder;
 
@@ -68,6 +69,10 @@ export struct SkyWorkspace {
         }
         this.SkyNavigationDock()
         if (!(this.useBottomSheet() && this.overlayPanel > 0)) this.SkyBottomControlCapsule()
+
+        if (this.skyMode === 1 && this.overlayPanel === 0) {
+          this.normalControls()
+        }
 
         if (this.skyMode === 1 && this.gestureEnabled &&
           (!this.useBottomSheet() || (this.viewportWidth >= 360 && this.viewportHeight >= 360)) &&

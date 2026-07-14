@@ -135,12 +135,14 @@ export default function starFindingCoreTest(): void {
       expect(frame.gesture).assertEqual(HandGesture.FIST_RESET);
     });
 
-    it('离线目录覆盖 88 星座与 110 个 Messier 索引', 0, () => {
+    it('离线目录覆盖 88 星座与 110 个精确 Messier 目标', 0, () => {
       const coverage = CelestialCatalog.coverage();
       expect(coverage.constellationIndexCount).assertEqual(88);
+      expect(coverage.exactConstellationAnchors).assertEqual(88);
       expect(coverage.messierIndexCount).assertEqual(110);
-      const indexOnly = CelestialCatalog.getById('messier-2');
-      expect(indexOnly !== undefined && !indexOnly.gotoAllowed).assertTrue();
+      expect(coverage.exactMessierTargets).assertEqual(110);
+      const messierTwo = CelestialCatalog.getById('messier-2');
+      expect(messierTwo !== undefined && messierTwo.gotoAllowed && messierTwo.coordinate !== undefined).assertTrue();
     });
   });
 }

@@ -7,3 +7,13 @@ The offline visible-star catalog in `entry/src/main/resources/rawfile/visible_st
 The HYG Database is licensed under the [Creative Commons Attribution-ShareAlike 4.0 International License](https://creativecommons.org/licenses/by-sa/4.0/). The generated catalog keeps only stars with apparent magnitude no greater than 6.5 and records the source, version, filter and license in the JSON metadata.
 
 Any redistributed modified version of this derived catalog must remain available under CC BY-SA 4.0.
+
+## d3-celestial constellation and Messier data
+
+The offline constellation centers, constellation line geometry and Messier catalog are derived from
+[d3-celestial](https://github.com/ofrohn/d3-celestial) by Olaf Frohn, pinned to revision
+`7e720a3de062059d4c5400a379146a601d9010e0`.
+
+d3-celestial is licensed under the BSD 3-Clause License. The reproducible importer is stored at
+`tools/import_d3_celestial.mjs`; it generates `GeneratedSkyCatalog.ets` and `normal_sky_lines.json`
+without adding a runtime network dependency.
