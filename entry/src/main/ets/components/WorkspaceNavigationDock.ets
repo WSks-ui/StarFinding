@@ -1,3 +1,5 @@
+import { MotionTokens } from '../utils/MotionTokens';
+
 @Component
 export struct WorkspaceNavigationDock {
   @Prop compact: boolean = false;
@@ -5,6 +7,7 @@ export struct WorkspaceNavigationDock {
   @Prop activeSection: number = 0;
   @Prop activeSkyPanel: number = 0;
   @Prop showEmergency: boolean = false;
+  @State private pressedLabel: string = '';
 
   onTarget: () => void = (): void => {};
   onPlanning: () => void = (): void => {};
@@ -69,25 +72,50 @@ export struct WorkspaceNavigationDock {
   @Builder
   private DockButton(icon: Resource, label: string, active: boolean, compact: boolean,
     action: () => void) {
-    Column({ space: 3 }) {
-      SymbolGlyph(icon)
-        .fontSize(24)
-        .fontColor([active ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary')])
-      if (!this.veryNarrow) {
-        Text(label)
-          .fontSize(12)
-          .fontWeight(active ? FontWeight.Bold : FontWeight.Medium)
-          .fontColor(active ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary'))
+    Stack({ alignContent: Alignment.Center }) {
+      if (active) {
+        Row()
+          .width('100%')
+          .height('100%')
+          .backgroundColor($r('app.color.app_brand'))
+          .borderRadius($r('app.float.corner_control'))
+          .geometryTransition('workspace-navigation-indicator', { follow: true })
+          .transition(TransitionEffect.OPACITY.animation(MotionTokens.quick()))
       }
+
+      Column({ space: 3 }) {
+        SymbolGlyph(icon)
+          .fontSize(24)
+          .fontColor([active ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary')])
+        if (!this.veryNarrow) {
+          Text(label)
+            .fontSize(12)
+            .fontWeight(active ? FontWeight.Bold : FontWeight.Medium)
+            .fontColor(active ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary'))
+        }
+      }
+      .width('100%')
+      .height('100%')
+      .justifyContent(FlexAlign.Center)
     }
     .layoutWeight(compact ? 1 : 0)
     .width(compact ? '100%' : 56)
     .height(compact ? 58 : 56)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(active ? $r('app.color.app_brand') : 'transparent')
     .borderRadius($r('app.float.corner_control'))
-    .animation({ duration: 180, curve: Curve.EaseOut })
+    .scale({
+      x: this.pressedLabel === label ? 0.96 : (active ? 1.04 : 1),
+      y: this.pressedLabel === label ? 0.96 : (active ? 1.04 : 1)
+    })
+    .animation(MotionTokens.quick())
     .accessibilityText(label)
+    .accessibilitySelected(active)
+    .onTouch((event: TouchEvent) => {
+      if (event.type === TouchType.Down) {
+        this.pressedLabel = label;
+      } else if (this.pressedLabel === label) {
+        this.pressedLabel = '';
+      }
+    })
     .onClick(action)
   }
 }

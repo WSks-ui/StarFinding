@@ -1,4 +1,5 @@
 import { ConnectionState, TaskStatus } from '../models';
+import { MotionTokens } from '../utils/MotionTokens';
 import { WorkspaceNavigationDock } from './WorkspaceNavigationDock';
 
 @Component
@@ -27,6 +28,7 @@ export struct SkyWorkspace {
   @Prop posePitch: number = 0;
   @Prop calibrationText: string = '未校准';
   @Prop calibrationEnabled: boolean = false;
+  @Prop calibrationFeedbackActive: boolean = false;
   @Prop arTrackingText: string = '';
   @Prop domeRevealLevel: number = 2;
   @Prop gestureEnabled: boolean = false;
@@ -87,6 +89,7 @@ export struct SkyWorkspace {
           .backgroundColor($r('app.color.sky_surface')).borderRadius(24)
           .backgroundBlurStyle(BlurStyle.Thin)
           .position({ x: 16, y: this.topChromeY() })
+          .transition(MotionTokens.capsule())
           .onClick(() => { this.onChromeVisibleChange(true); })
       }
     }
@@ -121,6 +124,7 @@ export struct SkyWorkspace {
     .border({ width: 1, color: $r('app.color.sky_border') })
     .borderRadius($r('app.float.corner_card'))
     .position({ x: 16, y: this.topChromeY() })
+    .transition(MotionTokens.capsule())
   }
 
   @Builder
@@ -137,6 +141,7 @@ export struct SkyWorkspace {
       .onChange(this.onSearchChange)
       .onSubmit(this.onSearchSubmit)
       .position({ x: this.searchX(), y: this.topChromeY() })
+      .transition(MotionTokens.capsule())
   }
 
   @Builder
@@ -159,6 +164,7 @@ export struct SkyWorkspace {
     .border({ width: 1, color: $r('app.color.sky_border') })
     .borderRadius($r('app.float.corner_card'))
     .position({ x: Math.max(16, this.viewportWidth - 296), y: this.topChromeY() })
+    .transition(MotionTokens.capsule())
   }
 
   @Builder
@@ -182,6 +188,7 @@ export struct SkyWorkspace {
       $r('app.color.app_error') : $r('app.color.sky_border') })
     .borderRadius($r('app.float.corner_card'))
     .position({ x: this.bottomControlX(), y: this.topChromeY() + 60 })
+    .transition(MotionTokens.capsule())
   }
 
   @Builder
@@ -202,6 +209,7 @@ export struct SkyWorkspace {
     .border({ width: 1, color: $r('app.color.sky_border') })
     .borderRadius($r('app.float.corner_card'))
     .position({ x: Math.max(16, this.viewportWidth - (this.useBottomSheet() ? 244 : 268)), y: this.topChromeY() + 60 })
+    .transition(MotionTokens.capsule())
     .onClick(() => { this.onOpenPanel(2); })
   }
 
@@ -220,6 +228,7 @@ export struct SkyWorkspace {
         .width(Math.max(0, this.viewportWidth - 32))
         .height(72)
         .position({ x: 16, y: Math.max(16, this.viewportHeight - 96) })
+        .transition(MotionTokens.capsule())
     } else {
       Stack({ alignContent: Alignment.TopStart }) {
         if (this.overlayPanel === 1) {
@@ -232,6 +241,7 @@ export struct SkyWorkspace {
       }
         .width(72)
         .position({ x: 16, y: this.topChromeY() + 64 })
+        .transition(MotionTokens.capsule())
     }
   }
 
@@ -273,6 +283,11 @@ export struct SkyWorkspace {
           .fontSize(12).fontColor($r('app.color.sky_text_secondary'))
         Text(this.calibrationText).fontSize(12)
           .fontColor(this.calibrationEnabled ? $r('app.color.app_success') : $r('app.color.app_warning'))
+          .scale({
+            x: this.calibrationFeedbackActive ? 1.08 : 1,
+            y: this.calibrationFeedbackActive ? 1.08 : 1
+          })
+          .animation(MotionTokens.spring())
         if (!this.useBottomSheet()) {
           Text(this.arTrackingText).fontSize(12).fontColor($r('app.color.sky_text_tertiary'))
         }
@@ -284,6 +299,7 @@ export struct SkyWorkspace {
     .border({ width: 1, color: $r('app.color.sky_border') })
     .borderRadius($r('app.float.corner_control'))
     .position({ x: this.bottomControlX(), y: this.bottomControlY() })
+    .transition(MotionTokens.capsule())
   }
 
   @Builder
@@ -299,6 +315,7 @@ export struct SkyWorkspace {
     .borderRadius($r('app.float.corner_control'))
     .position({ x: Math.max(12, this.viewportWidth / 2 - 108),
       y: Math.max(this.topChromeY() + 60, this.bottomControlY() - 52) })
+    .transition(MotionTokens.capsule())
   }
 
   @Builder
@@ -307,7 +324,7 @@ export struct SkyWorkspace {
       .fontWeight(this.domeRevealLevel === level ? FontWeight.Bold : FontWeight.Medium)
       .fontColor(this.domeRevealLevel === level ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary'))
       .backgroundColor(this.domeRevealLevel === level ? $r('app.color.app_brand') : 'transparent')
-      .borderRadius(18).animation({ duration: 180, curve: Curve.EaseOut })
+      .borderRadius(18).animation(MotionTokens.quick())
       .onClick(() => { this.onDomeRevealChange(level); })
   }
 
@@ -317,7 +334,7 @@ export struct SkyWorkspace {
       .fontWeight(this.skyMode === mode ? FontWeight.Bold : FontWeight.Medium)
       .fontColor(this.skyMode === mode ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary'))
       .backgroundColor(this.skyMode === mode ? $r('app.color.app_brand') : 'transparent')
-      .borderRadius(20).animation({ duration: 180, curve: Curve.EaseOut })
+      .borderRadius(20).animation(MotionTokens.quick())
       .onClick(() => { this.onModeChange(mode); })
   }
 

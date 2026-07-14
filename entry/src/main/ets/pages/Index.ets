@@ -7,6 +7,7 @@ import { PostWorkspace } from '../components/PostWorkspace';
 import { SkyWorkspace } from '../components/SkyWorkspace';
 import { TaskWorkspace } from '../components/TaskWorkspace';
 import { WorkspaceNavigationDock } from '../components/WorkspaceNavigationDock';
+import { WorkspaceTransitionHost } from '../components/WorkspaceTransitionHost';
 import { CelestialCatalog } from '../data';
 import {
   ArCalibration,
@@ -76,6 +77,7 @@ import { ArEngineCapabilityService } from '../services/ArEngineCapabilityService
 import { HuaweiArPoseAdapter } from '../services/HuaweiArPoseAdapter';
 import { SkyDomeProjectionService } from '../services/SkyDomeProjectionService';
 import { SkyDomeSceneService } from '../services/SkyDomeSceneService';
+import { MotionTokens } from '../utils/MotionTokens';
 
 interface DisplayStar {
   id: string;
@@ -131,6 +133,7 @@ const DISPLAY_STARS: DisplayStar[] = [
 @Component
 struct Index {
   @State private activeSection: number = 0;
+  @State private workspaceDirection: number = 1;
   @State private skyMode: number = 0;
   @State private selectedTargetId: string = 'star-vega';
   @State private targetSearch: string = '';
@@ -147,6 +150,7 @@ struct Index {
   @State private contentViewportHeight: number = 720;
   @State private calibrationEnabled: boolean = false;
   @State private calibrationText: string = '未校准';
+  @State private calibrationFeedbackActive: boolean = false;
   @State private mountConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @State private gatewayConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @State private mountHomed: boolean = false;
@@ -295,31 +299,20 @@ struct Index {
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.activeSection === 0) {
-        this.SkyWorkspace()
+        WorkspaceTransitionHost({
+          motionDirection: this.workspaceDirection,
+          content: (): void => { this.SkyWorkspace(); }
+        })
       } else if (this.isPhoneWorkspace()) {
-        Column() {
-          Column() {
-            this.ActiveWorkspaceContent()
-          }
-          .layoutWeight(1)
-          .width('100%')
-          .backgroundColor($r('app.color.app_background_primary'))
-          this.CompactBottomNavigation()
-        }
-        .width('100%')
-        .height('100%')
+        WorkspaceTransitionHost({
+          motionDirection: this.workspaceDirection,
+          content: (): void => { this.PhoneWorkspaceShell(); }
+        })
       } else {
-        Row() {
-          this.WorkspaceRail()
-          Column() {
-            this.ActiveWorkspaceContent()
-          }
-          .layoutWeight(1)
-          .height('100%')
-          .backgroundColor($r('app.color.app_background_primary'))
-        }
-        .width('100%')
-        .height('100%')
+        WorkspaceTransitionHost({
+          motionDirection: this.workspaceDirection,
+          content: (): void => { this.TabletWorkspaceShell(); }
+        })
       }
 
       if (this.showCapturePanel) {
@@ -362,6 +355,7 @@ struct Index {
         onToggleTracking: (): void => { this.toggleTracking(); },
         onParkMount: (): void => { this.parkMount(); }
       })
+        .transition(MotionTokens.page(this.workspaceDirection))
     } else if (this.activeSection === 2) {
       TaskWorkspace({
         compact: this.isCompactWorkspace(),
@@ -384,6 +378,7 @@ struct Index {
         onRefresh: (): void => { this.pollActiveTask(); },
         onCancel: (): void => { this.cancelActiveTask(); }
       })
+        .transition(MotionTokens.page(this.workspaceDirection))
     } else {
       PostWorkspace({
         compact: this.isCompactWorkspace(),
@@ -403,6 +398,7 @@ struct Index {
         onTokenChange: (value: string): void => { this.aiToken = value; },
         onApplyConfiguration: (): void => { this.applyAiConfiguration(); }
       })
+        .transition(MotionTokens.page(this.workspaceDirection))
     }
   }
 
@@ -456,6 +452,36 @@ struct Index {
       onImmersive: (): void => { this.navigateToImmersiveSky(); },
       onEmergency: (): void => { this.triggerEmergencyStop(); }
     })
+  }
+
+  @Builder
+  private PhoneWorkspaceShell() {
+    Column() {
+      Column() {
+        this.ActiveWorkspaceContent()
+      }
+      .layoutWeight(1)
+      .width('100%')
+      .backgroundColor($r('app.color.app_background_primary'))
+      this.CompactBottomNavigation()
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  private TabletWorkspaceShell() {
+    Row() {
+      this.WorkspaceRail()
+      Column() {
+        this.ActiveWorkspaceContent()
+      }
+      .layoutWeight(1)
+      .height('100%')
+      .backgroundColor($r('app.color.app_background_primary'))
+    }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder
@@ -558,6 +584,7 @@ struct Index {
       posePitch: this.posePitch,
       calibrationText: this.calibrationText,
       calibrationEnabled: this.calibrationEnabled,
+      calibrationFeedbackActive: this.calibrationFeedbackActive,
       arTrackingText: this.arTrackingText,
       domeRevealLevel: this.skyDomeRevealLevel,
       gestureEnabled: this.gestureEnabled,
@@ -578,20 +605,24 @@ struct Index {
       },
       onOpenPanel: (panel: number): void => { this.openSkyPanel(panel); },
       onNavigate: (section: number): void => { this.navigateToSection(section); },
-      onChromeVisibleChange: (visible: boolean): void => { this.skyChromeVisible = visible; },
+      onChromeVisibleChange: (visible: boolean): void => {
+        this.getUIContext().animateTo(MotionTokens.standard(), () => { this.skyChromeVisible = visible; });
+      },
       onNoticeDismiss: (): void => {
         this.emergencyMessage = '';
         this.operationMessage = '';
       },
       onModeChange: (mode: number): void => { this.selectSkyMode(mode); },
       onDomeRevealChange: (level: number): void => {
-        this.skyDomeRevealLevel = level;
+        this.getUIContext().animateTo(MotionTokens.quick(), () => { this.skyDomeRevealLevel = level; });
         this.updateProjectedTargets(true);
       },
       onEmergencyStop: (): void => { this.triggerEmergencyStop(); },
       onOpenPlanningLocation: (): void => {
-        this.openSkyPanel(2);
-        this.planningLocationEditorOpen = true;
+        this.revealSkyPanel(2);
+        this.getUIContext().animateTo(MotionTokens.standard(), () => {
+          this.planningLocationEditorOpen = true;
+        });
       }
     })
   }
@@ -600,31 +631,41 @@ struct Index {
   private SkyCanvas() {
     Stack() {
       if (this.skyMode === 0) {
-        if (this.huaweiArViewEnabled) {
-          // 组件使用 import lazy；只有能力检测通过并进入此分支时才实例化 AR Engine 原生模块。
-          HuaweiArCameraView({
-            cornerRadius: 0,
-            onFrameUpdate: (snapshot: HuaweiArFrameSnapshot): void => {
-              this.handleHuaweiArFrame(snapshot);
-            },
-            onStatusChange: (status: HuaweiArViewStatus): void => {
-              this.handleHuaweiArStatus(status);
+        Stack() {
+          if (this.huaweiArViewEnabled) {
+            // 组件使用 import lazy；只有能力检测通过并进入此分支时才实例化 AR Engine 原生模块。
+            HuaweiArCameraView({
+              cornerRadius: 0,
+              onFrameUpdate: (snapshot: HuaweiArFrameSnapshot): void => {
+                this.handleHuaweiArFrame(snapshot);
+              },
+              onStatusChange: (status: HuaweiArViewStatus): void => {
+                this.handleHuaweiArStatus(status);
+              }
+            })
+          } else {
+            DeviceCameraPreview({ useFrontCamera: false, cornerRadius: 0 })
+          }
+          ArSkyDome({
+            frame: this.skyDomeFrame,
+            widthPixels: this.skyViewportWidth,
+            heightPixels: this.skyViewportHeight,
+            onMarkerSelected: (markerId: string) => {
+              this.selectSkyDomeMarker(markerId);
             }
           })
-        } else {
-          DeviceCameraPreview({ useFrontCamera: false, cornerRadius: 0 })
         }
-        ArSkyDome({
-          frame: this.skyDomeFrame,
-          widthPixels: this.skyViewportWidth,
-          heightPixels: this.skyViewportHeight,
-          onMarkerSelected: (markerId: string) => {
-            this.selectSkyDomeMarker(markerId);
-          }
-        })
+        .width('100%')
+        .height('100%')
+        .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       } else {
-        Rect().width('100%').height('100%').fill($r('app.color.sky_background'))
-        this.NormalMapLayer()
+        Stack() {
+          Rect().width('100%').height('100%').fill($r('app.color.sky_background'))
+          this.NormalMapLayer()
+        }
+        .width('100%')
+        .height('100%')
+        .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       }
 
       Text('+')
@@ -707,7 +748,7 @@ struct Index {
         }
           .width(48).height(48)
           .backgroundColor($r('app.color.app_surface_primary')).borderRadius(24)
-          .onClick(() => { this.skyOverlayPanel = 0; })
+          .onClick(() => { this.openSkyPanel(1); })
       }.width('100%').padding({ left: 20, right: 14, top: 10, bottom: 12 })
 
       Scroll() {
@@ -796,7 +837,7 @@ struct Index {
           .width('100%').height(48).fontSize(14).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.sky_text_primary'))
           .backgroundColor($r('app.color.app_surface_tertiary')).borderRadius(24)
-          .onClick(() => { this.showCapturePanel = true; })
+          .onClick(() => { this.setCapturePanelVisible(true); })
       }
       .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 16 })
       .border({ width: { top: 1 }, color: $r('app.color.sky_border') })
@@ -807,6 +848,7 @@ struct Index {
     .border({ width: 1, color: $r('app.color.sky_border') })
     .borderRadius($r('app.float.corner_modal'))
     .position({ x: this.skyDrawerX(), y: this.skyDrawerY() })
+    .transition(MotionTokens.drawer(this.useSkyBottomSheet()))
   }
 
   @Builder
@@ -829,7 +871,7 @@ struct Index {
         }
           .width(48).height(48)
           .backgroundColor($r('app.color.app_surface_primary')).borderRadius(24)
-          .onClick(() => { this.skyOverlayPanel = 0; })
+          .onClick(() => { this.openSkyPanel(2); })
       }.width('100%').padding({ left: 20, right: 14, top: 10, bottom: 12 })
 
       Row({ space: 6 }) {
@@ -840,7 +882,11 @@ struct Index {
           .height(40).padding({ left: 14, right: 14 }).fontSize(12)
           .fontColor($r('app.color.sky_text_primary'))
           .backgroundColor($r('app.color.app_surface_primary')).borderRadius(20)
-          .onClick(() => { this.planningLocationEditorOpen = !this.planningLocationEditorOpen; })
+          .onClick(() => {
+            this.getUIContext().animateTo(MotionTokens.standard(), () => {
+              this.planningLocationEditorOpen = !this.planningLocationEditorOpen;
+            });
+          })
         Button(this.planningBusy ? '更新中' : '更新')
           .height(40).padding({ left: 14, right: 14 }).fontSize(12)
           .enabled(!this.planningBusy && this.observer !== undefined)
@@ -867,7 +913,11 @@ struct Index {
               .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(22)
               .onClick(() => {
                 this.applyManualPlanningLocation();
-                if (this.observer !== undefined) this.planningLocationEditorOpen = false;
+                if (this.observer !== undefined) {
+                  this.getUIContext().animateTo(MotionTokens.standard(), () => {
+                    this.planningLocationEditorOpen = false;
+                  });
+                }
               })
             Button('系统定位').layoutWeight(1).height(44).fontSize(13)
               .fontColor($r('app.color.sky_text_primary'))
@@ -877,6 +927,7 @@ struct Index {
         }
         .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 10 })
         .backgroundColor($r('app.color.sky_surface_soft'))
+        .transition(MotionTokens.drawer(true))
       }
 
       Scroll() {
@@ -970,6 +1021,7 @@ struct Index {
     .border({ width: 1, color: $r('app.color.sky_border') })
     .borderRadius($r('app.float.corner_modal'))
     .position({ x: this.skyDrawerX(), y: this.skyDrawerY() })
+    .transition(MotionTokens.drawer(this.useSkyBottomSheet()))
   }
 
   @Builder
@@ -1041,8 +1093,7 @@ struct Index {
         this.updateNormalMap();
       }
       this.refreshPlanning();
-      this.skyOverlayPanel = 1;
-      this.skyChromeVisible = true;
+      this.revealSkyPanel(1);
     })
   }
 
@@ -1064,13 +1115,17 @@ struct Index {
         .borderRadius(3)
     }
     .position({ x: x - 4, y: y - 4 })
+    .scale({
+      x: target.id === this.selectedTargetId ? 1.06 : 1,
+      y: target.id === this.selectedTargetId ? 1.06 : 1
+    })
+    .animation(MotionTokens.spring())
     .onClick(() => {
       this.selectedCustomTarget = undefined;
       this.selectedTargetId = target.id;
       this.updateNormalMap();
       this.refreshPlanning();
-      this.skyOverlayPanel = 1;
-      this.skyChromeVisible = true;
+      this.revealSkyPanel(1);
     })
   }
 
@@ -1102,7 +1157,7 @@ struct Index {
         $r('app.color.app_brand') : $r('app.color.app_surface_primary'))
       .borderRadius(20)
       .onClick(() => {
-        this.planningDayOffset = offset;
+        this.getUIContext().animateTo(MotionTokens.quick(), () => { this.planningDayOffset = offset; });
         this.refreshPlanning();
       })
   }
@@ -1111,7 +1166,8 @@ struct Index {
   private CaptureOverlay() {
     Stack({ alignContent: Alignment.Center }) {
       Rect().width('100%').height('100%').fill('#000000').opacity(0.72)
-        .onClick(() => { this.showCapturePanel = false; })
+        .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
+        .onClick(() => { this.setCapturePanelVisible(false); })
 
       Scroll() {
         Column({ space: 14 }) {
@@ -1128,7 +1184,7 @@ struct Index {
             }
               .width(48).height(48)
               .backgroundColor($r('app.color.app_surface_primary')).borderRadius(24)
-              .onClick(() => { this.showCapturePanel = false; })
+              .onClick(() => { this.setCapturePanelVisible(false); })
           }.width('100%')
 
           Row({ space: 8 }) {
@@ -1150,6 +1206,7 @@ struct Index {
             .padding(16)
             .backgroundColor($r('app.color.sky_background'))
             .borderRadius($r('app.float.corner_card'))
+            .transition(MotionTokens.drawer(true))
           }
 
           Row() {
@@ -1157,12 +1214,15 @@ struct Index {
             Blank()
             Toggle({ type: ToggleType.Switch, isOn: this.expertOpen })
               .selectedColor($r('app.color.app_success'))
-              .onChange((value: boolean) => { this.expertOpen = value; })
+              .onChange((value: boolean) => {
+                this.getUIContext().animateTo(MotionTokens.standard(), () => { this.expertOpen = value; });
+              })
           }.width('100%').height(34)
 
           if (this.expertOpen) {
             Text('RAW+JPEG · 拍摄后可提交板解析、堆栈、延时制片和受约束云端增强')
               .fontSize(13).fontColor($r('app.color.sky_text_secondary')).width('100%').lineHeight(20)
+              .transition(MotionTokens.capsule())
           }
 
           if (!this.selectedTarget().recommendedFor18mm && this.captureMode > 0) {
@@ -1197,6 +1257,7 @@ struct Index {
       .backgroundBlurStyle(BlurStyle.Thick)
       .border({ width: 1, color: $r('app.color.sky_border') })
       .borderRadius($r('app.float.corner_modal'))
+      .transition(MotionTokens.modal())
 
       if (this.mountConnection !== ConnectionState.DISCONNECTED ||
         this.gatewayConnection !== ConnectionState.DISCONNECTED || this.taskStatus === TaskStatus.RUNNING) {
@@ -1213,6 +1274,7 @@ struct Index {
     .width('100%')
     .height('100%')
     .zIndex(100)
+    .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
   }
 
   @Builder
@@ -1224,7 +1286,10 @@ struct Index {
       .backgroundColor(this.captureMode === mode ?
         $r('app.color.app_brand') : $r('app.color.app_surface_primary'))
       .borderRadius(24)
-      .onClick(() => { this.captureMode = mode; })
+      .animation(MotionTokens.quick())
+      .onClick(() => {
+        this.getUIContext().animateTo(MotionTokens.standard(), () => { this.captureMode = mode; });
+      })
   }
 
   @Builder
@@ -1305,7 +1370,7 @@ struct Index {
   }
 
   private navigateToSection(section: number): void {
-    this.activeSection = section;
+    this.changeActiveSection(section);
     if (section === 0) {
       this.skyChromeVisible = true;
       if (this.skyMode === 0) this.updateProjectedTargets(true);
@@ -1314,35 +1379,72 @@ struct Index {
 
   /** 从设备、任务或后期返回星图时直接打开指定抽屉，不能沿用星图内“再次点击关闭”的切换语义。 */
   private navigateToSkyPanel(panel: number): void {
-    this.activeSection = 0;
-    this.skyChromeVisible = true;
-    this.skyOverlayPanel = panel;
+    this.workspaceDirection = -1;
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.activeSection = 0;
+      this.skyChromeVisible = true;
+      this.skyOverlayPanel = panel;
+    });
     if (panel === 2) this.refreshPlanning();
     if (this.skyMode === 0) this.updateProjectedTargets(true);
   }
 
   private navigateToImmersiveSky(): void {
-    this.activeSection = 0;
-    this.skyOverlayPanel = 0;
-    this.skyChromeVisible = false;
+    this.workspaceDirection = -1;
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.activeSection = 0;
+      this.skyOverlayPanel = 0;
+      this.skyChromeVisible = false;
+    });
     if (this.skyMode === 0) this.updateProjectedTargets(true);
   }
 
   private openSkyPanel(panel: number): void {
-    this.activeSection = 0;
-    this.skyChromeVisible = true;
-    this.skyOverlayPanel = this.skyOverlayPanel === panel ? 0 : panel;
+    this.getUIContext().animateTo(MotionTokens.spring(), () => {
+      this.activeSection = 0;
+      this.skyChromeVisible = true;
+      this.skyOverlayPanel = this.skyOverlayPanel === panel ? 0 : panel;
+    });
     if (this.skyOverlayPanel === 2) this.refreshPlanning();
   }
 
+  /** 点选和搜索必须显式打开面板，不能复用再次点击关闭的交互。 */
+  private revealSkyPanel(panel: number): void {
+    this.getUIContext().animateTo(MotionTokens.spring(), () => {
+      this.activeSection = 0;
+      this.skyChromeVisible = true;
+      this.skyOverlayPanel = panel;
+    });
+    if (panel === 2) this.refreshPlanning();
+  }
+
   private selectSkyMode(mode: number): void {
-    this.skyMode = mode;
+    if (mode === this.skyMode) return;
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.skyMode = mode;
+    });
     if (mode === 0) {
       this.setGestureEnabled(false);
       this.updateProjectedTargets(true);
     } else {
       this.updateNormalMap();
     }
+  }
+
+  private setCapturePanelVisible(visible: boolean): void {
+    if (visible === this.showCapturePanel) return;
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.showCapturePanel = visible;
+    });
+  }
+
+  /** 工作区顺序只决定视觉方向；硬件连接、轮询和任务生命周期不进入动画事务。 */
+  private changeActiveSection(section: number): void {
+    if (section === this.activeSection) return;
+    this.workspaceDirection = section > this.activeSection ? 1 : -1;
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.activeSection = section;
+    });
   }
 
   private setGestureEnabled(value: boolean): void {
@@ -1381,8 +1483,7 @@ struct Index {
       this.operationMessage = `已从离线天体目录选择 ${catalogMatches[0].nameZh}`;
       this.updateNormalMap();
       this.refreshPlanning();
-      this.skyOverlayPanel = 1;
-      this.skyChromeVisible = true;
+      this.revealSkyPanel(1);
       return;
     }
     if (this.visibleStarCatalog.isLoaded()) {
@@ -1393,8 +1494,7 @@ struct Index {
         this.operationMessage = `已从 HYG 离线星表选择 ${this.selectedCustomTarget.nameZh}`;
         this.updateNormalMap();
         this.refreshPlanning();
-        this.skyOverlayPanel = 1;
-        this.skyChromeVisible = true;
+        this.revealSkyPanel(1);
         return;
       }
     }
@@ -1488,9 +1588,12 @@ struct Index {
     }
     this.refreshPlanning();
     if (openPlanning) {
-      this.activeSection = 0;
-      this.skyChromeVisible = true;
-      this.skyOverlayPanel = 2;
+      this.workspaceDirection = -1;
+      this.getUIContext().animateTo(MotionTokens.spring(), () => {
+        this.activeSection = 0;
+        this.skyChromeVisible = true;
+        this.skyOverlayPanel = 2;
+      });
     }
   }
 
@@ -2313,8 +2416,7 @@ struct Index {
     } else {
       return;
     }
-    this.skyOverlayPanel = 1;
-    this.skyChromeVisible = true;
+    this.revealSkyPanel(1);
     this.refreshPlanning();
     this.updateProjectedTargets(true);
   }
@@ -2331,9 +2433,17 @@ struct Index {
       pitchDegrees: this.posePitch,
       rollDegrees: this.poseRoll
     }, this.selectedTargetId, Date.now());
-    this.calibrationEnabled = true;
-    this.calibrationText = `已校准 · ${this.selectedTarget().designation}`;
-    this.operationMessage = '一星校准已应用；移动 Pad 检查叠加是否跟随目标';
+    this.getUIContext().animateTo(MotionTokens.spring(), () => {
+      this.calibrationEnabled = true;
+      this.calibrationFeedbackActive = true;
+      this.calibrationText = `已校准 · ${this.selectedTarget().designation}`;
+      this.operationMessage = '一星校准已应用；移动 Pad 检查叠加是否跟随目标';
+    });
+    setTimeout(() => {
+      this.getUIContext().animateTo(MotionTokens.quick(), () => {
+        this.calibrationFeedbackActive = false;
+      });
+    }, MotionTokens.EMPHASIZED_MS);
     this.updateProjectedTargets(true);
   }
 
@@ -2559,7 +2669,7 @@ struct Index {
     this.operationBusy = true;
     this.emergencyMessage = '';
     try {
-      this.showCapturePanel = false;
+      this.setCapturePanelVisible(false);
       this.taskStage = `正在 GOTO ${targetDesignation}`;
       this.operationMessage = this.taskStage;
       await this.mountClient.gotoRaDec(coordinate);
@@ -2571,13 +2681,13 @@ struct Index {
       this.tracking = true;
 
       if (capturePlan.mode === CaptureMode.OBSERVE_ONLY) {
-        this.activeSection = 1;
+        this.changeActiveSection(1);
         this.taskStage = '仅观测模式未触发相机快门';
         this.operationMessage = `${capturePlan.targetName} 已到位，恒星时跟踪已启动`;
         return;
       }
 
-      this.activeSection = 2;
+      this.changeActiveSection(2);
       this.taskStatus = TaskStatus.RUNNING;
       this.taskProgress = 1;
       this.completedFrames = 0;
