@@ -1,4 +1,5 @@
 import { TaskStatus } from '../models';
+import { MotionTokens } from '../utils/MotionTokens';
 
 @Component
 export struct TaskWorkspace {
@@ -34,12 +35,20 @@ export struct TaskWorkspace {
             Text(`${this.exposureSeconds}s × ${this.frameCount} · ISO ${this.iso}`)
               .fontSize(13).fontColor($r('app.color.app_text_secondary')).width('100%')
           }.layoutWeight(1)
+          if (this.taskStatus === TaskStatus.RUNNING) {
+            LoadingProgress()
+              .width(18)
+              .height(18)
+              .color($r('app.color.app_brand'))
+              .transition(TransitionEffect.OPACITY.animation(MotionTokens.quick()))
+          }
           Text(this.taskStatusText()).fontSize(12).fontColor(this.taskStatusColor())
         }.width('100%')
 
         Progress({ value: this.taskProgress, total: 100, type: ProgressType.Linear })
           .width('100%').height(8).color($r('app.color.app_success'))
           .backgroundColor($r('app.color.app_surface_primary'))
+          .animation(MotionTokens.standard())
         Row() {
           Text(`${this.completedFrames} / ${this.frameCount} 帧`)
             .fontSize(12).fontColor($r('app.color.app_text_secondary'))
@@ -50,6 +59,7 @@ export struct TaskWorkspace {
         if (this.workflowWarningText.length > 0) {
           Text(this.workflowWarningText)
             .fontSize(12).fontColor($r('app.color.app_warning')).lineHeight(18).width('100%').maxLines(2)
+            .transition(MotionTokens.capsule())
         }
 
         Row({ space: 10 }) {
@@ -107,6 +117,8 @@ export struct TaskWorkspace {
         .width(28).height(28).textAlign(TextAlign.Center)
         .backgroundColor(active ? $r('app.color.app_success') : $r('app.color.app_surface_primary'))
         .borderRadius(14)
+        .scale({ x: active ? 1 : 0.92, y: active ? 1 : 0.92 })
+        .animation(MotionTokens.spring())
       Text(label).fontSize(13)
         .fontColor(active ? $r('app.color.app_text_primary') : $r('app.color.app_text_secondary'))
     }.width('100%').height(40)

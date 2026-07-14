@@ -1,4 +1,5 @@
 import { ConnectionState } from '../models';
+import { MotionTokens } from '../utils/MotionTokens';
 
 interface DeviceStatusLine {
   name: string;
@@ -22,6 +23,7 @@ export struct DeviceWorkspace {
   @Prop mountRaHours: number = 0;
   @Prop mountDecDegrees: number = 0;
   @Prop mountSlewing: boolean = false;
+  @State private pressedAction: string = '';
 
   onToggleMount: () => void = (): void => {};
   onToggleGateway: () => void = (): void => {};
@@ -102,7 +104,16 @@ export struct DeviceWorkspace {
   @Builder
   private ConnectionPanel(title: string, subtitle: string, state: ConnectionState, action: () => void) {
     Flex({ direction: this.compact ? FlexDirection.Column : FlexDirection.Row, wrap: FlexWrap.NoWrap }) {
-      Circle().width(14).height(14).fill(this.connectionColor(state))
+      if (state === ConnectionState.CONNECTING) {
+        LoadingProgress()
+          .width(18)
+          .height(18)
+          .color($r('app.color.app_warning'))
+          .transition(TransitionEffect.OPACITY.animation(MotionTokens.quick()))
+      } else {
+        Circle().width(14).height(14).fill(this.connectionColor(state))
+          .transition(TransitionEffect.OPACITY.animation(MotionTokens.quick()))
+      }
       Column({ space: 4 }) {
         Text(title).fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.app_text_primary')).width('100%')
         Text(subtitle).fontSize(12).fontColor($r('app.color.app_text_secondary')).width('100%')
@@ -111,6 +122,7 @@ export struct DeviceWorkspace {
       Button(state === ConnectionState.CONNECTED || state === ConnectionState.SIMULATED ? '断开' : '连接')
         .height(48).padding({ left: 20, right: 20 }).fontSize(14)
         .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(24)
+        .enabled(state !== ConnectionState.CONNECTING)
         .onClick(action)
     }
     .layoutWeight(1)
@@ -119,6 +131,7 @@ export struct DeviceWorkspace {
     .backgroundColor($r('app.color.app_background_secondary'))
     .border({ width: 1, color: $r('app.color.app_divider') })
     .borderRadius($r('app.float.corner_card'))
+    .animation(MotionTokens.standard())
   }
 
   @Builder
@@ -143,6 +156,19 @@ export struct DeviceWorkspace {
     .backgroundColor($r('app.color.app_surface_secondary'))
     .borderRadius($r('app.float.corner_card'))
     .opacity(enabled ? 1 : 0.65)
+    .scale({
+      x: this.pressedAction === label ? 0.96 : 1,
+      y: this.pressedAction === label ? 0.96 : 1
+    })
+    .animation(MotionTokens.quick())
+    .onTouch((event: TouchEvent) => {
+      if (!enabled) return;
+      if (event.type === TouchType.Down) {
+        this.pressedAction = label;
+      } else if (this.pressedAction === label) {
+        this.pressedAction = '';
+      }
+    })
     .onClick(() => {
       if (enabled) action();
     })

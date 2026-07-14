@@ -1,3 +1,5 @@
+import { MotionTokens } from '../utils/MotionTokens';
+
 @Component
 export struct PostWorkspace {
   @Prop compact: boolean = false;
@@ -70,6 +72,7 @@ export struct PostWorkspace {
           .width('100%').height(180).controls(true).autoPlay(false)
           .objectFit(ImageFit.Contain).backgroundColor($r('app.color.sky_background'))
           .borderRadius($r('app.float.corner_card'))
+          .transition(MotionTokens.modal())
       }
 
       Flex({ direction: this.compact ? FlexDirection.Column : FlexDirection.Row, wrap: FlexWrap.NoWrap }) {
@@ -97,11 +100,13 @@ export struct PostWorkspace {
     Column() {
       if (sourceUrl.length > 0) {
         Image(sourceUrl).layoutWeight(1).width('100%').objectFit(ImageFit.Contain).backgroundColor('#05070B')
+          .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       } else {
         Stack() {
           Rect().width('100%').height('100%').fill(fillColor)
           Text('等待真实图像').fontSize(14).fontColor($r('app.color.app_text_secondary'))
         }.layoutWeight(1).width('100%')
+          .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       }
       Row() {
         Column({ space: 3 }) {
