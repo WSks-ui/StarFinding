@@ -3,6 +3,7 @@ import { ArSkyDome } from '../components/ArSkyDome';
 import { DeviceCameraPreview } from '../components/DeviceCameraPreview';
 import { DeviceWorkspace } from '../components/DeviceWorkspace';
 import lazy { HuaweiArCameraView } from '../components/HuaweiArCameraView';
+import { NormalSkyControls } from '../components/NormalSkyControls';
 import { NormalSkyMap } from '../components/NormalSkyMap';
 import { PostWorkspace } from '../components/PostWorkspace';
 import { SkyWorkspace } from '../components/SkyWorkspace';
@@ -596,7 +597,7 @@ struct Index {
       gestureEnabled: this.gestureEnabled,
       skyCanvas: (): void => { this.SkyCanvas(); },
       gesturePreview: (): void => { this.SkyGesturePreview(); },
-      normalControls: (): void => { this.NormalSkyControls(); },
+      normalControls: (): void => { this.NormalSkyControlOverlay(); },
       targetDrawer: (): void => { this.SkyTargetDrawer(); },
       planningDrawer: (): void => { this.SkyPlanningDrawer(); },
       onViewportChange: (width: number, height: number): void => {
@@ -748,79 +749,23 @@ struct Index {
   }
 
   @Builder
-  private NormalSkyControls() {
-    Column({ space: 6 }) {
-      Button() {
-        SymbolGlyph($r('sys.symbol.house')).fontSize(20).fontColor([$r('app.color.sky_text_primary')])
-      }
-        .width(44).height(44).backgroundColor($r('app.color.sky_surface')).borderRadius(22)
-        .onClick(() => { this.homeNormalSky(); })
-      Button('N')
-        .width(44).height(44).fontSize(15).fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.sky_text_primary'))
-        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
-        .onClick(() => { this.resetNormalSkyNorth(); })
-      Button('+')
-        .width(44).height(44).fontSize(22).fontColor($r('app.color.sky_text_primary'))
-        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
-        .onClick(() => { this.zoomNormalSky(1.35); })
-      Button('-')
-        .width(44).height(44).fontSize(22).fontColor($r('app.color.sky_text_primary'))
-        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
-        .onClick(() => { this.zoomNormalSky(0.74); })
-      Button(this.normalViewport.orientation === SkyMapOrientation.EQUATORIAL_NORTH_UP ? '地平' : '赤道')
-        .width(52).height(44).fontSize(11).fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.sky_text_primary'))
-        .backgroundColor($r('app.color.sky_surface')).borderRadius(22)
-        .onClick(() => { this.toggleNormalSkyOrientation(); })
-      Button() {
-        SymbolGlyph($r('sys.symbol.adjustment')).fontSize(20)
-          .fontColor([this.normalLayerPanelOpen ? $r('app.color.app_brand') : $r('app.color.sky_text_primary')])
-      }
-        .width(44).height(44).backgroundColor($r('app.color.sky_surface')).borderRadius(22)
-        .onClick(() => { this.normalLayerPanelOpen = !this.normalLayerPanelOpen; })
-    }
-    .padding(4).backgroundColor($r('app.color.sky_surface_soft')).backgroundBlurStyle(BlurStyle.Thin)
-    .border({ width: 1, color: $r('app.color.sky_border') }).borderRadius(26)
-    .position({ x: Math.max(8, this.skyViewportWidth - 68),
-      y: Math.max(86, this.skyViewportHeight / 2 - 150) })
-
-    if (this.normalLayerPanelOpen) {
-      Column({ space: 7 }) {
-        Row() {
-          Text('星图图层').fontSize(14).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary'))
-          Blank()
-          Text(`${this.normalViewport.fieldOfViewDegrees.toFixed(0)}°`)
-            .fontSize(12).fontColor($r('app.color.app_brand'))
-        }.width('100%')
-        this.NormalLayerToggle('星座连线', 0, this.normalLayers.constellationLines)
-        this.NormalLayerToggle('赤道网格', 1, this.normalLayers.equatorialGrid)
-        this.NormalLayerToggle('黄道', 2, this.normalLayers.ecliptic)
-        this.NormalLayerToggle('地平线', 3, this.normalLayers.horizon)
-        this.NormalLayerToggle('深空天体', 4, this.normalLayers.deepSky)
-        this.NormalLayerToggle('太阳系', 5, this.normalLayers.solarSystem)
-        Text(`${this.catalogStatus} · ${this.normalCatalogStatus}`)
-          .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).maxLines(2)
-      }
-      .width(Math.min(206, Math.max(170, this.skyViewportWidth - 92)))
-      .padding(12).backgroundColor($r('app.color.sky_surface_strong')).backgroundBlurStyle(BlurStyle.Regular)
-      .border({ width: 1, color: $r('app.color.sky_border') })
-      .borderRadius($r('app.float.corner_card'))
-      .position({ x: Math.max(8, this.skyViewportWidth - 286),
-        y: Math.max(86, this.skyViewportHeight / 2 - 116) })
-      .transition(MotionTokens.capsule())
-    }
-  }
-
-  @Builder
-  private NormalLayerToggle(label: string, layer: number, enabled: boolean) {
-    Row() {
-      Text(label).fontSize(12).fontColor($r('app.color.sky_text_secondary'))
-      Blank()
-      Toggle({ type: ToggleType.Switch, isOn: enabled })
-        .selectedColor($r('app.color.app_brand'))
-        .onChange((value: boolean) => { this.setNormalLayer(layer, value); })
-    }.width('100%').height(34)
+  private NormalSkyControlOverlay() {
+    NormalSkyControls({
+      viewport: this.normalViewport,
+      layers: this.normalLayers,
+      panelOpen: this.normalLayerPanelOpen,
+      viewportWidth: this.skyViewportWidth,
+      viewportHeight: this.skyViewportHeight,
+      catalogStatus: this.catalogStatus,
+      lineCatalogStatus: this.normalCatalogStatus,
+      onHome: (): void => { this.homeNormalSky(); },
+      onResetNorth: (): void => { this.resetNormalSkyNorth(); },
+      onZoomIn: (): void => { this.zoomNormalSky(1.35); },
+      onZoomOut: (): void => { this.zoomNormalSky(0.74); },
+      onToggleOrientation: (): void => { this.toggleNormalSkyOrientation(); },
+      onTogglePanel: (): void => { this.normalLayerPanelOpen = !this.normalLayerPanelOpen; },
+      onLayerChange: (layer: number, enabled: boolean): void => { this.setNormalLayer(layer, enabled); }
+    })
   }
 
   @Builder
@@ -2253,8 +2198,12 @@ struct Index {
         SkyMapOrientation.HORIZON_ZENITH : SkyMapOrientation.EQUATORIAL_NORTH_UP;
     this.normalViewport = NormalSkyProjectionService.homeViewport(
       this.normalObserver(Date.now()), orientation);
-    this.operationMessage = orientation === SkyMapOrientation.HORIZON_ZENITH ?
-      '已切换为天顶居中的地平视图' : '已切换为北上东左的赤道视图';
+    if (orientation === SkyMapOrientation.HORIZON_ZENITH && this.observer === undefined) {
+      this.operationMessage = '地平线需要观测地点；当前仍可浏览完整离线天球';
+    } else {
+      this.operationMessage = orientation === SkyMapOrientation.HORIZON_ZENITH ?
+        '已切换为天顶居中的地平视图' : '已切换为北上东左的赤道视图';
+    }
     this.updateNormalScene();
   }
 

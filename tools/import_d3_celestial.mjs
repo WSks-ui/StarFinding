@@ -193,6 +193,15 @@ const lineGroups = Array.from(lineMap.entries()).map(([designation, lines]) => (
   lines
 })).sort((first, second) => first.designation.localeCompare(second.designation));
 
+if (constellations.length !== 88 || lineGroups.length !== 88 || messier.length !== 110) {
+  throw new Error(`固定目录覆盖异常：星座 ${constellations.length}，星座线 ${lineGroups.length}，` +
+    `Messier ${messier.length}`);
+}
+if (messier.some(item => !Number.isFinite(item.raHours) || !Number.isFinite(item.decDegrees) ||
+  item.constellationDesignation.length === 0)) {
+  throw new Error('Messier 目录存在无效坐标或缺失星座归属');
+}
+
 const generatedSource = `/**
  * 此文件由 tools/import_d3_celestial.mjs 生成，请勿手工修改。
  * 数据来源：d3-celestial ${REVISION}，BSD-3-Clause。
