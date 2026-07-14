@@ -3,6 +3,7 @@ import captureWorkflowCoordinatorTest from './CaptureWorkflowCoordinator.test';
 import observationPlanningServiceTest from './ObservationPlanningService.test';
 import skyDomeProjectionServiceTest from './SkyDomeProjectionService.test';
 import huaweiArPoseAdapterTest from './HuaweiArPoseAdapter.test';
+import normalSkyProjectionServiceTest from './NormalSkyProjectionService.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -10,4 +11,5 @@ export default function testsuite() {
   observationPlanningServiceTest();
   skyDomeProjectionServiceTest();
   huaweiArPoseAdapterTest();
+  normalSkyProjectionServiceTest();
 }
