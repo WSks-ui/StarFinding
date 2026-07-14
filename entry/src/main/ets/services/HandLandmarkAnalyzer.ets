@@ -1,5 +1,5 @@
 import { image } from '@kit.ImageKit';
-import { HandLandmarks } from '../models/DomainModels';
+import { HandLandmarks, HandPoint } from '../models/DomainModels';
 
 /**
  * 手部关键点分析器的运行阶段。AVAILABLE 不是单独阶段：只有 READY/ANALYZING 且
@@ -46,6 +46,66 @@ export interface HandLandmarkAnalysisResult {
   hands: HandLandmarks[];
   frameReceivedAtMs: number;
   inferenceDurationMs: number;
+}
+
+/**
+ * 把模型的传感器坐标转换为用户看到的前摄预览坐标。真实模型适配器必须在返回关键点前
+ * 调用此映射，手势层因此不需要猜测相机旋转和镜像方向。
+ */
+export class HandLandmarkCoordinateMapper {
+  static mapPoint(point: HandPoint, mirrored: boolean, rotationDegrees: number): HandPoint {
+    const quarterTurns: number = HandLandmarkCoordinateMapper.quarterTurns(rotationDegrees);
+    let x: number = point.x;
+    let y: number = point.y;
+    if (quarterTurns === 1) {
+      const previousX: number = x;
+      x = 1.0 - y;
+      y = previousX;
+    } else if (quarterTurns === 2) {
+      x = 1.0 - x;
+      y = 1.0 - y;
+    } else if (quarterTurns === 3) {
+      const previousX: number = x;
+      x = y;
+      y = 1.0 - previousX;
+    }
+    if (mirrored) {
+      x = 1.0 - x;
+    }
+    return {
+      x: HandLandmarkCoordinateMapper.clamp(x, 0.0, 1.0),
+      y: HandLandmarkCoordinateMapper.clamp(y, 0.0, 1.0),
+      confidence: point.confidence
+    };
+  }
+
+  static mapHands(hands: HandLandmarks[], mirrored: boolean, rotationDegrees: number): HandLandmarks[] {
+    const result: HandLandmarks[] = [];
+    for (let handIndex: number = 0; handIndex < hands.length; handIndex++) {
+      const points: HandPoint[] = [];
+      for (let pointIndex: number = 0; pointIndex < hands[handIndex].points.length; pointIndex++) {
+        points.push(HandLandmarkCoordinateMapper.mapPoint(
+          hands[handIndex].points[pointIndex], mirrored, rotationDegrees));
+      }
+      result.push({
+        trackingId: hands[handIndex].trackingId,
+        points: points,
+        confidence: hands[handIndex].confidence,
+        timestampMs: hands[handIndex].timestampMs
+      });
+    }
+    return result;
+  }
+
+  private static quarterTurns(rotationDegrees: number): number {
+    const rounded: number = Math.round(rotationDegrees / 90.0);
+    const normalized: number = rounded % 4;
+    return normalized < 0 ? normalized + 4 : normalized;
+  }
+
+  private static clamp(value: number, minimum: number, maximum: number): number {
+    return Math.max(minimum, Math.min(maximum, value));
+  }
 }
 
 /**

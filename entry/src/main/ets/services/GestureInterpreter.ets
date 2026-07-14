@@ -70,17 +70,19 @@ export class GestureInterpreter {
     const indexTip: HandPoint = hand.points[8];
     const pinchDistance: number = this.distance(thumbTip, indexTip);
     const pinching: boolean = pinchDistance <= this.options.pinchDistance;
-    if (pinching && !this.pinchActive &&
-      timestampMs - this.lastSelectionAtMs >= this.options.selectionCooldownMs) {
+    if (pinching) {
+      if (!this.pinchActive && timestampMs - this.lastSelectionAtMs >= this.options.selectionCooldownMs) {
+        this.pinchActive = true;
+        this.lastSelectionAtMs = timestampMs;
+        return this.frame(HandGesture.PINCH_SELECT, 0.0, 0.0, 0.0, 1.0,
+          (thumbTip.x + indexTip.x) / 2.0, (thumbTip.y + indexTip.y) / 2.0,
+          hand.confidence, timestampMs);
+      }
+      // 保持捏合或仍处于冷却期时必须吞掉拖拽，否则一次选择会继续带动星图。
       this.pinchActive = true;
-      this.lastSelectionAtMs = timestampMs;
-      return this.frame(HandGesture.PINCH_SELECT, 0.0, 0.0, 0.0, 1.0,
-        (thumbTip.x + indexTip.x) / 2.0, (thumbTip.y + indexTip.y) / 2.0,
-        hand.confidence, timestampMs);
+      return this.emptyFrame(timestampMs);
     }
-    if (!pinching) {
-      this.pinchActive = false;
-    }
+    this.pinchActive = false;
 
     if (this.isOpenPalm(hand)) {
       const previous: HandLandmarks | undefined = this.findPrevious(hand.trackingId);

@@ -898,10 +898,22 @@ struct Index {
             .fontSize(14).lineHeight(22).fontColor($r('app.color.sky_text_secondary')).width('100%')
 
           Column({ space: 7 }) {
+            this.InfoLine('目标类型', this.selectedTypeText())
             this.InfoLine('赤经 / 赤纬', this.coordinateText())
             this.InfoLine('角尺寸', this.angularSizeText())
             this.InfoLine('18mm 适配', this.selectedTarget().recommendedFor18mm ? '推荐广角拍摄' : '适合观测或环境构图')
           }.width('100%')
+
+          Column({ space: 7 }) {
+            Text('今晚观测').fontSize(12).fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.sky_text_primary')).width('100%')
+            this.InfoLine('升起 / 中天 / 落下', `${this.planningEventText('rise')} / ` +
+              `${this.planningEventText('transit')} / ${this.planningEventText('set')}`)
+            this.InfoLine('最佳窗口', this.planningPeekWindowText())
+            this.InfoLine('天气', this.weatherSourceShortText())
+          }
+          .width('100%').padding(12).backgroundColor($r('app.color.sky_background'))
+          .borderRadius($r('app.float.corner_card'))
 
           Row() {
             Text(this.selectedTarget().recommendedFor18mm ? '广角友好' : '目标尺寸较小')
@@ -957,11 +969,14 @@ struct Index {
             .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(24)
             .onClick(() => { this.addSelectedTargetToPlan(true); })
         }.width('100%')
-        Button('拍摄方案')
+        Button('拍摄 / 观测')
           .width('100%').height(48).fontSize(14).fontWeight(FontWeight.Bold)
           .fontColor($r('app.color.sky_text_primary'))
           .backgroundColor($r('app.color.app_surface_tertiary')).borderRadius(24)
           .onClick(() => { this.setCapturePanelVisible(true); })
+        Text(this.captureReadinessText())
+          .fontSize(10).lineHeight(15).fontColor($r('app.color.sky_text_tertiary'))
+          .width('100%').textAlign(TextAlign.Center).maxLines(2)
       }
       .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 16 })
       .border({ width: { top: 1 }, color: $r('app.color.sky_border') })
@@ -1539,7 +1554,8 @@ struct Index {
         return;
       }
     }
-    this.operationMessage = `离线目录中未找到“${keyword}”`;
+    this.operationMessage = this.visibleStarCatalog.isLoaded() ?
+      `离线目录中未找到“${keyword}”` : `天体目录中未找到“${keyword}”，HYG 恒星表仍在加载`;
   }
 
   private selectedCoordinate(): EquatorialCoordinate | undefined {
@@ -2118,6 +2134,17 @@ struct Index {
       this.catalogStatus = '离线星表加载失败';
       this.operationMessage = `星表加载失败：${error}`;
     }
+  }
+
+  private selectedTypeText(): string {
+    const type: CelestialType = this.selectedTarget().type;
+    if (type === CelestialType.STAR) return '恒星';
+    if (type === CelestialType.CONSTELLATION) return '星座';
+    if (type === CelestialType.MESSIER) return 'Messier 深空天体';
+    if (type === CelestialType.SUN) return '太阳';
+    if (type === CelestialType.MOON) return '月球';
+    if (type === CelestialType.PLANET) return '行星';
+    return '天体';
   }
 
   private async loadNormalSkyCatalog(): Promise<void> {
