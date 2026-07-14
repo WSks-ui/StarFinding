@@ -1,7 +1,12 @@
 import { common } from '@kit.AbilityKit';
 import { ArSkyDome } from '../components/ArSkyDome';
 import { DeviceCameraPreview } from '../components/DeviceCameraPreview';
+import { DeviceWorkspace } from '../components/DeviceWorkspace';
 import lazy { HuaweiArCameraView } from '../components/HuaweiArCameraView';
+import { PostWorkspace } from '../components/PostWorkspace';
+import { SkyWorkspace } from '../components/SkyWorkspace';
+import { TaskWorkspace } from '../components/TaskWorkspace';
+import { WorkspaceNavigationDock } from '../components/WorkspaceNavigationDock';
 import { CelestialCatalog } from '../data';
 import {
   ArCalibration,
@@ -72,12 +77,6 @@ import { HuaweiArPoseAdapter } from '../services/HuaweiArPoseAdapter';
 import { SkyDomeProjectionService } from '../services/SkyDomeProjectionService';
 import { SkyDomeSceneService } from '../services/SkyDomeSceneService';
 
-interface NavigationItem {
-  id: number;
-  icon: Resource;
-  label: string;
-}
-
 interface DisplayStar {
   id: string;
   name: string;
@@ -86,13 +85,6 @@ interface DisplayStar {
   size: number;
   color: string;
   catalogStar?: VisibleStar;
-}
-
-interface DeviceLine {
-  name: string;
-  detail: string;
-  state: string;
-  color: ResourceColor;
 }
 
 interface ProjectedTarget {
@@ -262,13 +254,6 @@ struct Index {
   private panStartOffsetY: number = 0;
   private pinchStartScale: number = 1;
   private rotationStartAngle: number = 0;
-  private navigation: NavigationItem[] = [
-    { id: 0, icon: $r('sys.symbol.star_planet'), label: '星图' },
-    { id: 1, icon: $r('sys.symbol.device_2'), label: '设备' },
-    { id: 2, icon: $r('sys.symbol.list_bullet_square'), label: '任务' },
-    { id: 3, icon: $r('sys.symbol.adjustment'), label: '后期' }
-  ];
-
   aboutToAppear(): void {
     const arCapability = ArEngineCapabilityService.inspect();
     this.huaweiArViewEnabled = arCapability.available;
@@ -356,104 +341,121 @@ struct Index {
   private ActiveWorkspaceContent() {
     this.Header()
     if (this.activeSection === 1) {
-      this.DeviceWorkspace()
+      DeviceWorkspace({
+        compact: this.isCompactWorkspace(),
+        pageMargin: this.workspacePageMargin(),
+        mountConnection: this.mountConnection,
+        gatewayConnection: this.gatewayConnection,
+        gatewayDetail: this.gatewayDetail,
+        mountHomed: this.mountHomed,
+        tracking: this.tracking,
+        locationSynced: this.locationSynced,
+        observerAvailable: this.observer !== undefined,
+        locationText: this.locationText,
+        mountRaHours: this.mountRaHours,
+        mountDecDegrees: this.mountDecDegrees,
+        mountSlewing: this.mountSlewing,
+        onToggleMount: (): void => { this.toggleMountConnection(); },
+        onToggleGateway: (): void => { this.toggleGatewayConnection(); },
+        onHomeMount: (): void => { this.homeMount(); },
+        onSyncObserver: (): void => { this.syncObserverToMount(); },
+        onToggleTracking: (): void => { this.toggleTracking(); },
+        onParkMount: (): void => { this.parkMount(); }
+      })
     } else if (this.activeSection === 2) {
-      this.TaskWorkspace()
+      TaskWorkspace({
+        compact: this.isCompactWorkspace(),
+        pageMargin: this.workspacePageMargin(),
+        taskStage: this.taskStage,
+        targetName: this.selectedTarget().nameZh,
+        captureMode: this.captureMode,
+        exposureSeconds: this.exposureSeconds,
+        frameCount: this.frameCount,
+        iso: this.iso,
+        taskStatus: this.taskStatus,
+        taskProgress: this.taskProgress,
+        completedFrames: this.completedFrames,
+        workflowWarningText: this.workflowWarningText,
+        plateSolveCount: this.plateSolveCount,
+        correctionCount: this.correctionCount,
+        stackFileUrl: this.stackFileUrl,
+        timelapseFileUrl: this.timelapseFileUrl,
+        aiFileUrl: this.aiFileUrl,
+        onRefresh: (): void => { this.pollActiveTask(); },
+        onCancel: (): void => { this.cancelActiveTask(); }
+      })
     } else {
-      this.PostWorkspace()
+      PostWorkspace({
+        compact: this.isCompactWorkspace(),
+        pageMargin: this.workspacePageMargin(),
+        aiEndpoint: this.aiEndpoint,
+        aiToken: this.aiToken,
+        aiStatus: this.aiStatus,
+        aiConfigured: this.aiClient.isConfigured(),
+        stackFileUrl: this.stackFileUrl,
+        aiFileUrl: this.aiFileUrl,
+        aiModelVersion: this.aiModelVersion,
+        timelapseFileUrl: this.timelapseFileUrl,
+        plateSolveCount: this.plateSolveCount,
+        correctionCount: this.correctionCount,
+        completedFrames: this.completedFrames,
+        onEndpointChange: (value: string): void => { this.aiEndpoint = value; },
+        onTokenChange: (value: string): void => { this.aiToken = value; },
+        onApplyConfiguration: (): void => { this.applyAiConfiguration(); }
+      })
     }
   }
 
   @Builder
   private WorkspaceRail() {
-    Column({ space: 8 }) {
-      Column({ space: 2 }) {
-        Text('探')
-          .fontSize(22).fontWeight(FontWeight.Bold).fontColor($r('app.color.app_on_brand'))
-          .width(48).height(48).textAlign(TextAlign.Center)
-          .backgroundColor($r('app.color.app_brand')).borderRadius($r('app.float.corner_card'))
-        Text('探星').fontSize($r('app.float.font_caption')).fontColor($r('app.color.app_text_secondary'))
-      }
-      .width('100%')
-      .alignItems(HorizontalAlign.Center)
-      .margin({ bottom: 16 })
-
-      ForEach(this.navigation, (item: NavigationItem) => {
-        Column({ space: 4 }) {
-          SymbolGlyph(item.icon)
-            .fontSize(24)
-            .fontColor([this.activeSection === item.id ?
-              $r('app.color.app_on_brand') : $r('app.color.app_text_secondary')])
-          Text(item.label)
-            .fontSize($r('app.float.font_caption'))
-            .fontWeight(this.activeSection === item.id ? FontWeight.Bold : FontWeight.Medium)
-            .fontColor(this.activeSection === item.id ?
-              $r('app.color.app_on_brand') : $r('app.color.app_text_secondary'))
-        }
-        .width(64).height(60)
-        .justifyContent(FlexAlign.Center)
-        .backgroundColor(this.activeSection === item.id ? $r('app.color.app_brand') : 'transparent')
-        .borderRadius($r('app.float.corner_control'))
-        .animation({ duration: 180, curve: Curve.EaseOut })
-        .accessibilityText(item.label)
-        .onClick(() => { this.navigateToSection(item.id); })
-      }, (item: NavigationItem) => item.id.toString())
-
-      Blank()
-
-      Column({ space: 6 }) {
-        Circle().width(8).height(8).fill(this.connectionColor(this.mountConnection))
-        Circle().width(8).height(8).fill(this.connectionColor(this.gatewayConnection))
-      }
-      .width(40).padding({ top: 10, bottom: 10 })
-      .backgroundColor($r('app.color.app_surface_primary')).borderRadius($r('app.float.corner_control'))
-
-      if (this.mountConnection !== ConnectionState.DISCONNECTED ||
-        this.gatewayConnection !== ConnectionState.DISCONNECTED || this.taskStatus === TaskStatus.RUNNING) {
-        Button() {
-          SymbolGlyph($r('sys.symbol.stop_circle_fill'))
-            .fontSize(24).fontColor([$r('app.color.sky_text_primary')])
-        }
-          .width(48).height(48)
-          .backgroundColor($r('app.color.app_error_container')).borderRadius(24)
-          .onClick(() => { this.triggerEmergencyStop(); })
+    Column() {
+      if (this.activeSection === 1) {
+        this.SharedNavigationDock(false, 1, 0)
+      } else if (this.activeSection === 2) {
+        this.SharedNavigationDock(false, 2, 0)
+      } else {
+        this.SharedNavigationDock(false, 3, 0)
       }
     }
-    .width(92)
+    .width(104)
     .height('100%')
-    .padding({ top: 28, bottom: 24 })
-    .alignItems(HorizontalAlign.Center)
-    .backgroundColor($r('app.color.app_background_secondary'))
-    .border({ width: { right: 1 }, color: $r('app.color.app_divider') })
+    .padding({ left: 16, right: 16, top: 24 })
+    .backgroundColor($r('app.color.app_background_primary'))
   }
 
   @Builder
   private CompactBottomNavigation() {
-    Row() {
-      ForEach(this.navigation, (item: NavigationItem) => {
-        Column({ space: 4 }) {
-          SymbolGlyph(item.icon)
-            .fontSize(24)
-            .fontColor([this.activeSection === item.id ?
-              $r('app.color.app_brand') : $r('app.color.app_text_secondary')])
-          Text(item.label)
-            .fontSize($r('app.float.font_caption'))
-            .fontWeight(this.activeSection === item.id ? FontWeight.Bold : FontWeight.Medium)
-            .fontColor(this.activeSection === item.id ?
-              $r('app.color.app_brand') : $r('app.color.app_text_secondary'))
-        }
-        .layoutWeight(1)
-        .height(64)
-        .justifyContent(FlexAlign.Center)
-        .accessibilityText(item.label)
-        .onClick(() => { this.navigateToSection(item.id); })
-      }, (item: NavigationItem) => item.id.toString())
+    Column() {
+      if (this.activeSection === 1) {
+        this.SharedNavigationDock(true, 1, 0)
+      } else if (this.activeSection === 2) {
+        this.SharedNavigationDock(true, 2, 0)
+      } else {
+        this.SharedNavigationDock(true, 3, 0)
+      }
     }
     .width('100%')
-    .height(72)
-    .padding({ left: 8, right: 8, bottom: 4 })
-    .backgroundColor($r('app.color.app_background_secondary'))
-    .border({ width: { top: 1 }, color: $r('app.color.app_divider') })
+    .padding({ left: 16, right: 16, bottom: 8 })
+    .backgroundColor($r('app.color.app_background_primary'))
+  }
+
+  @Builder
+  private SharedNavigationDock(compact: boolean, activeSection: number, activeSkyPanel: number) {
+    WorkspaceNavigationDock({
+      compact: compact,
+      veryNarrow: compact && this.contentViewportWidth < 360,
+      activeSection: activeSection,
+      activeSkyPanel: activeSkyPanel,
+      showEmergency: this.mountConnection !== ConnectionState.DISCONNECTED ||
+        this.gatewayConnection !== ConnectionState.DISCONNECTED || this.taskStatus === TaskStatus.RUNNING,
+      onTarget: (): void => { this.navigateToSkyPanel(1); },
+      onPlanning: (): void => { this.navigateToSkyPanel(2); },
+      onDevice: (): void => { this.navigateToSection(1); },
+      onTask: (): void => { this.navigateToSection(2); },
+      onPost: (): void => { this.navigateToSection(3); },
+      onImmersive: (): void => { this.navigateToImmersiveSky(); },
+      onEmergency: (): void => { this.triggerEmergencyStop(); }
+    })
   }
 
   @Builder
@@ -531,70 +533,66 @@ struct Index {
 
   @Builder
   private SkyWorkspace() {
-    Stack() {
-      this.SkyCanvas()
-
-      if (this.skyChromeVisible) {
-        this.SkyBrandPill()
-        this.SkySearchCapsule()
-        if (!this.useSkyBottomSheet()) {
-          this.SkyTopStatusCapsule()
-        }
-        if ((this.emergencyMessage.length > 0 || this.operationMessage.length > 0) &&
-          !(this.useSkyBottomSheet() && this.skyOverlayPanel > 0)) {
-          this.SkyNoticeCapsule()
-        }
-        if (this.skyOverlayPanel === 0 &&
-          !(this.useSkyBottomSheet() && this.hasSkyNotice())) {
-          this.SkyTargetPeekCapsule()
-        }
-        if (this.skyMode === 0 && this.skyOverlayPanel === 0 && this.skyViewportHeight >= 480) {
-          this.SkyDomeRevealCapsule()
-        }
-        this.SkyNavigationDock()
-        if (!(this.useSkyBottomSheet() && this.skyOverlayPanel > 0)) {
-          this.SkyBottomControlCapsule()
-        }
-
-        if (this.skyMode === 1 && this.gestureEnabled &&
-          (!this.useSkyBottomSheet() || (this.skyViewportWidth >= 360 && this.skyViewportHeight >= 360)) &&
-          !(this.useSkyBottomSheet() && this.skyOverlayPanel > 0)) {
-          this.SkyGesturePreview()
-        }
-
-        if (this.skyOverlayPanel === 1) {
-          this.SkyTargetDrawer()
-        } else if (this.skyOverlayPanel === 2) {
-          this.SkyPlanningDrawer()
-        }
-      } else {
-        Button() {
-          SymbolGlyph($r('sys.symbol.open_sidebar'))
-            .fontSize(24).fontColor([$r('app.color.sky_text_primary')])
-        }
-          .width(48).height(48)
-          .backgroundColor($r('app.color.sky_surface')).borderRadius(24)
-          .backgroundBlurStyle(BlurStyle.Thin)
-          .position({ x: 16, y: this.skyTopChromeY() })
-          .onClick(() => { this.skyChromeVisible = true; })
+    SkyWorkspace({
+      skyMode: this.skyMode,
+      chromeVisible: this.skyChromeVisible,
+      overlayPanel: this.skyOverlayPanel,
+      viewportWidth: this.skyViewportWidth,
+      viewportHeight: this.skyViewportHeight,
+      targetSearch: this.targetSearch,
+      observerAvailable: this.observer !== undefined,
+      locationText: this.locationText,
+      currentTimeText: this.currentTimeText(),
+      mountConnection: this.mountConnection,
+      gatewayConnection: this.gatewayConnection,
+      taskStatus: this.taskStatus,
+      emergencyMessage: this.emergencyMessage,
+      operationMessage: this.operationMessage,
+      targetName: this.selectedTarget().nameZh,
+      recommendationTitle: this.planningRecommendationTitle(),
+      recommendationColor: this.planningRecommendationColor(),
+      planningWindowText: this.planningPeekWindowText(),
+      weatherSourceText: this.weatherSourceShortText(),
+      poseReady: this.poseReady,
+      poseHeading: this.poseHeading,
+      posePitch: this.posePitch,
+      calibrationText: this.calibrationText,
+      calibrationEnabled: this.calibrationEnabled,
+      arTrackingText: this.arTrackingText,
+      domeRevealLevel: this.skyDomeRevealLevel,
+      gestureEnabled: this.gestureEnabled,
+      skyCanvas: (): void => { this.SkyCanvas(); },
+      gesturePreview: (): void => { this.SkyGesturePreview(); },
+      targetDrawer: (): void => { this.SkyTargetDrawer(); },
+      planningDrawer: (): void => { this.SkyPlanningDrawer(); },
+      onViewportChange: (width: number, height: number): void => {
+        this.skyViewportWidth = width;
+        this.skyViewportHeight = height;
+        this.updateNormalMap();
+        this.updateProjectedTargets(true);
+      },
+      onSearchChange: (value: string): void => { this.targetSearch = value; },
+      onSearchSubmit: (value: string): void => {
+        this.targetSearch = value;
+        this.performTargetSearch();
+      },
+      onOpenPanel: (panel: number): void => { this.openSkyPanel(panel); },
+      onNavigate: (section: number): void => { this.navigateToSection(section); },
+      onChromeVisibleChange: (visible: boolean): void => { this.skyChromeVisible = visible; },
+      onNoticeDismiss: (): void => {
+        this.emergencyMessage = '';
+        this.operationMessage = '';
+      },
+      onModeChange: (mode: number): void => { this.selectSkyMode(mode); },
+      onDomeRevealChange: (level: number): void => {
+        this.skyDomeRevealLevel = level;
+        this.updateProjectedTargets(true);
+      },
+      onEmergencyStop: (): void => { this.triggerEmergencyStop(); },
+      onOpenPlanningLocation: (): void => {
+        this.openSkyPanel(2);
+        this.planningLocationEditorOpen = true;
       }
-    }
-    .width('100%')
-    .height('100%')
-    .backgroundColor($r('app.color.sky_background'))
-    .clip(true)
-    .onAreaChange((_oldValue: Area, newValue: Area) => {
-      const width: number = Number(newValue.width);
-      const height: number = Number(newValue.height);
-      if (!Number.isFinite(width) || !Number.isFinite(height) || width < 1 || height < 1) return;
-      if (Math.abs(width - this.skyViewportWidth) < 0.5 && Math.abs(height - this.skyViewportHeight) < 0.5) {
-        return;
-      }
-      // 悬浮抽屉不参与画布布局，投影视口始终使用完整屏幕尺寸，开合面板时星点不会跳动。
-      this.skyViewportWidth = width;
-      this.skyViewportHeight = height;
-      this.updateNormalMap();
-      this.updateProjectedTargets(true);
     })
   }
 
@@ -663,292 +661,6 @@ struct Index {
           })
       )
     )
-  }
-
-  @Builder
-  private SkyBrandPill() {
-    Column({ space: 1 }) {
-      Text('探星')
-        .fontSize(this.useSkyBottomSheet() ? 18 : 20)
-        .fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary')).width('100%')
-      if (!this.isVeryNarrowSky()) {
-        Text('StarFinding').fontSize(12).fontColor($r('app.color.sky_text_tertiary')).width('100%')
-      }
-    }
-    .width(this.isVeryNarrowSky() ? 72 : (this.useSkyBottomSheet() ? 108 : 148))
-    .height(52)
-    .padding({ left: 16, right: 16, top: 7, bottom: 7 })
-    .backgroundColor($r('app.color.sky_surface_soft'))
-    .backgroundBlurStyle(BlurStyle.Thin)
-    .border({ width: 1, color: $r('app.color.sky_border') })
-    .borderRadius($r('app.float.corner_card'))
-    .position({ x: 16, y: this.skyTopChromeY() })
-  }
-
-  @Builder
-  private SkySearchCapsule() {
-    Search({ value: this.targetSearch, placeholder: '搜索天体、星座或编号' })
-      .width(this.skySearchWidth())
-      .height(52)
-      .textFont({ size: 14 })
-      .fontColor($r('app.color.sky_text_primary'))
-      .placeholderColor($r('app.color.sky_text_tertiary'))
-      .searchButton('搜索', { fontSize: 14, fontColor: $r('app.color.app_brand') })
-      .backgroundColor($r('app.color.sky_surface_soft'))
-      .backgroundBlurStyle(BlurStyle.Thin)
-      .border({ width: 1, color: $r('app.color.sky_border') })
-      .borderRadius($r('app.float.corner_control'))
-      .onChange((value: string) => { this.targetSearch = value; })
-      .onSubmit((value: string) => {
-        this.targetSearch = value;
-        this.performTargetSearch();
-      })
-      .position({ x: this.skySearchX(), y: this.skyTopChromeY() })
-  }
-
-  @Builder
-  private SkyTopStatusCapsule() {
-    Row({ space: 12 }) {
-      Row({ space: 6 }) {
-        Circle().width(7).height(7).fill(this.observer === undefined ? '#F4BA58' : '#57C995')
-        Text(this.observer === undefined ? '位置待定' : this.locationText)
-          .fontSize(12).fontColor($r('app.color.sky_text_secondary')).maxLines(1)
-      }
-      .layoutWeight(1)
-      .onClick(() => {
-        this.openSkyPanel(2);
-        this.planningLocationEditorOpen = true;
-      })
-      Text(this.currentTimeText()).fontSize(13).fontWeight(FontWeight.Bold)
-        .fontColor($r('app.color.sky_text_primary'))
-      Row({ space: 5 }) {
-        Circle().width(7).height(7).fill(this.connectionColor(this.mountConnection))
-        Circle().width(7).height(7).fill(this.connectionColor(this.gatewayConnection))
-      }
-    }
-    .width(280).height(52)
-    .padding({ left: 16, right: 16 })
-    .backgroundColor($r('app.color.sky_surface_soft'))
-    .backgroundBlurStyle(BlurStyle.Thin)
-    .border({ width: 1, color: $r('app.color.sky_border') })
-    .borderRadius($r('app.float.corner_card'))
-    .position({ x: Math.max(16, this.skyViewportWidth - 296), y: this.skyTopChromeY() })
-  }
-
-  @Builder
-  private SkyNoticeCapsule() {
-    Row({ space: 8 }) {
-      Circle().width(8).height(8)
-        .fill(this.emergencyMessage.length > 0 ? '#E05B64' : '#72D3F5')
-      Text(this.emergencyMessage.length > 0 ? this.emergencyMessage : this.operationMessage)
-        .layoutWeight(1).fontSize(12).lineHeight(18).maxLines(2)
-        .textOverflow({ overflow: TextOverflow.Ellipsis })
-        .fontColor(this.emergencyMessage.length > 0 ? '#FFD6D9' : '#C7D1DE')
-      Button() {
-        SymbolGlyph($r('sys.symbol.xmark'))
-          .fontSize(18).fontColor([$r('app.color.sky_text_secondary')])
-      }
-        .width(40).height(40).backgroundColor('transparent').borderRadius(20)
-        .onClick(() => {
-          this.emergencyMessage = '';
-          this.operationMessage = '';
-        })
-    }
-    .width(Math.min(480, this.skyBottomControlWidth()))
-    .padding({ left: 14, right: 6, top: 6, bottom: 6 })
-    .backgroundColor($r('app.color.sky_surface'))
-    .backgroundBlurStyle(BlurStyle.Regular)
-    .border({ width: 1, color: this.emergencyMessage.length > 0 ?
-      $r('app.color.app_error') : $r('app.color.sky_border') })
-    .borderRadius($r('app.float.corner_card'))
-    .position({ x: this.skyBottomControlX(), y: this.skyTopChromeY() + 60 })
-  }
-
-  @Builder
-  private SkyTargetPeekCapsule() {
-    Row({ space: 9 }) {
-      Circle().width(9).height(9).fill(this.planningRecommendationColor())
-      Column({ space: 2 }) {
-        Text(`${this.selectedTarget().nameZh} · ${this.planningRecommendationTitle()}`)
-          .fontSize(13).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary')).width('100%')
-        Text(`${this.planningPeekWindowText()} · ${this.weatherSourceShortText()}`)
-          .fontSize(12).fontColor($r('app.color.sky_text_tertiary')).width('100%')
-      }.layoutWeight(1)
-      SymbolGlyph($r('sys.symbol.chevron_right'))
-        .fontSize(18).fontColor([$r('app.color.app_brand')])
-    }
-    .width(this.useSkyBottomSheet() ? Math.max(0, Math.min(228, this.skyViewportWidth - 24)) : 252).height(56)
-    .padding({ left: 14, right: 14 })
-    .backgroundColor($r('app.color.sky_surface_soft'))
-    .backgroundBlurStyle(BlurStyle.Thin)
-    .border({ width: 1, color: $r('app.color.sky_border') })
-    .borderRadius($r('app.float.corner_card'))
-    .position({
-      x: Math.max(16, this.skyViewportWidth - (this.useSkyBottomSheet() ? 244 : 268)),
-      y: this.skyTopChromeY() + 60
-    })
-    .onClick(() => { this.openSkyPanel(2); })
-  }
-
-  @Builder
-  private SkyNavigationDock() {
-    if (this.useSkyBottomSheet()) {
-      Row({ space: 4 }) {
-        this.SkyDockButton($r('sys.symbol.star'), '天体', this.skyOverlayPanel === 1, true, () => {
-          this.openSkyPanel(1);
-        })
-        this.SkyDockButton($r('sys.symbol.calendar'), '规划', this.skyOverlayPanel === 2, true, () => {
-          this.openSkyPanel(2);
-        })
-        this.SkyDockButton($r('sys.symbol.device_2'), '设备', false, true, () => { this.navigateToSection(1); })
-        this.SkyDockButton($r('sys.symbol.list_bullet_square'), '任务', false, true,
-          () => { this.navigateToSection(2); })
-        this.SkyDockButton($r('sys.symbol.adjustment'), '后期', false, true,
-          () => { this.navigateToSection(3); })
-      }
-      .width(Math.max(0, this.skyViewportWidth - 32)).height(72)
-      .padding(6).backgroundColor($r('app.color.sky_surface'))
-      .backgroundBlurStyle(BlurStyle.Thin)
-      .border({ width: 1, color: $r('app.color.sky_border') })
-      .borderRadius($r('app.float.corner_modal'))
-      .position({ x: 16, y: Math.max(16, this.skyViewportHeight - 96) })
-    } else {
-      Column({ space: 4 }) {
-        this.SkyDockButton($r('sys.symbol.star'), '天体', this.skyOverlayPanel === 1, false, () => {
-          this.openSkyPanel(1);
-        })
-        this.SkyDockButton($r('sys.symbol.calendar'), '规划', this.skyOverlayPanel === 2, false, () => {
-          this.openSkyPanel(2);
-        })
-        this.SkyDockButton($r('sys.symbol.device_2'), '设备', false, false,
-          () => { this.navigateToSection(1); })
-        this.SkyDockButton($r('sys.symbol.list_bullet_square'), '任务', false, false,
-          () => { this.navigateToSection(2); })
-        this.SkyDockButton($r('sys.symbol.adjustment'), '后期', false, false,
-          () => { this.navigateToSection(3); })
-        this.SkyDockButton($r('sys.symbol.fullscreen'), '沉浸', false, false, () => {
-          this.skyOverlayPanel = 0;
-          this.skyChromeVisible = false;
-        })
-        if (this.mountConnection !== ConnectionState.DISCONNECTED ||
-          this.gatewayConnection !== ConnectionState.DISCONNECTED || this.taskStatus === TaskStatus.RUNNING) {
-          Button() {
-            SymbolGlyph($r('sys.symbol.stop_circle_fill'))
-              .fontSize(24).fontColor([$r('app.color.sky_text_primary')])
-          }
-            .width(48).height(48)
-            .backgroundColor($r('app.color.app_error_container')).borderRadius(24)
-            .onClick(() => { this.triggerEmergencyStop(); })
-        }
-      }
-      .width(72).padding(8)
-      .backgroundColor($r('app.color.sky_surface'))
-      .backgroundBlurStyle(BlurStyle.Thin)
-      .border({ width: 1, color: $r('app.color.sky_border') })
-      .borderRadius($r('app.float.corner_modal'))
-      .position({ x: 16, y: this.skyTopChromeY() + 64 })
-    }
-  }
-
-  @Builder
-  private SkyDockButton(icon: Resource, label: string, active: boolean, compact: boolean,
-    action: () => void) {
-    Column({ space: 3 }) {
-      SymbolGlyph(icon)
-        .fontSize(24)
-        .fontColor([active ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary')])
-      if (!this.isVeryNarrowSky()) {
-        Text(label).fontSize(12).fontWeight(active ? FontWeight.Bold : FontWeight.Medium)
-          .fontColor(active ? $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary'))
-      }
-    }
-    .layoutWeight(compact ? 1 : 0)
-    .width(compact ? '100%' : 56)
-    .height(compact ? 58 : 56)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor(active ? $r('app.color.app_brand') : 'transparent')
-    .borderRadius($r('app.float.corner_control'))
-    .animation({ duration: 180, curve: Curve.EaseOut })
-    .accessibilityText(label)
-    .onClick(action)
-  }
-
-  @Builder
-  private SkyBottomControlCapsule() {
-    Row({ space: 8 }) {
-      this.SkyModeTab('AR', 0)
-      this.SkyModeTab('星图', 1)
-      if (this.isVeryNarrowSky()) {
-        Text(this.poseReady ? `${this.poseHeading.toFixed(0)}°` : '姿态 --')
-          .fontSize(12).fontColor($r('app.color.sky_text_secondary'))
-      } else {
-        Rect().width(1).height(22).fill($r('app.color.sky_border'))
-        Text(this.poseReady ? `方位 ${this.poseHeading.toFixed(0)}°` : '方位 --')
-          .fontSize(12).fontColor($r('app.color.sky_text_secondary'))
-        Text(this.poseReady ? `高度 ${this.posePitch.toFixed(0)}°` : '高度 --')
-          .fontSize(12).fontColor($r('app.color.sky_text_secondary'))
-        Text(this.calibrationText).fontSize(12)
-          .fontColor(this.calibrationEnabled ? $r('app.color.app_success') : $r('app.color.app_warning'))
-        if (!this.useSkyBottomSheet()) {
-          Text(this.arTrackingText).fontSize(12).fontColor($r('app.color.sky_text_tertiary'))
-        }
-      }
-    }
-    .width(this.skyBottomControlWidth()).height(52)
-    .padding({ left: 8, right: 14 })
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor($r('app.color.sky_surface'))
-    .backgroundBlurStyle(BlurStyle.Thin)
-    .border({ width: 1, color: $r('app.color.sky_border') })
-    .borderRadius($r('app.float.corner_control'))
-    .position({ x: this.skyBottomControlX(), y: this.skyBottomControlY() })
-  }
-
-  @Builder
-  private SkyDomeRevealCapsule() {
-    Row({ space: 2 }) {
-      this.SkyDomeRevealButton('肉眼', 0)
-      this.SkyDomeRevealButton('平衡', 1)
-      this.SkyDomeRevealButton('天穹', 2)
-    }
-    .width(216).height(44).padding(4)
-    .backgroundColor($r('app.color.sky_surface'))
-    .backgroundBlurStyle(BlurStyle.Thin)
-    .border({ width: 1, color: $r('app.color.sky_border') })
-    .borderRadius($r('app.float.corner_control'))
-    .position({
-      x: Math.max(12, this.skyViewportWidth / 2 - 108),
-      y: Math.max(this.skyTopChromeY() + 60, this.skyBottomControlY() - 52)
-    })
-  }
-
-  @Builder
-  private SkyDomeRevealButton(label: string, level: number) {
-    Button(label)
-      .layoutWeight(1).height(36).fontSize(12)
-      .fontWeight(this.skyDomeRevealLevel === level ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(this.skyDomeRevealLevel === level ?
-        $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary'))
-      .backgroundColor(this.skyDomeRevealLevel === level ? $r('app.color.app_brand') : 'transparent')
-      .borderRadius(18)
-      .animation({ duration: 180, curve: Curve.EaseOut })
-      .onClick(() => {
-        this.skyDomeRevealLevel = level;
-        this.updateProjectedTargets(true);
-      })
-  }
-
-  @Builder
-  private SkyModeTab(label: string, mode: number) {
-    Button(label)
-      .height(40).padding({ left: 16, right: 16 }).fontSize(14)
-      .fontWeight(this.skyMode === mode ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(this.skyMode === mode ?
-        $r('app.color.app_on_brand') : $r('app.color.sky_text_secondary'))
-      .backgroundColor(this.skyMode === mode ? $r('app.color.app_brand') : 'transparent')
-      .borderRadius(20)
-      .animation({ duration: 180, curve: Curve.EaseOut })
-      .onClick(() => { this.selectSkyMode(mode); })
   }
 
   @Builder
@@ -1363,128 +1075,6 @@ struct Index {
   }
 
   @Builder
-  private TargetPanel() {
-    Column({ space: 14 }) {
-      Row({ space: 8 }) {
-        TextInput({ placeholder: '搜索天体、星座或编号', text: this.targetSearch })
-          .layoutWeight(1)
-          .height(38)
-          .fontSize(12)
-          .fontColor('#F0F3F8')
-          .placeholderColor('#667287')
-          .backgroundColor('#0C1016')
-          .border({ width: 1, color: '#2A313C' })
-          .borderRadius(5)
-          .onChange((value: string) => {
-            this.targetSearch = value;
-          })
-        Button('⌕')
-          .width(38).height(38).fontSize(18)
-          .fontColor('#091118').backgroundColor('#72D3F5').borderRadius(5)
-          .onClick(() => { this.performTargetSearch(); })
-      }
-
-      Column({ space: 4 }) {
-        Row() {
-          Text(this.selectedTarget().nameZh)
-            .fontSize(20).fontWeight(FontWeight.Bold).fontColor('#F4F7FB')
-          Blank()
-          Text(this.selectedTarget().designation)
-            .fontSize(12).fontColor('#061017')
-            .padding({ left: 8, right: 8, top: 4, bottom: 4 })
-            .backgroundColor('#F4BA58').borderRadius(4)
-        }.width('100%')
-        Text(this.selectedTarget().nameEn + ' · ' + this.selectedTarget().constellation)
-          .fontSize(12).fontColor('#8995A8').width('100%')
-      }.width('100%')
-
-      Row() {
-        this.TargetMetric('星等', this.magnitudeText())
-        this.TargetMetric('高度', this.targetAltitudeText())
-        this.TargetMetric('方位', this.targetAzimuthText())
-      }
-      .width('100%')
-      .height(55)
-      .backgroundColor('#0D1118')
-      .borderRadius(5)
-
-      Text(this.selectedTarget().description)
-        .fontSize(12)
-        .lineHeight(19)
-        .fontColor('#BCC5D3')
-        .width('100%')
-
-      Column({ space: 8 }) {
-        this.InfoLine('赤经 / 赤纬', this.coordinateText())
-        this.InfoLine('角尺寸', this.angularSizeText())
-        this.InfoLine('18mm 适配', this.selectedTarget().recommendedFor18mm ? '推荐广角拍摄' : '可观测，不建议作为广角主体')
-        this.InfoLine('建议参数', this.selectedTarget().recommendedFor18mm ? '15s · ISO 800 · 20 张' : '仅 GOTO 观测')
-      }
-      .width('100%')
-
-      Row() {
-        Text(this.selectedTarget().recommendedFor18mm ? '适合当前设备' : '目标尺寸较小')
-          .fontSize(11)
-          .fontColor(this.selectedTarget().recommendedFor18mm ? '#57C995' : '#F4BA58')
-        Blank()
-        Text(this.selectedVisibilityText()).fontSize(11).fontColor(this.selectedVisibilityColor())
-      }
-      .width('100%')
-      .padding(10)
-      .backgroundColor('#111820')
-      .borderRadius(5)
-
-      if (this.skyMode === 0) {
-        Row({ space: 8 }) {
-          Button(this.calibrationEnabled ? '重新一星校准' : '一星校准')
-            .layoutWeight(1).height(38).fontSize(12)
-            .fontColor('#DDE3EC').backgroundColor('#242A34').borderRadius(5)
-            .onClick(() => { this.calibrateSelectedTarget(); })
-          Button('重新定位')
-            .layoutWeight(1).height(38).fontSize(12)
-            .fontColor('#DDE3EC').backgroundColor('#242A34').borderRadius(5)
-            .onClick(() => { this.refreshLocation(); })
-        }
-      } else {
-        Row() {
-          Text('前摄手势控制').fontSize(12).fontColor('#C6CEDA')
-          Blank()
-          Toggle({ type: ToggleType.Switch, isOn: this.gestureEnabled })
-            .selectedColor('#57C995')
-            .onChange((value: boolean) => { this.setGestureEnabled(value); })
-        }.width('100%').height(38)
-      }
-
-      Blank()
-
-      Row({ space: 8 }) {
-        Button(this.isSelectedTargetPlanned() ? '已加入计划' : '加入计划')
-          .layoutWeight(1).height(40).fontSize(12)
-          .fontColor('#DCE4EE').backgroundColor('#242A34').borderRadius(5)
-          .onClick(() => { this.addSelectedTargetToPlan(false); })
-        Button('查看规划')
-          .layoutWeight(1).height(40).fontSize(12).fontWeight(FontWeight.Bold)
-          .fontColor('#061017').backgroundColor('#72D3F5').borderRadius(5)
-          .onClick(() => { this.addSelectedTargetToPlan(true); })
-      }.width('100%')
-
-      Button('拍摄方案')
-        .width('100%').height(40)
-        .fontSize(14).fontWeight(FontWeight.Bold)
-        .fontColor('#C8D1DD').backgroundColor('#1E242D').borderRadius(6)
-        .onClick(() => {
-          this.showCapturePanel = true;
-        })
-    }
-    .width(322)
-    .height('100%')
-    .padding(16)
-    .backgroundColor('#11141A')
-    .borderRadius(7)
-    .border({ width: 1, color: '#252B34' })
-  }
-
-  @Builder
   private TargetMetric(label: string, value: string) {
     Column({ space: 3 }) {
       Text(label).fontSize(12).fontColor($r('app.color.sky_text_tertiary'))
@@ -1502,229 +1092,6 @@ struct Index {
   }
 
   @Builder
-  private PlanningWorkspace() {
-    Scroll() {
-      Column({ space: 14 }) {
-        Row({ space: 12 }) {
-          Column({ space: 10 }) {
-            this.PanelTitle('观测地点', `${this.planningLocationSource} · ${this.locationText}`)
-            Row({ space: 8 }) {
-              TextInput({ placeholder: '纬度，例如 34.75', text: this.manualLatitudeText })
-                .layoutWeight(1).height(36).fontSize(11).fontColor('#E8EDF4')
-                .placeholderColor('#667287').backgroundColor('#0C1016').borderRadius(5)
-                .onChange((value: string) => { this.manualLatitudeText = value; })
-              TextInput({ placeholder: '经度，例如 113.62', text: this.manualLongitudeText })
-                .layoutWeight(1).height(36).fontSize(11).fontColor('#E8EDF4')
-                .placeholderColor('#667287').backgroundColor('#0C1016').borderRadius(5)
-                .onChange((value: string) => { this.manualLongitudeText = value; })
-              Button('应用坐标')
-                .height(36).padding({ left: 12, right: 12 }).fontSize(11)
-                .fontColor('#071017').backgroundColor('#72D3F5').borderRadius(5)
-                .onClick(() => { this.applyManualPlanningLocation(); })
-              Button('系统定位')
-                .height(36).padding({ left: 12, right: 12 }).fontSize(11)
-                .fontColor('#DDE3EC').backgroundColor('#242A34').borderRadius(5)
-                .onClick(() => { this.refreshLocation(); })
-            }.width('100%')
-          }
-          .layoutWeight(1)
-          .height(100)
-          .padding(14)
-          .backgroundColor('#11141A')
-          .border({ width: 1, color: '#252B34' })
-          .borderRadius(7)
-
-          Column({ space: 9 }) {
-            Row() {
-              Column({ space: 3 }) {
-                Text('预报来源').fontSize(14).fontWeight(FontWeight.Bold).fontColor('#F0F3F8')
-                Text(this.weatherMessage).fontSize(10).fontColor(this.weatherStatusColor()).maxLines(1)
-              }.layoutWeight(1)
-              Button(this.planningBusy ? '更新中' : '更新预报')
-                .height(34).padding({ left: 11, right: 11 }).fontSize(11)
-                .enabled(!this.planningBusy && this.observer !== undefined)
-                .fontColor('#DDE3EC').backgroundColor('#242A34').borderRadius(5)
-                .onClick(() => { this.refreshWeatherForecast(); })
-            }.width('100%')
-            Row({ space: 12 }) {
-              Text(this.planningWeatherMetric('cloud')).fontSize(11).fontColor('#BFC8D5')
-              Text(this.planningWeatherMetric('rain')).fontSize(11).fontColor('#BFC8D5')
-              Text(this.planningWeatherMetric('wind')).fontSize(11).fontColor('#BFC8D5')
-            }.width('100%')
-          }
-          .width(360)
-          .height(100)
-          .padding(14)
-          .backgroundColor('#11141A')
-          .border({ width: 1, color: '#252B34' })
-          .borderRadius(7)
-        }.width('100%')
-
-        Row({ space: 8 }) {
-          Text('规划日期').fontSize(11).fontColor('#8793A7').margin({ right: 4 })
-          this.PlanningDayButton('今晚', 0)
-          this.PlanningDayButton('明晚', 1)
-          Blank()
-          Text('未来 24 小时 · 最低高度 20° · 太阳低于 -12°')
-            .fontSize(10).fontColor('#6F7D91')
-        }
-        .width('100%')
-        .height(42)
-        .padding({ left: 12, right: 12 })
-        .backgroundColor('#0E1219')
-        .borderRadius(6)
-
-        if (this.observer === undefined) {
-          Column({ space: 8 }) {
-            Text('需要观测地点').fontSize(18).fontWeight(FontWeight.Bold).fontColor('#F4F7FB')
-            Text('可授权系统定位，或手动输入经纬度。天体资料和目录检索仍可离线使用。')
-              .fontSize(12).fontColor('#9AA6B8').lineHeight(20)
-          }
-          .width('100%').height(160).padding(22).justifyContent(FlexAlign.Center)
-          .backgroundColor('#11141A').borderRadius(7)
-        } else if (this.planningResult === undefined) {
-          Column({ space: 8 }) {
-            Text(this.planningBusy ? '正在计算观测窗口' : '等待规划')
-              .fontSize(17).fontWeight(FontWeight.Bold).fontColor('#F4F7FB')
-            Text('本地天文计算不依赖赤道仪、相机或 Linux 网关')
-              .fontSize(11).fontColor('#8793A7')
-          }
-          .width('100%').height(160).padding(22).justifyContent(FlexAlign.Center)
-          .backgroundColor('#11141A').borderRadius(7)
-        } else {
-          Row({ space: 14 }) {
-            Column({ space: 14 }) {
-              Row({ space: 16 }) {
-                Column({ space: 4 }) {
-                  Text(this.planningRecommendationTitle())
-                    .fontSize(12).fontWeight(FontWeight.Bold).fontColor(this.planningRecommendationColor())
-                  Text(this.planningResult?.targetName ?? '--')
-                    .fontSize(25).fontWeight(FontWeight.Bold).fontColor('#F4F7FB')
-                  Text(this.planningResult?.summary ?? '')
-                    .fontSize(11).fontColor('#AAB5C5').maxLines(2).lineHeight(18)
-                }.layoutWeight(1)
-                Column({ space: 2 }) {
-                  Text(this.planningScoreText()).fontSize(28).fontWeight(FontWeight.Bold)
-                    .fontColor(this.planningRecommendationColor())
-                  Text(this.planningResult?.overallScore === undefined ? '参考天文分' : '参考综合分')
-                    .fontSize(10).fontColor('#7E899B')
-                }
-                .width(92).height(72).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-                .backgroundColor('#0B1016').borderRadius(6)
-              }
-              .width('100%')
-              .padding(16)
-              .backgroundColor('#141920')
-              .borderRadius(7)
-
-              Row({ space: 8 }) {
-                this.PlanningMetric('升起', this.planningEventText('rise'))
-                this.PlanningMetric('过中天', this.planningEventText('transit'))
-                this.PlanningMetric('落下', this.planningEventText('set'))
-                this.PlanningMetric('最高高度', this.planningMaximumAltitudeText())
-              }.width('100%')
-
-              Column({ space: 8 }) {
-                Row() {
-                  Text('目标高度趋势').fontSize(14).fontWeight(FontWeight.Bold).fontColor('#EFF3F8')
-                  Blank()
-                  Text('24 小时').fontSize(10).fontColor('#778397')
-                }.width('100%')
-                Row({ space: 5 }) {
-                  ForEach(this.planningHeightBars(), (bar: PlanningHeightBar) => {
-                    Column({ space: 4 }) {
-                      Blank()
-                      Rect().width('100%').height(bar.height).fill(bar.color).borderRadius(2)
-                      Text(bar.label).fontSize(8).fontColor('#748195').height(12)
-                    }.layoutWeight(1).height(112)
-                  }, (bar: PlanningHeightBar) => bar.id)
-                }.width('100%').height(112)
-              }
-              .width('100%').height(150).padding(14)
-              .backgroundColor('#11141A').borderRadius(7)
-              .border({ width: 1, color: '#252B34' })
-
-              Row({ space: 12 }) {
-                Column({ space: 6 }) {
-                  Text('最佳连续窗口').fontSize(14).fontWeight(FontWeight.Bold).fontColor('#EFF3F8')
-                  Text(this.planningBestWindowText()).fontSize(18).fontWeight(FontWeight.Bold)
-                    .fontColor('#72D3F5')
-                  Text(this.planningBestWindowDetail()).fontSize(10).fontColor('#8793A7')
-                }.layoutWeight(1)
-                Column({ space: 6 }) {
-                  Text('月光条件').fontSize(14).fontWeight(FontWeight.Bold).fontColor('#EFF3F8')
-                  Text(this.planningMoonText()).fontSize(16).fontWeight(FontWeight.Bold).fontColor('#F4BA58')
-                  Text(this.planningMoonDetail()).fontSize(10).fontColor('#8793A7')
-                }.layoutWeight(1)
-              }
-              .width('100%').padding(14)
-              .backgroundColor('#11141A').borderRadius(7)
-              .border({ width: 1, color: '#252B34' })
-            }.layoutWeight(1)
-
-            Column({ space: 12 }) {
-              Row() {
-                this.PanelTitle('今晚计划', `${this.plannedTargetIds.length} 个目标`)
-                Button('+').width(30).height(30).fontSize(18)
-                  .fontColor('#071017').backgroundColor('#72D3F5').borderRadius(5)
-                  .onClick(() => { this.addSelectedTargetToPlan(false); })
-              }.width('100%')
-
-              ForEach(this.plannedTargetSummaries, (summary: PlannedTargetSummary) => {
-                Row({ space: 9 }) {
-                  Circle().width(7).height(7).fill(summary.color)
-                  Column({ space: 3 }) {
-                    Text(`${summary.targetName} · ${summary.designation}`)
-                      .fontSize(12).fontWeight(FontWeight.Bold).fontColor('#E9EDF3').width('100%')
-                    Text(summary.windowText).fontSize(10).fontColor('#7E899B').width('100%')
-                  }.layoutWeight(1)
-                  Text(summary.scoreText).fontSize(10).fontColor(summary.color)
-                  Button('×').width(26).height(26).fontSize(14)
-                    .fontColor('#AAB4C2').backgroundColor('#242A34').borderRadius(4)
-                    .onClick(() => { this.removePlannedTarget(summary.targetId); })
-                }
-                .width('100%').height(50).padding({ left: 10, right: 7 })
-                .backgroundColor(summary.targetId === this.selectedTargetId ? '#17222B' : '#0D1118')
-                .borderRadius(5)
-                .onClick(() => { this.selectPlanningTarget(summary.targetId); })
-              }, (summary: PlannedTargetSummary) => summary.targetId)
-
-              Text('18mm 推荐').fontSize(12).fontWeight(FontWeight.Bold).fontColor('#DDE3EC')
-                .width('100%').margin({ top: 4 })
-              ForEach(this.planningRecommendations(), (target: CelestialObject) => {
-                Row() {
-                  Column({ space: 2 }) {
-                    Text(target.nameZh).fontSize(11).fontColor('#DDE3EC').width('100%')
-                    Text(target.designation).fontSize(9).fontColor('#778397').width('100%')
-                  }.layoutWeight(1)
-                  Button('+').width(26).height(26).fontSize(16)
-                    .fontColor('#071017').backgroundColor('#57C995').borderRadius(4)
-                    .onClick(() => { this.addPlanningTarget(target.id); })
-                }.width('100%').height(38)
-              }, (target: CelestialObject) => target.id)
-
-              Blank()
-              Button('交给设备执行')
-                .width('100%').height(40).fontSize(12).fontWeight(FontWeight.Bold)
-                .fontColor('#C8D1DD').backgroundColor('#242A34').borderRadius(5)
-                .onClick(() => { this.showCapturePanel = true; })
-            }
-            .width(318)
-            .padding(14)
-            .backgroundColor('#11141A')
-            .border({ width: 1, color: '#252B34' })
-            .borderRadius(7)
-          }.width('100%')
-        }
-      }
-      .width('100%')
-      .padding({ left: 18, right: 18, top: 16, bottom: 18 })
-    }
-    .layoutWeight(1)
-    .width('100%')
-  }
-
-  @Builder
   private PlanningDayButton(label: string, offset: number) {
     Button(label)
       .height(40).padding({ left: 16, right: 16 }).fontSize(13)
@@ -1738,366 +1105,6 @@ struct Index {
         this.planningDayOffset = offset;
         this.refreshPlanning();
       })
-  }
-
-  @Builder
-  private PlanningMetric(label: string, value: string) {
-    Column({ space: 5 }) {
-      Text(label).fontSize(10).fontColor('#778397')
-      Text(value).fontSize(13).fontWeight(FontWeight.Bold).fontColor('#E8EDF4')
-        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .layoutWeight(1).height(64).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-    .backgroundColor('#11141A').borderRadius(6)
-    .border({ width: 1, color: '#252B34' })
-  }
-
-  @Builder
-  private DeviceWorkspace() {
-    Scroll() {
-      Column({ space: 16 }) {
-        Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-          wrap: FlexWrap.NoWrap }) {
-          this.ConnectionPanel('赤道仪', 'OnStepX · TCP 9999', this.mountConnection, () => {
-            this.toggleMountConnection();
-          })
-          this.ConnectionPanel('相机网关', this.gatewayDetail, this.gatewayConnection, () => {
-            this.toggleGatewayConnection();
-          })
-        }.width('100%')
-
-        Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-          wrap: FlexWrap.NoWrap }) {
-          Column({ space: 14 }) {
-            this.PanelTitle('赤道仪操作', '自动运动前必须完成两轴回零和位置时间同步')
-            Row({ space: 10 }) {
-              this.ActionButton($r('sys.symbol.house'), '两轴回零',
-                this.mountConnection === ConnectionState.CONNECTED, () => {
-                this.homeMount();
-              })
-              this.ActionButton($r('sys.symbol.scope'), '同步位置',
-                this.mountConnection === ConnectionState.CONNECTED &&
-                this.observer !== undefined, () => { this.syncObserverToMount(); })
-              this.ActionButton($r('sys.symbol.play_circle'), this.tracking ? '停止跟踪' : '恒星跟踪',
-                this.mountHomed && this.locationSynced, () => {
-                this.toggleTracking();
-              })
-              this.ActionButton($r('sys.symbol.pause_circle'), '停放设备', this.mountHomed, () => {
-                this.parkMount();
-              })
-            }.width('100%')
-
-            Column({ space: 9 }) {
-              ForEach(this.deviceLines(), (line: DeviceLine) => {
-                Row({ space: 10 }) {
-                  Circle().width(8).height(8).fill(line.color)
-                  Text(line.name).fontSize(13).fontColor($r('app.color.app_text_secondary')).width(108)
-                  Text(line.detail).fontSize(13).fontColor($r('app.color.app_text_primary')).layoutWeight(1)
-                  Text(line.state).fontSize(12).fontColor(line.color)
-                }.width('100%').height(40)
-              }, (line: DeviceLine) => line.name)
-            }
-            .width('100%')
-            .padding(14)
-            .backgroundColor($r('app.color.app_background_primary'))
-            .borderRadius($r('app.float.corner_card'))
-          }
-          .layoutWeight(1)
-          .height(300)
-          .padding(20)
-          .backgroundColor($r('app.color.app_background_secondary'))
-          .borderRadius($r('app.float.corner_card'))
-          .border({ width: 1, color: $r('app.color.app_divider') })
-
-          Column({ space: 14 }) {
-            this.PanelTitle('实时遥测', '软件软限位不会替代物理急停')
-            this.TelemetryLine('赤经', this.formatRa(this.mountRaHours))
-            this.TelemetryLine('赤纬', this.formatDec(this.mountDecDegrees))
-            this.TelemetryLine('运动状态', this.mountSlewing ? '转动中' : '静止')
-            this.TelemetryLine('位置同步', this.locationSynced ? '已同步' : '未同步')
-            this.TelemetryLine('跟踪模式', this.tracking ? '恒星时' : '已停止')
-            this.TelemetryLine('安全状态', this.mountHomed ? '软限位有效' : '等待回零')
-          }
-          .width(this.isCompactWorkspace() ? '100%' : 330)
-          .height(300)
-          .padding(20)
-          .backgroundColor($r('app.color.app_background_secondary'))
-          .borderRadius($r('app.float.corner_card'))
-          .border({ width: 1, color: $r('app.color.app_divider') })
-        }
-      }
-      .width('100%')
-      .padding(this.workspacePageMargin())
-    }
-    .layoutWeight(1)
-    .width('100%')
-  }
-
-  @Builder
-  private ConnectionPanel(title: string, subtitle: string, state: ConnectionState, action: () => void) {
-    Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-      wrap: FlexWrap.NoWrap }) {
-      Circle().width(14).height(14).fill(this.connectionColor(state))
-      Column({ space: 4 }) {
-        Text(title).fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.app_text_primary')).width('100%')
-        Text(subtitle).fontSize(12).fontColor($r('app.color.app_text_secondary')).width('100%')
-      }.layoutWeight(1)
-      Text(this.connectionText(state)).fontSize(13).fontColor(this.connectionColor(state))
-      Button(state === ConnectionState.CONNECTED || state === ConnectionState.SIMULATED ? '断开' : '连接')
-        .height(48).padding({ left: 20, right: 20 }).fontSize(14)
-        .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(24)
-        .onClick(action)
-    }
-    .layoutWeight(1)
-    .height(96)
-    .padding({ left: 20, right: 16 })
-    .backgroundColor($r('app.color.app_background_secondary'))
-    .border({ width: 1, color: $r('app.color.app_divider') })
-    .borderRadius($r('app.float.corner_card'))
-  }
-
-  @Builder
-  private PanelTitle(title: string, subtitle: string) {
-    Column({ space: 4 }) {
-      Text(title).fontSize(20).fontWeight(FontWeight.Bold).fontColor($r('app.color.app_text_primary')).width('100%')
-      Text(subtitle).fontSize(12).fontColor($r('app.color.app_text_secondary')).width('100%')
-    }.width('100%')
-  }
-
-  @Builder
-  private ActionButton(icon: Resource, label: string, enabled: boolean, action: () => void) {
-    Column({ space: 6 }) {
-      SymbolGlyph(icon).fontSize(26)
-        .fontColor([enabled ? $r('app.color.app_brand') : $r('app.color.app_text_tertiary')])
-      Text(label).fontSize(13)
-        .fontColor(enabled ? $r('app.color.app_text_primary') : $r('app.color.app_text_tertiary'))
-    }
-    .layoutWeight(1)
-    .height(84)
-    .justifyContent(FlexAlign.Center)
-    .backgroundColor($r('app.color.app_surface_secondary'))
-    .borderRadius($r('app.float.corner_card'))
-    .opacity(enabled ? 1 : 0.65)
-    .onClick(() => {
-      if (enabled) {
-        action();
-      }
-    })
-  }
-
-  @Builder
-  private TelemetryLine(label: string, value: string) {
-    Row() {
-      Text(label).fontSize(13).fontColor($r('app.color.app_text_secondary'))
-      Blank()
-      Text(value).fontSize(13).fontColor($r('app.color.app_text_primary'))
-    }.width('100%').height(32)
-  }
-
-  @Builder
-  private TaskWorkspace() {
-    Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-      wrap: FlexWrap.NoWrap }) {
-      Column({ space: 14 }) {
-        this.PanelTitle('当前拍摄任务', this.taskStage)
-        Row() {
-          Column({ space: 4 }) {
-            Text(this.selectedTarget().nameZh + ' · ' + this.captureModeText())
-              .fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.app_text_primary')).width('100%')
-            Text(this.exposureSeconds.toString() + 's × ' + this.frameCount.toString() + ' · ISO ' + this.iso.toString())
-              .fontSize(13).fontColor($r('app.color.app_text_secondary')).width('100%')
-          }.layoutWeight(1)
-          Text(this.taskStatusText()).fontSize(12).fontColor(this.taskStatusColor())
-        }.width('100%')
-
-        Progress({ value: this.taskProgress, total: 100, type: ProgressType.Linear })
-          .width('100%').height(8).color($r('app.color.app_success'))
-          .backgroundColor($r('app.color.app_surface_primary'))
-        Row() {
-          Text(this.completedFrames.toString() + ' / ' + this.frameCount.toString() + ' 帧')
-            .fontSize(12).fontColor($r('app.color.app_text_secondary'))
-          Blank()
-          Text(this.taskProgress.toFixed(0) + '%').fontSize(11).fontColor('#57C995')
-        }.width('100%')
-
-        if (this.workflowWarningText.length > 0) {
-          Text(this.workflowWarningText)
-            .fontSize(12).fontColor($r('app.color.app_warning')).lineHeight(18).width('100%').maxLines(2)
-        }
-
-        Row({ space: 10 }) {
-          Button('刷新状态').layoutWeight(1).height(48).fontSize(14)
-            .fontColor($r('app.color.app_text_primary'))
-            .backgroundColor($r('app.color.app_surface_primary')).borderRadius(24)
-            .onClick(() => { this.pollActiveTask(); })
-          Button('取消任务').layoutWeight(1).height(48).fontSize(14)
-            .fontColor($r('app.color.sky_text_primary'))
-            .backgroundColor($r('app.color.app_error_container')).borderRadius(24)
-            .onClick(() => { this.cancelActiveTask(); })
-        }.width('100%')
-      }
-      .layoutWeight(1)
-      .height(280)
-      .padding(20)
-      .backgroundColor($r('app.color.app_background_secondary'))
-      .borderRadius($r('app.float.corner_card'))
-      .border({ width: 1, color: $r('app.color.app_divider') })
-
-      Column({ space: 12 }) {
-        this.PanelTitle('处理流水线', 'RAW 原片始终保留在相机存储卡')
-        this.PipelineStep('1', '拍摄与下载', this.taskProgress > 0)
-        this.PipelineStep('2', `板解析 ${this.plateSolveCount} 次 · 修正 ${this.correctionCount} 次`,
-          this.plateSolveCount > 0)
-        this.PipelineStep('3', this.captureMode === 2 ? '1080p 延时制片' : '星点配准、坏帧剔除与堆栈',
-          this.stackFileUrl.length > 0 || this.timelapseFileUrl.length > 0)
-        this.PipelineStep('4', '华为云受约束增强（可选）', this.aiFileUrl.length > 0)
-      }
-      .width(this.isCompactWorkspace() ? '100%' : 340)
-      .padding(20)
-      .backgroundColor($r('app.color.app_background_secondary'))
-      .borderRadius($r('app.float.corner_card'))
-      .border({ width: 1, color: $r('app.color.app_divider') })
-    }
-    .layoutWeight(1)
-    .width('100%')
-    .padding(this.workspacePageMargin())
-  }
-
-  @Builder
-  private PipelineStep(number: string, label: string, active: boolean) {
-    Row({ space: 10 }) {
-      Text(active ? '✓' : number)
-        .fontSize(12).fontWeight(FontWeight.Bold)
-        .fontColor(active ? $r('app.color.app_on_brand') : $r('app.color.app_text_secondary'))
-        .width(28).height(28).textAlign(TextAlign.Center)
-        .backgroundColor(active ? $r('app.color.app_success') : $r('app.color.app_surface_primary'))
-        .borderRadius(14)
-      Text(label).fontSize(13)
-        .fontColor(active ? $r('app.color.app_text_primary') : $r('app.color.app_text_secondary'))
-    }.width('100%').height(40)
-  }
-
-  @Builder
-  private PostWorkspace() {
-    Column({ space: 14 }) {
-      Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-        wrap: FlexWrap.NoWrap }) {
-        this.PanelTitle('可信图像后期', 'AI 只处理背景噪声与光污染，不生成、删除或移动星体')
-        if (!this.isCompactWorkspace()) {
-          Blank()
-        }
-        Button('导出处理记录')
-          .height(48).padding({ left: 20, right: 20 }).fontSize(14)
-          .fontColor($r('app.color.app_text_primary'))
-          .backgroundColor($r('app.color.app_surface_primary')).borderRadius(24)
-      }.width('100%')
-
-      Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-        wrap: FlexWrap.NoWrap }) {
-        TextInput({ placeholder: '云增强服务地址，例如 https://example.com', text: this.aiEndpoint })
-          .layoutWeight(1).height(48).fontSize(13).fontColor($r('app.color.app_text_primary'))
-          .backgroundColor($r('app.color.app_surface_secondary'))
-          .borderRadius($r('app.float.corner_card'))
-          .onChange((value: string) => { this.aiEndpoint = value; })
-        TextInput({ placeholder: '访问令牌（服务未启用鉴权时可空）', text: this.aiToken })
-          .width(this.isCompactWorkspace() ? '100%' : 250).height(48).fontSize(13)
-          .fontColor($r('app.color.app_text_primary'))
-          .type(InputType.Password)
-          .backgroundColor($r('app.color.app_surface_secondary'))
-          .borderRadius($r('app.float.corner_card'))
-          .onChange((value: string) => { this.aiToken = value; })
-        Button('应用云配置')
-          .height(48).padding({ left: 20, right: 20 }).fontSize(14)
-          .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(24)
-          .onClick(() => { this.applyAiConfiguration(); })
-        Text(this.aiStatus).width(this.isCompactWorkspace() ? '100%' : 92)
-          .fontSize(12).fontColor(this.aiClient.isConfigured() ?
-            $r('app.color.app_success') : $r('app.color.app_warning'))
-      }.width('100%')
-
-      Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-        wrap: FlexWrap.NoWrap }) {
-        this.ImageResultPanel('本地堆栈', this.stackFileUrl.length > 0 ? '树莓派处理结果' : '等待真实任务文件',
-          '#17202A', this.stackFileUrl)
-        Column({ space: 8 }) {
-          SymbolGlyph($r('sys.symbol.arrow_left_arrow_right'))
-            .fontSize(24).fontColor([$r('app.color.app_brand')])
-          Text('拖动对比').fontSize(12).fontColor($r('app.color.app_text_secondary'))
-        }.width(58).alignItems(HorizontalAlign.Center)
-        this.ImageResultPanel('AI 增强', this.aiFileUrl.length > 0 ?
-          `模型 ${this.aiModelVersion.length > 0 ? this.aiModelVersion : '已记录'}` : '等待云端处理记录',
-          '#101D1A', this.aiFileUrl)
-      }
-      .layoutWeight(1)
-      .width('100%')
-
-      if (this.timelapseFileUrl.length > 0) {
-        Video({ src: this.timelapseFileUrl })
-          .width('100%')
-          .height(180)
-          .controls(true)
-          .autoPlay(false)
-          .objectFit(ImageFit.Contain)
-          .backgroundColor($r('app.color.sky_background'))
-          .borderRadius($r('app.float.corner_card'))
-      }
-
-      Flex({ direction: this.isCompactWorkspace() ? FlexDirection.Column : FlexDirection.Row,
-        wrap: FlexWrap.NoWrap }) {
-        this.PostMetric('板解析', `${this.plateSolveCount} 次`, '#57C995')
-        this.PostMetric('漂移修正', `${this.correctionCount} 次`, '#72D3F5')
-        this.PostMetric('光污染梯度', this.stackFileUrl.length > 0 ? '已校正' : '待处理', '#F4BA58')
-        this.PostMetric('原片证据', this.completedFrames > 0 ? `${this.completedFrames} 帧 + 日志` : '等待任务', '#E5E9F0')
-      }.width('100%')
-    }
-    .layoutWeight(1)
-    .width('100%')
-    .padding(this.workspacePageMargin())
-  }
-
-  @Builder
-  private ImageResultPanel(title: string, subtitle: string, fillColor: string, sourceUrl: string) {
-    Column() {
-      if (sourceUrl.length > 0) {
-        Image(sourceUrl)
-          .layoutWeight(1).width('100%').objectFit(ImageFit.Contain).backgroundColor('#05070B')
-      } else {
-        Stack() {
-          Rect().width('100%').height('100%').fill(fillColor)
-          Text('等待真实图像').fontSize(14).fontColor($r('app.color.app_text_secondary'))
-        }.layoutWeight(1).width('100%')
-      }
-      Row() {
-        Column({ space: 3 }) {
-          Text(title).fontSize(16).fontWeight(FontWeight.Bold)
-            .fontColor($r('app.color.app_text_primary')).width('100%')
-          Text(subtitle).fontSize(12).fontColor($r('app.color.app_text_secondary')).width('100%')
-        }.layoutWeight(1)
-        Text('4K JPEG').fontSize(12).fontColor($r('app.color.app_brand'))
-      }.width('100%').height(58).padding({ left: 14, right: 14 })
-    }
-    .layoutWeight(1)
-    .height('100%')
-    .backgroundColor($r('app.color.app_background_secondary'))
-    .borderRadius($r('app.float.corner_card'))
-    .clip(true)
-    .border({ width: 1, color: $r('app.color.app_divider') })
-  }
-
-  @Builder
-  private PostMetric(label: string, value: string, color: string) {
-    Row() {
-      Column({ space: 3 }) {
-        Text(label).fontSize(12).fontColor($r('app.color.app_text_secondary')).width('100%')
-        Text(value).fontSize(13).fontWeight(FontWeight.Bold).fontColor(color).width('100%')
-      }.layoutWeight(1)
-    }
-    .layoutWeight(1)
-    .height(58)
-    .padding({ left: 14, right: 14 })
-    .backgroundColor($r('app.color.app_background_secondary'))
-    .borderRadius($r('app.float.corner_card'))
-    .border({ width: 1, color: $r('app.color.app_divider') })
   }
 
   @Builder
@@ -2241,17 +1248,9 @@ struct Index {
     return this.skyViewportWidth < 840 || this.skyViewportHeight < 600;
   }
 
-  private skySearchWidth(): number {
-    if (this.isVeryNarrowSky()) return Math.max(120, this.skyViewportWidth - 112);
-    if (this.useSkyBottomSheet()) return Math.max(170, this.skyViewportWidth - 154);
-    return Math.min(390, Math.max(260, this.skyViewportWidth - 640));
-  }
-
-  private skySearchX(): number {
-    const width: number = this.skySearchWidth();
-    if (this.isVeryNarrowSky()) return 96;
-    if (this.useSkyBottomSheet()) return Math.max(132, this.skyViewportWidth - width - 16);
-    return Math.max(180, (this.skyViewportWidth - width) / 2);
+  private skyBottomControlY(): number {
+    return Math.max(this.skyTopChromeY() + 60,
+      this.skyViewportHeight - (this.useSkyBottomSheet() ? 156 : 76));
   }
 
   private skyDrawerWidth(): number {
@@ -2280,27 +1279,6 @@ struct Index {
     return Math.max(90, this.skyViewportWidth - this.skyDrawerWidth() - 16);
   }
 
-  private skyBottomControlWidth(): number {
-    if (this.useSkyBottomSheet()) {
-      return this.skyViewportWidth < 260 ? Math.max(0, this.skyViewportWidth - 16) :
-        Math.max(240, this.skyViewportWidth - 24);
-    }
-    const reserved: number = this.skyOverlayPanel > 0 ? this.skyDrawerWidth() + 150 : 300;
-    return Math.min(500, Math.max(340, this.skyViewportWidth - reserved));
-  }
-
-  private skyBottomControlX(): number {
-    if (this.useSkyBottomSheet()) return 12;
-    const left: number = 90;
-    const right: number = this.skyOverlayPanel > 0 ? this.skyDrawerX() - 12 : this.skyViewportWidth - 16;
-    return Math.max(left, left + (right - left - this.skyBottomControlWidth()) / 2);
-  }
-
-  private skyBottomControlY(): number {
-    return Math.max(this.skyTopChromeY() + 60,
-      this.skyViewportHeight - (this.useSkyBottomSheet() ? 156 : 76));
-  }
-
   private captureOverlayWidth(): number {
     return Math.min(480, Math.max(0, this.skyViewportWidth - 16));
   }
@@ -2321,17 +1299,9 @@ struct Index {
     return this.isPhoneWorkspace() ? 16 : 32;
   }
 
-  private isVeryNarrowSky(): boolean {
-    return this.useSkyBottomSheet() && this.skyViewportWidth < 360;
-  }
-
   private skyTopChromeY(): number {
-    // 全屏窗口下为状态栏和挖孔保留稳定操作区；画布本身仍延伸到屏幕边缘。
+    // 抽屉和手势预览仍由 Index 持有，必须与 SkyWorkspace 使用同一安全区计算。
     return this.skyViewportHeight < 420 ? 28 : 40;
-  }
-
-  private hasSkyNotice(): boolean {
-    return this.emergencyMessage.length > 0 || this.operationMessage.length > 0;
   }
 
   private navigateToSection(section: number): void {
@@ -2340,6 +1310,22 @@ struct Index {
       this.skyChromeVisible = true;
       if (this.skyMode === 0) this.updateProjectedTargets(true);
     }
+  }
+
+  /** 从设备、任务或后期返回星图时直接打开指定抽屉，不能沿用星图内“再次点击关闭”的切换语义。 */
+  private navigateToSkyPanel(panel: number): void {
+    this.activeSection = 0;
+    this.skyChromeVisible = true;
+    this.skyOverlayPanel = panel;
+    if (panel === 2) this.refreshPlanning();
+    if (this.skyMode === 0) this.updateProjectedTargets(true);
+  }
+
+  private navigateToImmersiveSky(): void {
+    this.activeSection = 0;
+    this.skyOverlayPanel = 0;
+    this.skyChromeVisible = false;
+    if (this.skyMode === 0) this.updateProjectedTargets(true);
   }
 
   private openSkyPanel(panel: number): void {
@@ -2937,17 +1923,6 @@ struct Index {
 
   private pad2(value: number): string {
     return value < 10 ? '0' + value.toString() : value.toString();
-  }
-
-  private deviceLines(): DeviceLine[] {
-    return [
-      { name: '网络', detail: 'StarScope · 10.42.0.20:9999', state: this.connectionText(this.mountConnection), color: this.connectionColor(this.mountConnection) },
-      { name: '机械零位', detail: 'AUX3 / AUX4 常闭原点开关', state: this.mountHomed ? '已回零' : '未回零',
-        color: this.mountHomed ? $r('app.color.app_success') : $r('app.color.app_warning') },
-      { name: '位置时间', detail: this.locationText, state: this.locationSynced ? '已同步' : '待同步',
-        color: this.locationSynced ? $r('app.color.app_success') : $r('app.color.app_warning') },
-      { name: '物理急停', detail: '独立切断电机电源', state: '需人工确认', color: '#E05B64' }
-    ];
   }
 
   private canStartCapture(): boolean {
