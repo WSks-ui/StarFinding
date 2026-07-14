@@ -71,6 +71,8 @@ import {
   GestureInterpreter,
   HandFrameSourceStatus,
   HandLandmarkAnalysisResult,
+  NormalSkyGestureController,
+  NormalSkyGestureUpdate,
   NormalSkyCatalogMetadata,
   NormalSkyCatalogService,
   NormalSkyProjectionService,
@@ -235,6 +237,7 @@ struct Index {
     new NormalSkySceneService(this.visibleStarCatalog, this.normalSkyCatalog);
   private readonly skyDomeSceneService: SkyDomeSceneService = new SkyDomeSceneService();
   private readonly gestureInterpreter: GestureInterpreter = new GestureInterpreter();
+  private readonly normalSkyGestureController: NormalSkyGestureController = new NormalSkyGestureController();
   private readonly handFrameSource: CameraHandFrameSource = new CameraHandFrameSource(
     new UnavailableHandLandmarkAnalyzer(),
     (result: HandLandmarkAnalysisResult) => { this.applyHandLandmarks(result); },
@@ -257,8 +260,6 @@ struct Index {
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
   private lastPanOffsetY: number = 0.0;
-  private lastPinchScale: number = 1.0;
-  private lastRotationAngle: number = 0.0;
   aboutToAppear(): void {
     const arCapability = ArEngineCapabilityService.inspect();
     this.huaweiArViewEnabled = arCapability.available;
@@ -716,34 +717,38 @@ struct Index {
           .onActionStart(() => {
             this.stopNormalInertia();
             this.stopNormalFly();
-            this.lastPinchScale = 1.0;
+            this.normalSkyGestureController.beginPointerScale();
           })
           .onActionUpdate((event: GestureEvent) => {
             if (this.skyMode === 1) {
-              const incrementalScale: number = event.scale / Math.max(0.001, this.lastPinchScale);
-              this.lastPinchScale = event.scale;
-              this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
-                this.normalSkySize(), incrementalScale,
+              const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updatePointerScale(
+                this.normalViewport, this.normalSkySize(), event.scale,
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
-              this.updateNormalScene();
+              if (update.changed) {
+                this.normalViewport = update.viewport;
+                this.updateNormalScene();
+              }
             }
-          }),
+          })
+          .onActionEnd(() => { this.normalSkyGestureController.endPointerScale(); }),
         RotationGesture({ fingers: 2 })
           .onActionStart(() => {
             this.stopNormalInertia();
             this.stopNormalFly();
-            this.lastRotationAngle = 0.0;
+            this.normalSkyGestureController.beginPointerRotation();
           })
           .onActionUpdate((event: GestureEvent) => {
             if (this.skyMode === 1) {
-              const incrementalAngle: number = event.angle - this.lastRotationAngle;
-              this.lastRotationAngle = event.angle;
-              this.normalViewport = NormalSkyProjectionService.rotateAt(this.normalViewport,
-                this.normalSkySize(), incrementalAngle,
+              const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updatePointerRotation(
+                this.normalViewport, this.normalSkySize(), event.angle,
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
-              this.updateNormalScene();
+              if (update.changed) {
+                this.normalViewport = update.viewport;
+                this.updateNormalScene();
+              }
             }
           })
+          .onActionEnd(() => { this.normalSkyGestureController.endPointerRotation(); })
       )
     )
   }
@@ -2316,6 +2321,7 @@ struct Index {
   private clearNormalMotion(): void {
     this.stopNormalInertia();
     this.stopNormalFly();
+    this.normalSkyGestureController.reset();
   }
 
   private startNormalSceneTimer(): void {
@@ -2338,37 +2344,47 @@ struct Index {
     // 关闭开关或切换回 AR 后，丢弃已经在推理队列中的旧帧，避免异步回调继续移动普通星图。
     if (!this.gestureEnabled || this.skyMode !== 1) {
       this.gestureInterpreter.reset();
+      this.normalSkyGestureController.endHandTransform();
       return;
     }
     const frame: GestureFrame = this.gestureInterpreter.interpret(
       result.hands, result.frameReceivedAtMs);
+    let normalSkyChanged: boolean = false;
     if (frame.gesture === HandGesture.DRAG) {
+      this.normalSkyGestureController.endHandTransform();
       this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport, this.normalSkySize(),
         frame.deltaX * this.skyViewportWidth, frame.deltaY * this.skyViewportHeight);
+      normalSkyChanged = true;
       this.gestureStatus = '单掌拖拽';
     } else if (frame.gesture === HandGesture.ROTATE_SCALE) {
       const anchorX: number = frame.selectX * this.skyViewportWidth;
       const anchorY: number = frame.selectY * this.skyViewportHeight;
-      this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
-        this.normalSkySize(), frame.scale, anchorX, anchorY);
-      this.normalViewport = NormalSkyProjectionService.rotateAt(this.normalViewport,
-        this.normalSkySize(), frame.rotationDegrees, anchorX, anchorY);
+      const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updateHandTransform(
+        this.normalViewport, this.normalSkySize(), frame.scale, frame.rotationDegrees, anchorX, anchorY);
+      if (update.changed) {
+        this.normalViewport = update.viewport;
+        normalSkyChanged = true;
+      }
       this.gestureStatus = '双掌旋转 / 缩放';
     } else if (frame.gesture === HandGesture.PINCH_SELECT) {
+      this.normalSkyGestureController.endHandTransform();
       this.selectNearestGestureTarget(
         frame.selectX * this.skyViewportWidth, frame.selectY * this.skyViewportHeight);
       this.gestureStatus = '捏合选择';
     } else if (frame.gesture === HandGesture.FIST_RESET) {
+      this.normalSkyGestureController.endHandTransform();
       this.normalViewport = NormalSkyProjectionService.homeViewport(
         this.normalObserver(Date.now()), this.normalViewport.orientation);
+      normalSkyChanged = true;
       this.gestureStatus = '握拳复位';
     } else if (result.hands.length > 0) {
+      this.normalSkyGestureController.endHandTransform();
       this.gestureStatus = '已检测手部';
     } else {
+      this.normalSkyGestureController.endHandTransform();
       this.gestureStatus = '等待手部进入画面';
     }
-    if (frame.gesture === HandGesture.DRAG || frame.gesture === HandGesture.ROTATE_SCALE ||
-      frame.gesture === HandGesture.FIST_RESET) {
+    if (normalSkyChanged) {
       this.updateNormalScene();
     }
   }

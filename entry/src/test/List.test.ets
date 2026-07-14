@@ -6,6 +6,7 @@ import huaweiArPoseAdapterTest from './HuaweiArPoseAdapter.test';
 import normalSkyProjectionServiceTest from './NormalSkyProjectionService.test';
 import gestureInteractionTest from './GestureInteraction.test';
 import normalSkySceneServiceTest from './NormalSkySceneService.test';
+import normalSkyGestureControllerTest from './NormalSkyGestureController.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -16,4 +17,5 @@ export default function testsuite() {
   normalSkyProjectionServiceTest();
   gestureInteractionTest();
   normalSkySceneServiceTest();
+  normalSkyGestureControllerTest();
 }

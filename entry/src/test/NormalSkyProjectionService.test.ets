@@ -79,6 +79,48 @@ export default function normalSkyProjectionServiceTest(): void {
       expect(AstronomyService.angularSeparation(source, restored) < 0.0001).assertTrue();
     });
 
+    it('连续穿越北天极时画面不会翻转', 0, () => {
+      let current: NormalSkyViewport = viewport(2.0, 87.0, 35.0);
+      const reference: EquatorialCoordinate = coordinate(8.0, 86.0);
+      let previous = NormalSkyProjectionService.project(reference, current, TEST_SIZE);
+      for (let index: number = 0; index < 12; index++) {
+        current = NormalSkyProjectionService.pan(current, TEST_SIZE, 0.0, 34.0);
+        const next = NormalSkyProjectionService.project(reference, current, TEST_SIZE);
+        const deltaX: number = next.xPixels - previous.xPixels;
+        const deltaY: number = next.yPixels - previous.yPixels;
+        expect(Number.isFinite(next.xPixels) && Number.isFinite(next.yPixels)).assertTrue();
+        expect(Math.sqrt(deltaX * deltaX + deltaY * deltaY) < 180.0).assertTrue();
+        previous = next;
+      }
+      expect(current.centerRaHours > 12.0 && current.centerDecDegrees < 90.0).assertTrue();
+    });
+
+    it('连续穿越南天极时画面不会翻转', 0, () => {
+      let current: NormalSkyViewport = viewport(5.0, -87.0, 35.0);
+      const reference: EquatorialCoordinate = coordinate(11.0, -86.0);
+      let previous = NormalSkyProjectionService.project(reference, current, TEST_SIZE);
+      for (let index: number = 0; index < 12; index++) {
+        current = NormalSkyProjectionService.pan(current, TEST_SIZE, 0.0, -34.0);
+        const next = NormalSkyProjectionService.project(reference, current, TEST_SIZE);
+        const deltaX: number = next.xPixels - previous.xPixels;
+        const deltaY: number = next.yPixels - previous.yPixels;
+        expect(Number.isFinite(next.xPixels) && Number.isFinite(next.yPixels)).assertTrue();
+        expect(Math.sqrt(deltaX * deltaX + deltaY * deltaY) < 180.0).assertTrue();
+        previous = next;
+      }
+      expect(current.centerRaHours > 15.0 && current.centerDecDegrees > -90.0).assertTrue();
+    });
+
+    it('精确天极附近平移不产生非有限状态', 0, () => {
+      const northPole: NormalSkyViewport = viewport(2.0, 90.0, 30.0);
+      const moved: NormalSkyViewport = NormalSkyProjectionService.pan(
+        northPole, TEST_SIZE, 18.0, 12.0);
+      expect(Number.isFinite(moved.centerRaHours)).assertTrue();
+      expect(Number.isFinite(moved.centerDecDegrees)).assertTrue();
+      expect(Number.isFinite(moved.rotationDegrees)).assertTrue();
+      expect(moved.centerDecDegrees < 90.0).assertTrue();
+    });
+
     it('视场角被限制在安全范围', 0, () => {
       expect(NormalSkyProjectionService.normalizeViewport(viewport(0.0, 0.0, 2.0)).fieldOfViewDegrees)
         .assertEqual(8.0);

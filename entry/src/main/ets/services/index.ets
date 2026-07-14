@@ -18,3 +18,4 @@ export * from './HuaweiArPoseAdapter';
 export * from './NormalSkyProjectionService';
 export * from './NormalSkyCatalogService';
 export * from './NormalSkySceneService';
+export * from './NormalSkyGestureController';

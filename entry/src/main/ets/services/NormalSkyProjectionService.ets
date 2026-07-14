@@ -134,16 +134,42 @@ export class NormalSkyProjectionService {
   /** 手指移动多少像素，星空就跟随移动多少像素；返回值始终是新的球面中心。 */
   static pan(viewport: NormalSkyViewport, size: SkyMapSize,
     deltaXPixels: number, deltaYPixels: number): NormalSkyViewport {
+    const normalized: NormalSkyViewport = NormalSkyProjectionService.normalizeViewport(viewport);
     const width: number = Math.max(1.0, size.widthPixels);
     const height: number = Math.max(1.0, size.heightPixels);
     const center: EquatorialCoordinate = NormalSkyProjectionService.unproject(
-      width / 2.0 - deltaXPixels, height / 2.0 - deltaYPixels, viewport, size);
+      width / 2.0 - deltaXPixels, height / 2.0 - deltaYPixels, normalized, size);
+    const previousBasis: SkyVector3[] = NormalSkyProjectionService.viewBasis(normalized);
+    const previousCenter: SkyVector3 = previousBasis[0];
+    const nextCenter: SkyVector3 = NormalSkyProjectionService.equatorialVector(center);
+    const rotationRadians: number = normalized.rotationDegrees * Math.PI / 180.0;
+    const previousScreenUp: SkyVector3 = NormalSkyProjectionService.normalizeVector({
+      x: Math.sin(rotationRadians) * previousBasis[1].x + Math.cos(rotationRadians) * previousBasis[2].x,
+      y: Math.sin(rotationRadians) * previousBasis[1].y + Math.cos(rotationRadians) * previousBasis[2].y,
+      z: Math.sin(rotationRadians) * previousBasis[1].z + Math.cos(rotationRadians) * previousBasis[2].z
+    });
+    // 赤经在天极处没有唯一值。这里沿最短球面路径搬动画面“上方”向量，再反算新旋转角，
+    // 使跨越南北天极时方向连续，而不是因赤经跳变 12 小时导致画面瞬间翻转 180 度。
+    const transportedScreenUp: SkyVector3 = NormalSkyProjectionService.transportVector(
+      previousScreenUp, previousCenter, nextCenter);
+    const nextCoordinate: EquatorialCoordinate = NormalSkyProjectionService.vectorCoordinateWithFallback(
+      nextCenter, normalized.centerRaHours);
+    const nextBasis: SkyVector3[] = NormalSkyProjectionService.viewBasis({
+      centerRaHours: nextCoordinate.raHours,
+      centerDecDegrees: nextCoordinate.decDegrees,
+      fieldOfViewDegrees: normalized.fieldOfViewDegrees,
+      rotationDegrees: 0.0,
+      orientation: normalized.orientation
+    });
+    const nextRotation: number = Math.atan2(
+      NormalSkyProjectionService.dot(transportedScreenUp, nextBasis[1]),
+      NormalSkyProjectionService.dot(transportedScreenUp, nextBasis[2])) * 180.0 / Math.PI;
     return NormalSkyProjectionService.normalizeViewport({
-      centerRaHours: center.raHours,
-      centerDecDegrees: center.decDegrees,
-      fieldOfViewDegrees: viewport.fieldOfViewDegrees,
-      rotationDegrees: viewport.rotationDegrees,
-      orientation: viewport.orientation
+      centerRaHours: nextCoordinate.raHours,
+      centerDecDegrees: nextCoordinate.decDegrees,
+      fieldOfViewDegrees: normalized.fieldOfViewDegrees,
+      rotationDegrees: nextRotation,
+      orientation: normalized.orientation
     });
   }
 
@@ -301,6 +327,58 @@ export class NormalSkyProjectionService {
     };
   }
 
+  /** 天极附近沿用上一帧赤经，避免 atan2(0, 0) 的数值噪声改变整套切平面基底。 */
+  private static vectorCoordinateWithFallback(vector: SkyVector3, fallbackRaHours: number): EquatorialCoordinate {
+    const normalized: SkyVector3 = NormalSkyProjectionService.normalizeVector(vector);
+    const horizontalLength: number = Math.sqrt(normalized.x * normalized.x + normalized.y * normalized.y);
+    const raHours: number = horizontalLength < 0.0000001 ?
+      AstronomyService.normalizeHours(fallbackRaHours) :
+      AstronomyService.normalizeHours(Math.atan2(normalized.y, normalized.x) * 12.0 / Math.PI);
+    return {
+      raHours: raHours,
+      decDegrees: Math.atan2(normalized.z, horizontalLength) * 180.0 / Math.PI,
+      epoch: 2000.0
+    };
+  }
+
+  /**
+   * 用把 fromCenter 旋到 toCenter 的最短三维旋转搬运切平面向量。
+   * 单次拖拽不应到达对跖点；仍为该退化情形保留确定轴，确保永不返回 NaN。
+   */
+  private static transportVector(vector: SkyVector3, fromCenter: SkyVector3,
+    toCenter: SkyVector3): SkyVector3 {
+    const cosine: number = NormalSkyProjectionService.clamp(
+      NormalSkyProjectionService.dot(fromCenter, toCenter), -1.0, 1.0);
+    const cross: SkyVector3 = NormalSkyProjectionService.cross(fromCenter, toCenter);
+    const sine: number = Math.sqrt(NormalSkyProjectionService.dot(cross, cross));
+    if (sine < 0.0000001) {
+      if (cosine >= 0.0) {
+        return vector;
+      }
+      return NormalSkyProjectionService.rotateAroundAxis(vector,
+        NormalSkyProjectionService.normalizeVector(vector), Math.PI);
+    }
+    const axis: SkyVector3 = {
+      x: cross.x / sine,
+      y: cross.y / sine,
+      z: cross.z / sine
+    };
+    return NormalSkyProjectionService.normalizeVector(
+      NormalSkyProjectionService.rotateAroundAxis(vector, axis, Math.atan2(sine, cosine)));
+  }
+
+  private static rotateAroundAxis(vector: SkyVector3, axis: SkyVector3, angleRadians: number): SkyVector3 {
+    const cosine: number = Math.cos(angleRadians);
+    const sine: number = Math.sin(angleRadians);
+    const axisDot: number = NormalSkyProjectionService.dot(axis, vector);
+    const axisCross: SkyVector3 = NormalSkyProjectionService.cross(axis, vector);
+    return {
+      x: vector.x * cosine + axisCross.x * sine + axis.x * axisDot * (1.0 - cosine),
+      y: vector.y * cosine + axisCross.y * sine + axis.y * axisDot * (1.0 - cosine),
+      z: vector.z * cosine + axisCross.z * sine + axis.z * axisDot * (1.0 - cosine)
+    };
+  }
+
   private static pixelScale(viewport: NormalSkyViewport, size: SkyMapSize): number {
     const halfFieldRadians: number = viewport.fieldOfViewDegrees * Math.PI / 360.0;
     const planeHalfWidth: number = 2.0 * Math.tan(halfFieldRadians / 2.0);
@@ -348,6 +426,14 @@ export class NormalSkyProjectionService {
 
   private static dot(first: SkyVector3, second: SkyVector3): number {
     return first.x * second.x + first.y * second.y + first.z * second.z;
+  }
+
+  private static cross(first: SkyVector3, second: SkyVector3): SkyVector3 {
+    return {
+      x: first.y * second.z - first.z * second.y,
+      y: first.z * second.x - first.x * second.z,
+      z: first.x * second.y - first.y * second.x
+    };
   }
 
   private static normalizeSignedDegrees(value: number): number {
