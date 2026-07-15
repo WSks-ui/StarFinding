@@ -6,6 +6,24 @@ export enum SkyMapOrientation {
   HORIZON_ZENITH = 'horizon_zenith'
 }
 
+export enum NormalSkyTimeMode {
+  REALTIME = 'realtime',
+  SIMULATED = 'simulated'
+}
+
+export enum NormalSkyPlaybackSpeed {
+  HOUR_PER_SECOND = 3600,
+  DAY_PER_SECOND = 86400,
+  WEEK_PER_SECOND = 604800
+}
+
+export interface NormalSkyTimeState {
+  mode: NormalSkyTimeMode;
+  timestampMs: number;
+  playing: boolean;
+  speed: NormalSkyPlaybackSpeed;
+}
+
 /** 四元数视图状态生成的只读投影快照，供 Canvas、方向辅助和控件显示使用。 */
 export interface NormalSkyViewport {
   centerRaHours: number;
@@ -109,7 +127,8 @@ export enum SkyPolylineKind {
   CONSTELLATION = 'constellation',
   GRID = 'grid',
   ECLIPTIC = 'ecliptic',
-  HORIZON = 'horizon'
+  HORIZON = 'horizon',
+  TRAJECTORY = 'trajectory'
 }
 
 /** 天体在普通星图中的语义图符。图符用于辨识，不代表目标的真实角直径。 */
@@ -167,6 +186,7 @@ export interface NormalSkyScene {
   gridLines: SkyPolyline[];
   eclipticLines: SkyPolyline[];
   horizonLines: SkyPolyline[];
+  trajectoryLines: SkyPolyline[];
   horizonMask: SkyScreenRect[];
   orientationSnapshot: SkyOrientationSnapshot;
   generatedAtMs: number;

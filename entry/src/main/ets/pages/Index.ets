@@ -6,6 +6,7 @@ import lazy { HuaweiArCameraView } from '../components/HuaweiArCameraView';
 import { NormalSkyControls } from '../components/NormalSkyControls';
 import { NormalSkyMap } from '../components/NormalSkyMap';
 import { NormalSkyOrientationOverlay } from '../components/NormalSkyOrientationOverlay';
+import { NormalSkyTimeControls } from '../components/NormalSkyTimeControls';
 import { PostWorkspace } from '../components/PostWorkspace';
 import { SkyWorkspace } from '../components/SkyWorkspace';
 import { TaskWorkspace } from '../components/TaskWorkspace';
@@ -32,6 +33,9 @@ import {
   MountState,
   MountTargetCoordinate,
   NormalSkyScene,
+  NormalSkyPlaybackSpeed,
+  NormalSkyTimeMode,
+  NormalSkyTimeState,
   NormalSkyViewState,
   NormalSkyViewport,
   ObservationPlanningConstraints,
@@ -84,6 +88,7 @@ import {
   NormalSkyCatalogService,
   NormalSkyProjectionService,
   NormalSkySceneService,
+  NormalSkyTimeService,
   NormalSkyViewStateService,
   ObserverLocationResult,
   ObserverLocationService,
@@ -130,6 +135,7 @@ function emptyNormalSkyScene(): NormalSkyScene {
     gridLines: [],
     eclipticLines: [],
     horizonLines: [],
+    trajectoryLines: [],
     horizonMask: [],
     orientationSnapshot: {
       orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP,
@@ -159,6 +165,7 @@ struct Index {
     NormalSkyViewStateService.defaultState());
   @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
   @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
+  @State private normalTimeState: NormalSkyTimeState = NormalSkyTimeService.realtime();
   @State private normalLayerPanelOpen: boolean = false;
   @State private skyViewportWidth: number = 600;
   @State private skyViewportHeight: number = 500;
@@ -276,6 +283,7 @@ struct Index {
   // 每次开始拍摄分配一个代次；取消或急停递增代次，使所有 await 之后的旧流程立即失效。
   private captureRunGeneration: number = 0;
   private normalSceneTimer: number = -1;
+  private normalTimeLastTickMs: number = 0;
   private normalSceneUpdateTimer: number = -1;
   private normalInertiaTimer: number = -1;
   private normalFlyTimer: number = -1;
@@ -623,6 +631,7 @@ struct Index {
       skyCanvas: (): void => { this.SkyCanvas(); },
       gesturePreview: (): void => { this.SkyGesturePreview(); },
       normalControls: (): void => { this.NormalSkyControlOverlay(); },
+      normalTimeControls: (): void => { this.NormalSkyTimeOverlay(); },
       normalOrientation: (): void => { this.NormalSkyDirectionOverlay(); },
       targetDrawer: (): void => { this.SkyTargetDrawer(); },
       planningDrawer: (): void => { this.SkyPlanningDrawer(); },
@@ -802,6 +811,22 @@ struct Index {
         this.setNormalSkyFieldOfView(fieldOfViewDegrees);
       },
       onLayerChange: (layer: number, enabled: boolean): void => { this.setNormalLayer(layer, enabled); }
+    })
+  }
+
+  @Builder
+  private NormalSkyTimeOverlay() {
+    NormalSkyTimeControls({
+      timeState: this.normalTimeState,
+      viewportWidth: this.skyViewportWidth,
+      viewportHeight: this.skyViewportHeight,
+      compact: this.useSkyBottomSheet(),
+      onReturnNow: (): void => { this.returnNormalSkyToRealtime(); },
+      onTogglePlayback: (): void => { this.toggleNormalSkyPlayback(); },
+      onTimeSelected: (timestampMs: number): void => { this.selectNormalSkyTime(timestampMs); },
+      onSpeedSelected: (speed: NormalSkyPlaybackSpeed): void => {
+        this.setNormalSkyPlaybackSpeed(speed);
+      }
     })
   }
 
@@ -1465,6 +1490,14 @@ struct Index {
 
   private selectSkyMode(mode: number): void {
     if (mode === this.skyMode) return;
+    const leavingSimulatedTime: boolean = mode === 0 &&
+      this.normalTimeState.mode === NormalSkyTimeMode.SIMULATED;
+    if (leavingSimulatedTime) {
+      this.normalTimeState = NormalSkyTimeService.realtime(Date.now());
+      this.operationMessage = 'AR 星图始终使用真实当前时间，已自动退出模拟时间';
+    } else if (mode === 1 && this.normalTimeState.mode === NormalSkyTimeMode.REALTIME) {
+      this.normalTimeState = NormalSkyTimeService.realtime(Date.now());
+    }
     this.getUIContext().animateTo(MotionTokens.standard(), () => {
       this.skyMode = mode;
     });
@@ -1559,7 +1592,7 @@ struct Index {
   }
 
   private selectedCoordinate(): EquatorialCoordinate | undefined {
-    return EphemerisService.skyCoordinate(this.selectedTarget(), Date.now());
+    return EphemerisService.skyCoordinate(this.selectedTarget(), this.activeSkyTimestampMs());
   }
 
   private selectedHorizontal(): HorizontalCoordinate | undefined {
@@ -1570,7 +1603,7 @@ struct Index {
       latitudeDegrees: this.observer.latitudeDegrees,
       longitudeDegrees: this.observer.longitudeDegrees,
       elevationMeters: this.observer.elevationMeters,
-      timestampMs: Date.now()
+      timestampMs: this.activeSkyTimestampMs()
     };
     return EphemerisService.horizontalCoordinate(
       this.selectedTarget(), currentObserver, currentObserver.timestampMs, RefractionMode.NORMAL);
@@ -2072,8 +2105,12 @@ struct Index {
   }
 
   private currentTimeText(): string {
-    const now = new Date();
-    return this.pad2(now.getHours()) + ':' + this.pad2(now.getMinutes());
+    const date: Date = new Date(this.activeSkyTimestampMs());
+    return this.pad2(date.getHours()) + ':' + this.pad2(date.getMinutes());
+  }
+
+  private activeSkyTimestampMs(): number {
+    return this.skyMode === 1 ? this.normalTimeState.timestampMs : Date.now();
   }
 
   private pad2(value: number): string {
@@ -2083,7 +2120,8 @@ struct Index {
   private canStartCapture(): boolean {
     if (this.operationBusy || this.mountConnection !== ConnectionState.CONNECTED ||
       !this.mountHomed || !this.mountCoordinatesTopocentric || !this.selectedTarget().gotoAllowed ||
-      this.selectedTarget().id === 'solar-sun') {
+      this.selectedTarget().id === 'solar-sun' ||
+      (this.skyMode === 1 && this.normalTimeState.mode === NormalSkyTimeMode.SIMULATED)) {
       return false;
     }
     const horizontal: HorizontalCoordinate | undefined = this.selectedHorizontal();
@@ -2096,6 +2134,9 @@ struct Index {
   private captureReadinessText(): string {
     if (this.operationBusy) return '正在执行设备操作，请稍候';
     if (this.mountConnection !== ConnectionState.CONNECTED) return '请先连接 OnStepX 赤道仪';
+    if (this.skyMode === 1 && this.normalTimeState.mode === NormalSkyTimeMode.SIMULATED) {
+      return '模拟时间只用于浏览和规划，立即观测/拍摄已禁用';
+    }
     if (!this.mountCoordinatesTopocentric) return '固件坐标模式不是 TOPOCENTRIC(1)，自动运动已锁定';
     if (!this.mountHomed) return '自动运动前必须完成两轴回零';
     if (this.observer === undefined) return '需要系统定位才能计算目标方向';
@@ -2211,7 +2252,7 @@ struct Index {
   }
 
   private rebuildNormalScene(): void {
-    const timestampMs: number = Date.now();
+    const timestampMs: number = this.normalTimeState.timestampMs;
     this.normalScene = this.normalSkySceneService.build({
       viewport: this.normalViewport,
       size: this.normalSkySize(),
@@ -2269,14 +2310,14 @@ struct Index {
   private homeNormalSky(): void {
     this.clearNormalMotion();
     this.applyNormalViewState(NormalSkyViewStateService.home(
-      this.normalObserver(Date.now()), this.normalViewState.orientation));
+      this.normalObserver(this.normalTimeState.timestampMs), this.normalViewState.orientation));
     this.updateNormalScene();
   }
 
   private resetNormalSkyNorth(): void {
     this.clearNormalMotion();
     this.applyNormalViewState(NormalSkyViewStateService.resetNorth(
-      this.normalViewState, this.normalObserver(Date.now())));
+      this.normalViewState, this.normalObserver(this.normalTimeState.timestampMs)));
     this.updateNormalScene();
   }
 
@@ -2286,13 +2327,41 @@ struct Index {
       this.normalViewState.orientation === SkyMapOrientation.EQUATORIAL_NORTH_UP ?
         SkyMapOrientation.HORIZON_ZENITH : SkyMapOrientation.EQUATORIAL_NORTH_UP;
     this.applyNormalViewState(NormalSkyViewStateService.home(
-      this.normalObserver(Date.now()), orientation));
+      this.normalObserver(this.normalTimeState.timestampMs), orientation));
     if (orientation === SkyMapOrientation.HORIZON_ZENITH && this.observer === undefined) {
       this.operationMessage = '地平线需要观测地点；当前仍可浏览完整离线天球';
     } else {
       this.operationMessage = orientation === SkyMapOrientation.HORIZON_ZENITH ?
         '已切换为天顶居中的地平视图' : '已切换为北上东左的赤道视图';
     }
+    this.updateNormalScene();
+  }
+
+  private returnNormalSkyToRealtime(): void {
+    this.normalTimeState = NormalSkyTimeService.realtime(Date.now());
+    this.operationMessage = '普通星图已回到真实当前时间';
+    this.updateNormalScene();
+  }
+
+  private selectNormalSkyTime(timestampMs: number): void {
+    this.clearNormalMotion();
+    this.normalTimeState = NormalSkyTimeService.selectTime(
+      this.normalTimeState, timestampMs);
+    this.operationMessage = '已进入模拟时间；设备 GOTO、同步和拍摄保持禁用';
+    this.updateNormalScene();
+  }
+
+  private toggleNormalSkyPlayback(): void {
+    this.normalTimeState = NormalSkyTimeService.togglePlayback(this.normalTimeState);
+    this.normalTimeLastTickMs = Date.now();
+    this.operationMessage = this.normalTimeState.playing ?
+      '模拟时间正在播放；设备操作保持禁用' : '模拟时间已暂停';
+    this.updateNormalScene();
+  }
+
+  private setNormalSkyPlaybackSpeed(speed: NormalSkyPlaybackSpeed): void {
+    this.normalTimeState = NormalSkyTimeService.setSpeed(this.normalTimeState, speed);
+    this.normalTimeLastTickMs = Date.now();
     this.updateNormalScene();
   }
 
@@ -2430,11 +2499,26 @@ struct Index {
 
   private startNormalSceneTimer(): void {
     this.clearNormalSceneTimer();
+    this.normalTimeLastTickMs = Date.now();
     this.normalSceneTimer = setInterval(() => {
-      if (this.activeSection === 0 && this.skyMode === 1) {
-        this.updateNormalScene();
+      const nowMs: number = Date.now();
+      if (this.activeSection !== 0 || this.skyMode !== 1) {
+        this.normalTimeLastTickMs = nowMs;
+        return;
       }
-    }, 60000);
+      const elapsedMs: number = Math.max(0.0, nowMs - this.normalTimeLastTickMs);
+      this.normalTimeLastTickMs = nowMs;
+      if (this.normalTimeState.mode === NormalSkyTimeMode.SIMULATED && this.normalTimeState.playing) {
+        this.normalTimeState = NormalSkyTimeService.tick(
+          this.normalTimeState, elapsedMs, nowMs);
+        this.scheduleNormalSceneUpdate();
+      } else if (this.normalTimeState.mode === NormalSkyTimeMode.REALTIME &&
+        nowMs - this.normalTimeState.timestampMs >= 1000.0) {
+        this.normalTimeState = NormalSkyTimeService.tick(
+          this.normalTimeState, elapsedMs, nowMs);
+        if (nowMs - this.normalScene.generatedAtMs >= 60000.0) this.scheduleNormalSceneUpdate();
+      }
+    }, 100);
   }
 
   private clearNormalSceneTimer(): void {
@@ -2443,6 +2527,7 @@ struct Index {
       clearInterval(this.normalSceneTimer);
       this.normalSceneTimer = -1;
     }
+    this.normalTimeLastTickMs = 0;
   }
 
   private applyHandLandmarks(result: HandLandmarkAnalysisResult): void {
@@ -2480,7 +2565,7 @@ struct Index {
     } else if (frame.gesture === HandGesture.FIST_RESET) {
       this.normalSkyGestureController.endHandTransform();
       this.applyNormalViewState(NormalSkyViewStateService.home(
-        this.normalObserver(Date.now()), this.normalViewState.orientation));
+        this.normalObserver(this.normalTimeState.timestampMs), this.normalViewState.orientation));
       normalSkyChanged = true;
       this.gestureStatus = '握拳复位';
     } else if (result.hands.length > 0) {

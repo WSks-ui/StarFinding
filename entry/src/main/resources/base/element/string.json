@@ -43,6 +43,34 @@
     {
       "name": "normal_sky_field_of_view",
       "value": "视场范围"
+    },
+    {
+      "name": "normal_sky_time_realtime",
+      "value": "实时"
+    },
+    {
+      "name": "normal_sky_time_simulated",
+      "value": "模拟"
+    },
+    {
+      "name": "normal_sky_time_now",
+      "value": "回到现在"
+    },
+    {
+      "name": "normal_sky_time_select",
+      "value": "选择日期与时间"
+    },
+    {
+      "name": "normal_sky_time_hour_speed",
+      "value": "1小时/秒"
+    },
+    {
+      "name": "normal_sky_time_day_speed",
+      "value": "1天/秒"
+    },
+    {
+      "name": "normal_sky_time_week_speed",
+      "value": "7天/秒"
     }
   ]
 }

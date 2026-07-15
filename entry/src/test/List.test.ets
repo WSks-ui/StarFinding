@@ -11,6 +11,7 @@ import normalSkyOrientationServiceTest from './NormalSkyOrientationService.test'
 import normalSkyLayoutServiceTest from './NormalSkyLayoutService.test';
 import ephemerisServiceTest from './EphemerisService.test';
 import normalSkyViewStateServiceTest from './NormalSkyViewStateService.test';
+import normalSkyTimeServiceTest from './NormalSkyTimeService.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -26,4 +27,5 @@ export default function testsuite() {
   normalSkyLayoutServiceTest();
   ephemerisServiceTest();
   normalSkyViewStateServiceTest();
+  normalSkyTimeServiceTest();
 }

@@ -1,5 +1,8 @@
 import { CelestialCatalog } from '../data/CelestialCatalog';
 import {
+  ApparentTrajectory,
+  ApparentTrajectoryPoint,
+  CatalogPrecision,
   CelestialObject,
   CelestialType,
   EquatorialCoordinate,
@@ -70,6 +73,7 @@ export class NormalSkySceneService {
       gridLines: query.layers.equatorialGrid ? this.buildEquatorialGrid(query) : [],
       eclipticLines: query.layers.ecliptic ? this.buildEcliptic(query) : [],
       horizonLines: query.layers.horizon && query.observer !== undefined ? this.buildHorizon(query) : [],
+      trajectoryLines: query.layers.solarSystem ? this.buildSelectedTrajectory(query) : [],
       horizonMask: query.layers.horizon && query.observer !== undefined ? this.buildHorizonMask(query) : [],
       orientationSnapshot: NormalSkyOrientationService.build({
         viewport: query.viewport,
@@ -252,6 +256,23 @@ export class NormalSkySceneService {
     }
     const result: SkyPolyline[] = [];
     this.appendProjectedLine(result, 'horizon', SkyPolylineKind.HORIZON, line, query);
+    return result;
+  }
+
+  private buildSelectedTrajectory(query: NormalSkySceneQuery): SkyPolyline[] {
+    const target: CelestialObject | undefined = CelestialCatalog.getById(query.selectedTargetId);
+    if (target === undefined || target.precision !== CatalogPrecision.DYNAMIC) return [];
+    const trajectory: ApparentTrajectory | undefined = EphemerisService.trajectory(
+      target, query.timestampMs);
+    if (trajectory === undefined) return [];
+    const coordinates: EquatorialCoordinate[] = [];
+    for (let index: number = 0; index < trajectory.points.length; index++) {
+      const point: ApparentTrajectoryPoint = trajectory.points[index];
+      coordinates.push(point.coordinate);
+    }
+    const result: SkyPolyline[] = [];
+    this.appendProjectedLine(result, `trajectory-${target.id}`,
+      SkyPolylineKind.TRAJECTORY, coordinates, query);
     return result;
   }
 

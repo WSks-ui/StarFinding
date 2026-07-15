@@ -56,6 +56,7 @@ export struct SkyWorkspace {
   @BuilderParam skyCanvas: () => void = this.EmptyBuilder;
   @BuilderParam gesturePreview: () => void = this.EmptyBuilder;
   @BuilderParam normalControls: () => void = this.EmptyBuilder;
+  @BuilderParam normalTimeControls: () => void = this.EmptyBuilder;
   @BuilderParam normalOrientation: () => void = this.EmptyBuilder;
   @BuilderParam targetDrawer: () => void = this.EmptyBuilder;
   @BuilderParam planningDrawer: () => void = this.EmptyBuilder;
@@ -97,6 +98,7 @@ export struct SkyWorkspace {
 
         if (this.skyMode === 1 && this.overlayPanel === 0) {
           this.normalControls()
+          this.normalTimeControls()
         }
 
         if (this.skyMode === 1 && this.gestureEnabled &&

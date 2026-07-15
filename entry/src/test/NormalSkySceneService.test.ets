@@ -10,6 +10,7 @@ import {
 import { NormalSkyCatalogService } from '../main/ets/services/NormalSkyCatalogService';
 import { NormalSkyProjectionService } from '../main/ets/services/NormalSkyProjectionService';
 import { NormalSkySceneService } from '../main/ets/services/NormalSkySceneService';
+import { EphemerisService } from '../main/ets/services/EphemerisService';
 import { VisibleStarCatalogService } from '../main/ets/services/VisibleStarCatalogService';
 
 export default function normalSkySceneServiceTest(): void {
@@ -73,6 +74,36 @@ export default function normalSkySceneServiceTest(): void {
       const saturn: CelestialObject | undefined = CelestialCatalog.getById('planet-saturn');
       expect(saturn !== undefined &&
         NormalSkySceneService.glyphKindFor(saturn) === SkyObjectGlyphKind.SATURN).assertTrue();
+    });
+
+    it('选中动态天体时绘制真实视运动轨迹', 0, () => {
+      const timestampMs: number = Date.UTC(2026, 6, 15, 0, 0, 0);
+      const mars: CelestialObject | undefined = CelestialCatalog.getById('planet-mars');
+      if (mars === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const coordinate = EphemerisService.skyCoordinate(mars, timestampMs);
+      if (coordinate === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const service: NormalSkySceneService = new NormalSkySceneService(
+        new VisibleStarCatalogService(), new NormalSkyCatalogService());
+      const scene = service.build({
+        viewport: {
+          centerRaHours: coordinate.raHours,
+          centerDecDegrees: coordinate.decDegrees,
+          fieldOfViewDegrees: 90.0,
+          rotationDegrees: 0.0,
+          orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+        },
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: mars.id,
+        timestampMs: timestampMs
+      });
+      expect(scene.trajectoryLines.length > 0 && scene.trajectoryLines[0].points.length > 1).assertTrue();
     });
 
     it('一百一十个梅西耶目标均映射为深空图符', 0, () => {

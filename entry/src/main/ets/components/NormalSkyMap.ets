@@ -73,6 +73,7 @@ export struct NormalSkyMap {
     this.drawPolylines(this.scene.gridLines, '#29404E', 0.48, 0.7);
     this.drawPolylines(this.scene.eclipticLines, '#B69955', 0.68, 1.0);
     this.drawPolylines(this.scene.constellationLines, '#426B82', 0.76, 1.1);
+    this.drawTrajectoryLines(this.scene.trajectoryLines);
     this.drawHorizonMask(this.scene.horizonMask);
     this.drawPolylines(this.scene.horizonLines, '#78C9C5', 0.88, 1.4);
     this.drawObjects(this.scene.objects, width, height);
@@ -99,6 +100,29 @@ export struct NormalSkyMap {
       }
       this.context.stroke();
     }
+    this.context.restore();
+  }
+
+  /** 真实视运动轨迹使用虚线，避免被误解成固定圆形行星轨道。 */
+  private drawTrajectoryLines(lines: SkyPolyline[]): void {
+    this.context.save();
+    this.context.strokeStyle = '#7DE5EA';
+    this.context.globalAlpha = 0.78;
+    this.context.lineWidth = 1.4;
+    this.context.lineCap = 'round';
+    this.context.lineJoin = 'round';
+    this.context.setLineDash([6.0, 4.0]);
+    for (let index: number = 0; index < lines.length; index++) {
+      const points: SkyScreenPoint[] = lines[index].points;
+      if (points.length < 2) continue;
+      this.context.beginPath();
+      this.context.moveTo(points[0].xPixels, points[0].yPixels);
+      for (let pointIndex: number = 1; pointIndex < points.length; pointIndex++) {
+        this.context.lineTo(points[pointIndex].xPixels, points[pointIndex].yPixels);
+      }
+      this.context.stroke();
+    }
+    this.context.setLineDash([]);
     this.context.restore();
   }
 

@@ -18,6 +18,7 @@ export * from './ArEngineCapabilityService';
 export * from './HuaweiArPoseAdapter';
 export * from './NormalSkyProjectionService';
 export * from './NormalSkyViewStateService';
+export * from './NormalSkyTimeService';
 export * from './NormalSkyCatalogService';
 export * from './NormalSkySceneService';
 export * from './NormalSkyGestureController';
