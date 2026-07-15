@@ -14,6 +14,7 @@ import normalSkyViewStateServiceTest from './NormalSkyViewStateService.test';
 import normalSkyTimeServiceTest from './NormalSkyTimeService.test';
 import observationExecutionPolicyTest from './ObservationExecutionPolicy.test';
 import planningPeriodServiceTest from './PlanningPeriodService.test';
+import deviceReadinessServiceTest from './DeviceReadinessService.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -32,4 +33,5 @@ export default function testsuite() {
   normalSkyTimeServiceTest();
   observationExecutionPolicyTest();
   planningPeriodServiceTest();
+  deviceReadinessServiceTest();
 }
