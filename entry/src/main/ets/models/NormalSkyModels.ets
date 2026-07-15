@@ -1,4 +1,4 @@
-import { CelestialType, EquatorialCoordinate } from './DomainModels';
+import { CelestialType, EquatorialCoordinate, SolarSystemAppearance } from './DomainModels';
 
 /** 普通星图的方向约定。地平视图不跟随设备姿态，只跟随观测位置和时间。 */
 export enum SkyMapOrientation {
@@ -173,6 +173,10 @@ export interface ProjectedSkyObject {
   hitRadiusPixels: number;
   hitPriority: number;
   magnitude?: number;
+  /** 动态太阳系目标在当前场景时刻的真实外观；图符仍为非角直径比例的语义绘制。 */
+  appearance?: SolarSystemAppearance;
+  /** 亮边相对屏幕正上方的顺时针角度，已经包含宽视场投影和视口旋转。 */
+  brightLimbScreenAngleDegrees?: number;
   label: string;
   designation: string;
   color: string;

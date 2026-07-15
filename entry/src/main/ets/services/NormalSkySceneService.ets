@@ -8,7 +8,8 @@ import {
   EquatorialCoordinate,
   EquatorialFrame,
   ObserverState,
-  RefractionMode
+  RefractionMode,
+  SolarSystemAppearance
 } from '../models/DomainModels';
 import {
   NormalSkyProjection,
@@ -152,6 +153,8 @@ export class NormalSkySceneService {
         continue;
       }
       const selected: boolean = object.id === query.selectedTargetId;
+      const appearance: SolarSystemAppearance | undefined = EphemerisService.appearance(
+        object, query.timestampMs);
       result.push({
         id: object.id,
         type: object.type,
@@ -162,7 +165,10 @@ export class NormalSkySceneService {
         sizePixels: this.objectSize(object, selected, query.viewport.fieldOfViewDegrees),
         hitRadiusPixels: object.type === CelestialType.CONSTELLATION ? 24.0 : 20.0,
         hitPriority: selected ? 100 : this.hitPriority(object.type),
-        magnitude: object.magnitude,
+        magnitude: appearance === undefined ? object.magnitude : appearance.magnitude,
+        appearance: appearance,
+        brightLimbScreenAngleDegrees: appearance === undefined ? undefined :
+          this.brightLimbScreenAngle(coordinate, appearance.brightLimbAngleDegrees, query),
         label: this.objectLabel(object, query.viewport.fieldOfViewDegrees, selected),
         designation: object.designation,
         color: this.objectColor(object),
@@ -441,6 +447,41 @@ export class NormalSkySceneService {
     if (object.type === CelestialType.MESSIER) return '#67D4B1';
     if (object.type === CelestialType.CONSTELLATION) return '#86A9C4';
     return '#FFFFFF';
+  }
+
+  /**
+   * Astronomy Engine 的亮边角以天球北向为零、向东递增；Canvas 需要屏幕正上方为零。
+   * 通过目标附近的球面短弧重新投影，可同时吸收视口旋转和宽视场边缘的局部扭曲。
+   */
+  private brightLimbScreenAngle(coordinate: EquatorialCoordinate, positionAngleDegrees: number,
+    query: NormalSkySceneQuery): number {
+    const source: NormalSkyProjection = NormalSkyProjectionService.project(
+      coordinate, query.viewport, query.size);
+    const distanceRadians: number = 0.25 * Math.PI / 180.0;
+    const positionRadians: number = positionAngleDegrees * Math.PI / 180.0;
+    const sourceRa: number = coordinate.raHours * Math.PI / 12.0;
+    const sourceDec: number = coordinate.decDegrees * Math.PI / 180.0;
+    const destinationDec: number = Math.asin(
+      Math.sin(sourceDec) * Math.cos(distanceRadians) +
+      Math.cos(sourceDec) * Math.sin(distanceRadians) * Math.cos(positionRadians));
+    const deltaRa: number = Math.atan2(
+      Math.sin(positionRadians) * Math.sin(distanceRadians) * Math.cos(sourceDec),
+      Math.cos(distanceRadians) - Math.sin(sourceDec) * Math.sin(destinationDec));
+    const destination: EquatorialCoordinate = {
+      raHours: AstronomyService.normalizeHours((sourceRa + deltaRa) * 12.0 / Math.PI),
+      decDegrees: destinationDec * 180.0 / Math.PI,
+      frame: coordinate.frame,
+      validAtMs: coordinate.validAtMs
+    };
+    const projectedDestination: NormalSkyProjection = NormalSkyProjectionService.project(
+      destination, query.viewport, query.size);
+    const deltaX: number = projectedDestination.xPixels - source.xPixels;
+    const deltaY: number = projectedDestination.yPixels - source.yPixels;
+    if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY) ||
+      Math.abs(deltaX) + Math.abs(deltaY) < 0.000001) {
+      return query.viewport.rotationDegrees - positionAngleDegrees;
+    }
+    return Math.atan2(deltaX, -deltaY) * 180.0 / Math.PI;
   }
 
   static glyphKindFor(object: CelestialObject): SkyObjectGlyphKind {

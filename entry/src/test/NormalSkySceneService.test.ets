@@ -3,7 +3,9 @@ import { CelestialCatalog } from '../main/ets/data/CelestialCatalog';
 import { CelestialObject, ObserverState } from '../main/ets/models/DomainModels';
 import {
   DEFAULT_SKY_LAYERS,
+  NormalSkyScene,
   NormalSkyViewport,
+  ProjectedSkyObject,
   SkyMapOrientation,
   SkyObjectGlyphKind
 } from '../main/ets/models/NormalSkyModels';
@@ -12,6 +14,13 @@ import { NormalSkyProjectionService } from '../main/ets/services/NormalSkyProjec
 import { NormalSkySceneService } from '../main/ets/services/NormalSkySceneService';
 import { EphemerisService } from '../main/ets/services/EphemerisService';
 import { VisibleStarCatalogService } from '../main/ets/services/VisibleStarCatalogService';
+
+function findProjected(objects: ProjectedSkyObject[], objectId: string): ProjectedSkyObject | undefined {
+  for (let index: number = 0; index < objects.length; index++) {
+    if (objects[index].id === objectId) return objects[index];
+  }
+  return undefined;
+}
 
 export default function normalSkySceneServiceTest(): void {
   describe('普通星图场景合成', () => {
@@ -74,6 +83,43 @@ export default function normalSkySceneServiceTest(): void {
       const saturn: CelestialObject | undefined = CelestialCatalog.getById('planet-saturn');
       expect(saturn !== undefined &&
         NormalSkySceneService.glyphKindFor(saturn) === SkyObjectGlyphKind.SATURN).assertTrue();
+    });
+
+    it('动态目标携带真实外观与亮边屏幕方向', 0, () => {
+      const timestampMs: number = Date.UTC(2026, 6, 15, 0, 0, 0);
+      const saturn: CelestialObject | undefined = CelestialCatalog.getById('planet-saturn');
+      if (saturn === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const coordinate = EphemerisService.skyCoordinate(saturn, timestampMs);
+      if (coordinate === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const service: NormalSkySceneService = new NormalSkySceneService(
+        new VisibleStarCatalogService(), new NormalSkyCatalogService());
+      const scene: NormalSkyScene = service.build({
+        viewport: {
+          centerRaHours: coordinate.raHours,
+          centerDecDegrees: coordinate.decDegrees,
+          fieldOfViewDegrees: 30.0,
+          rotationDegrees: 31.0,
+          orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+        },
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: saturn.id,
+        timestampMs: timestampMs
+      });
+      const projected: ProjectedSkyObject | undefined = findProjected(scene.objects, saturn.id);
+      expect(projected !== undefined && projected.appearance !== undefined).assertTrue();
+      if (projected === undefined || projected.appearance === undefined) return;
+      expect(projected.magnitude !== undefined &&
+        Math.abs(projected.magnitude - projected.appearance.magnitude) < 0.0001).assertTrue();
+      expect(projected.appearance.ringTiltDegrees !== undefined).assertTrue();
+      expect(projected.brightLimbScreenAngleDegrees !== undefined &&
+        Number.isFinite(projected.brightLimbScreenAngleDegrees)).assertTrue();
     });
 
     it('选中动态天体时绘制真实视运动轨迹', 0, () => {

@@ -218,29 +218,41 @@ export struct NormalSkyMap {
       return;
     }
     if (object.glyphKind === SkyObjectGlyphKind.MOON) {
-      this.drawDisc(object.xPixels, object.yPixels, radius, object.color, opacity);
-      this.context.globalAlpha = opacity * 0.72;
-      this.context.fillStyle = '#66717D';
-      this.context.beginPath();
-      this.context.arc(object.xPixels, object.yPixels, radius, -Math.PI / 2.0, Math.PI / 2.0);
-      this.context.lineTo(object.xPixels, object.yPixels - radius);
-      this.context.closePath();
-      this.context.fill();
+      this.drawPhaseGlyph(object, radius, opacity, '#27313B');
+      this.drawMoonTexture(object.xPixels, object.yPixels, radius, opacity);
       return;
     }
     if (object.glyphKind === SkyObjectGlyphKind.SATURN) {
-      this.context.globalAlpha = opacity * 0.92;
-      this.context.strokeStyle = object.color;
-      this.context.lineWidth = Math.max(1.1, radius * 0.16);
-      this.ellipsePath(object.xPixels, object.yPixels, radius * 1.72, radius * 0.58);
+      const ringTiltDegrees: number = object.appearance?.ringTiltDegrees === undefined ? 12.0 :
+        object.appearance.ringTiltDegrees;
+      const ringOpening: number = 0.14 + Math.abs(Math.sin(ringTiltDegrees * Math.PI / 180.0)) * 0.72;
+      const ringRadiusX: number = radius * 1.78;
+      const ringRadiusY: number = Math.max(radius * 0.14, radius * ringOpening);
+      this.context.globalAlpha = opacity * 0.58;
+      this.context.strokeStyle = '#BFA66C';
+      this.context.lineWidth = Math.max(1.3, radius * 0.17);
+      this.ellipsePath(object.xPixels, object.yPixels, ringRadiusX, ringRadiusY);
+      this.context.stroke();
+      this.context.globalAlpha = opacity * 0.48;
+      this.context.strokeStyle = '#66583B';
+      this.context.lineWidth = Math.max(0.7, radius * 0.07);
+      this.ellipsePath(object.xPixels, object.yPixels, ringRadiusX * 0.78, ringRadiusY * 0.78);
       this.context.stroke();
       this.drawDisc(object.xPixels, object.yPixels, radius * 0.72, object.color, opacity);
-      this.context.globalAlpha = opacity * 0.42;
-      this.context.strokeStyle = '#8B7446';
-      this.context.lineWidth = 0.8;
+      this.context.globalAlpha = opacity * 0.34;
+      this.context.strokeStyle = '#8F7447';
+      this.context.lineWidth = Math.max(0.7, radius * 0.08);
       this.context.beginPath();
-      this.context.moveTo(object.xPixels - radius * 0.62, object.yPixels - radius * 0.12);
-      this.context.lineTo(object.xPixels + radius * 0.62, object.yPixels + radius * 0.12);
+      this.context.moveTo(object.xPixels - radius * 0.62, object.yPixels - radius * 0.10);
+      this.context.lineTo(object.xPixels + radius * 0.62, object.yPixels - radius * 0.10);
+      this.context.stroke();
+      // 先画完整后环、再画行星盘，最后只补前半环，形成明确的前后遮挡关系。
+      this.context.globalAlpha = opacity * 0.96;
+      this.context.strokeStyle = '#D8BD7A';
+      this.context.lineWidth = Math.max(1.25, radius * 0.17);
+      const frontStart: number = ringTiltDegrees >= 0.0 ? 0.0 : Math.PI;
+      this.ellipseArcPath(object.xPixels, object.yPixels, ringRadiusX, ringRadiusY,
+        frontStart, frontStart + Math.PI);
       this.context.stroke();
       return;
     }
@@ -271,23 +283,115 @@ export struct NormalSkyMap {
       this.drawDisc(object.xPixels, object.yPixels, radius * 0.82, object.color, opacity);
       return;
     }
-    if (object.glyphKind === SkyObjectGlyphKind.VENUS) {
+    if (object.glyphKind === SkyObjectGlyphKind.VENUS ||
+      object.glyphKind === SkyObjectGlyphKind.MERCURY) {
+      const bodyRadius: number = object.glyphKind === SkyObjectGlyphKind.MERCURY ?
+        radius * 0.74 : radius * 0.90;
+      const darkColor: string = object.glyphKind === SkyObjectGlyphKind.MERCURY ? '#3E403F' : '#4A4435';
+      if (object.glyphKind === SkyObjectGlyphKind.VENUS) {
+        this.drawHalo(object.xPixels, object.yPixels, radius * 1.45, object.color, opacity * 0.15);
+      }
+      this.drawPhaseGlyph(object, bodyRadius, opacity, darkColor);
+      return;
+    }
+    if (object.glyphKind === SkyObjectGlyphKind.NEPTUNE) {
+      this.drawHalo(object.xPixels, object.yPixels, radius * 1.22, '#5F83E8', opacity * 0.12);
+      this.drawDisc(object.xPixels, object.yPixels, radius * 0.86, object.color, opacity);
+      this.context.globalAlpha = opacity * 0.82;
+      this.context.strokeStyle = '#B5D6FF';
+      this.context.lineWidth = Math.max(0.7, radius * 0.08);
+      this.context.beginPath();
+      this.context.moveTo(object.xPixels - radius * 0.62, object.yPixels + radius * 0.12);
+      this.context.quadraticCurveTo(object.xPixels, object.yPixels + radius * 0.30,
+        object.xPixels + radius * 0.62, object.yPixels + radius * 0.05);
+      this.context.stroke();
+      return;
+    }
+    if (object.glyphKind === SkyObjectGlyphKind.SOLAR_SYSTEM_GENERIC) {
       this.drawHalo(object.xPixels, object.yPixels, radius * 1.45, object.color, opacity * 0.15);
       this.drawDisc(object.xPixels, object.yPixels, radius * 0.88, object.color, opacity);
       return;
     }
-    this.drawDisc(object.xPixels, object.yPixels,
-      object.glyphKind === SkyObjectGlyphKind.MERCURY ? radius * 0.72 : radius * 0.86,
-      object.color, opacity);
+    this.drawDisc(object.xPixels, object.yPixels, radius * 0.86, object.color, opacity);
     if (object.glyphKind === SkyObjectGlyphKind.MARS) {
       this.context.globalAlpha = opacity * 0.72;
-      this.context.strokeStyle = '#FFE0C4';
-      this.context.lineWidth = 0.8;
+      this.context.strokeStyle = '#7F3A2B';
+      this.context.lineWidth = Math.max(0.8, radius * 0.10);
       this.context.beginPath();
-      this.context.moveTo(object.xPixels - radius * 0.42, object.yPixels - radius * 0.42);
-      this.context.lineTo(object.xPixels + radius * 0.30, object.yPixels - radius * 0.55);
+      this.context.moveTo(object.xPixels - radius * 0.52, object.yPixels + radius * 0.12);
+      this.context.quadraticCurveTo(object.xPixels - radius * 0.06, object.yPixels - radius * 0.12,
+        object.xPixels + radius * 0.48, object.yPixels + radius * 0.10);
       this.context.stroke();
+      this.context.globalAlpha = opacity * 0.86;
+      this.context.fillStyle = '#F5DDC8';
+      this.context.beginPath();
+      this.context.arc(object.xPixels, object.yPixels - radius * 0.62,
+        Math.max(0.8, radius * 0.18), Math.PI, Math.PI * 2.0);
+      this.context.fill();
     }
+  }
+
+  /** 用照明比例和亮边屏幕角绘制月球、水星、金星的真实盈亏。 */
+  private drawPhaseGlyph(object: ProjectedSkyObject, radius: number,
+    opacity: number, darkColor: string): void {
+    const fraction: number = object.appearance === undefined ? 1.0 :
+      this.clamp(object.appearance.illuminatedFraction, 0.0, 1.0);
+    const angleDegrees: number = object.brightLimbScreenAngleDegrees === undefined ? 0.0 :
+      object.brightLimbScreenAngleDegrees;
+    this.context.globalAlpha = opacity;
+    this.context.fillStyle = darkColor;
+    this.context.beginPath();
+    this.context.arc(object.xPixels, object.yPixels, radius, 0.0, Math.PI * 2.0);
+    this.context.fill();
+    if (fraction >= 0.999) {
+      this.context.fillStyle = object.color;
+      this.context.beginPath();
+      this.context.arc(object.xPixels, object.yPixels, radius, 0.0, Math.PI * 2.0);
+      this.context.fill();
+    } else if (fraction > 0.001) {
+      const angleRadians: number = angleDegrees * Math.PI / 180.0;
+      const brightX: number = Math.sin(angleRadians);
+      const brightY: number = -Math.cos(angleRadians);
+      const tangentX: number = Math.cos(angleRadians);
+      const tangentY: number = Math.sin(angleRadians);
+      const terminatorScale: number = 1.0 - fraction * 2.0;
+      const samples: number = 32;
+      this.context.globalAlpha = opacity;
+      this.context.fillStyle = object.color;
+      this.context.beginPath();
+      for (let index: number = 0; index <= samples; index++) {
+        const localY: number = -1.0 + 2.0 * index / samples;
+        const localX: number = Math.sqrt(Math.max(0.0, 1.0 - localY * localY));
+        const x: number = object.xPixels + radius * (localX * brightX + localY * tangentX);
+        const y: number = object.yPixels + radius * (localX * brightY + localY * tangentY);
+        if (index === 0) this.context.moveTo(x, y); else this.context.lineTo(x, y);
+      }
+      for (let index: number = samples; index >= 0; index--) {
+        const localY: number = -1.0 + 2.0 * index / samples;
+        const localX: number = terminatorScale * Math.sqrt(Math.max(0.0, 1.0 - localY * localY));
+        this.context.lineTo(object.xPixels + radius * (localX * brightX + localY * tangentX),
+          object.yPixels + radius * (localX * brightY + localY * tangentY));
+      }
+      this.context.closePath();
+      this.context.fill();
+    }
+    this.context.globalAlpha = opacity * 0.70;
+    this.context.strokeStyle = '#F7FBFF';
+    this.context.lineWidth = 0.7;
+    this.context.beginPath();
+    this.context.arc(object.xPixels, object.yPixels, radius, 0.0, Math.PI * 2.0);
+    this.context.stroke();
+  }
+
+  private drawMoonTexture(x: number, y: number, radius: number, opacity: number): void {
+    this.context.globalAlpha = opacity * 0.18;
+    this.context.fillStyle = '#6F7983';
+    this.context.beginPath();
+    this.context.arc(x - radius * 0.28, y - radius * 0.18, Math.max(0.7, radius * 0.13),
+      0.0, Math.PI * 2.0);
+    this.context.arc(x + radius * 0.24, y + radius * 0.26, Math.max(0.6, radius * 0.10),
+      0.0, Math.PI * 2.0);
+    this.context.fill();
   }
 
   private drawDeepSkyGlyph(object: ProjectedSkyObject, opacity: number): void {
@@ -440,6 +544,18 @@ export struct NormalSkyMap {
     this.context.closePath();
   }
 
+  private ellipseArcPath(x: number, y: number, radiusX: number, radiusY: number,
+    startRadians: number, endRadians: number): void {
+    const segments: number = 28;
+    this.context.beginPath();
+    for (let index: number = 0; index <= segments; index++) {
+      const radians: number = startRadians + (endRadians - startRadians) * index / segments;
+      const pointX: number = x + Math.cos(radians) * radiusX;
+      const pointY: number = y + Math.sin(radians) * radiusY;
+      if (index === 0) this.context.moveTo(pointX, pointY); else this.context.lineTo(pointX, pointY);
+    }
+  }
+
   private drawDirectionMarkers(markers: SkyDirectionMarker[]): void {
     this.context.save();
     this.context.font = '600 10px sans-serif';
@@ -451,8 +567,11 @@ export struct NormalSkyMap {
       const directionX: number = Math.sin(radians);
       const directionY: number = -Math.cos(radians);
       this.context.globalAlpha = marker.inViewport ? 0.88 : 0.72;
-      this.context.strokeStyle = '#72D3F5';
-      this.context.fillStyle = '#BDEFFF';
+      const pole: boolean = marker.kind === SkyDirectionKind.NORTH_CELESTIAL_POLE ||
+        marker.kind === SkyDirectionKind.SOUTH_CELESTIAL_POLE;
+      const zenith: boolean = marker.kind === SkyDirectionKind.ZENITH;
+      this.context.strokeStyle = pole ? '#B8A7F3' : (zenith ? '#F2CF7A' : '#72D3F5');
+      this.context.fillStyle = pole ? '#D8CEFF' : (zenith ? '#FFE6A8' : '#BDEFFF');
       this.context.lineWidth = 1.1;
       if (marker.atEdge) {
         const normalX: number = -directionY;

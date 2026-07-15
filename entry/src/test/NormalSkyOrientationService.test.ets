@@ -57,7 +57,7 @@ export default function normalSkyOrientationServiceTest(): void {
       expect(snapshot.markers.length).assertEqual(0);
     });
 
-    it('地平视图有地点时生成四向和天顶且中心为地平坐标', 0, () => {
+    it('地平视图有地点时同时生成四向、天顶和双天极', 0, () => {
       const observer: ObserverState = {
         latitudeDegrees: 34.75,
         longitudeDegrees: 113.62,
@@ -79,6 +79,9 @@ export default function normalSkyOrientationServiceTest(): void {
       expect(containsKind(snapshot.markers, SkyDirectionKind.SOUTH)).assertTrue();
       expect(containsKind(snapshot.markers, SkyDirectionKind.WEST)).assertTrue();
       expect(containsKind(snapshot.markers, SkyDirectionKind.ZENITH)).assertTrue();
+      expect(containsKind(snapshot.markers, SkyDirectionKind.NORTH_CELESTIAL_POLE)).assertTrue();
+      expect(containsKind(snapshot.markers, SkyDirectionKind.SOUTH_CELESTIAL_POLE)).assertTrue();
+      expect(snapshot.markers.length).assertEqual(7);
     });
 
     it('地平视图无地点时不伪造地理方向', 0, () => {

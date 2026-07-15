@@ -49,6 +49,7 @@ import {
   SkyGuideInsets,
   SkyMapOrientation,
   SkyMapSize,
+  SolarSystemAppearance,
   TrackingMode,
   TaskStatus,
   VisibilityStatus,
@@ -922,6 +923,10 @@ struct Index {
             this.InfoLine('目标类型', this.selectedTypeText())
             this.InfoLine('赤经 / 赤纬', this.coordinateText())
             this.InfoLine('角尺寸', this.angularSizeText())
+            if (this.selectedTarget().precision === CatalogPrecision.DYNAMIC) {
+              this.InfoLine('实时外观', this.solarSystemAppearanceText())
+              this.InfoLine('当前距离', this.solarSystemDistanceText())
+            }
             this.InfoLine('18mm 适配', this.selectedTarget().recommendedFor18mm ? '推荐广角拍摄' : '适合观测或环境构图')
           }.width('100%')
 
@@ -1610,8 +1615,10 @@ struct Index {
   }
 
   private magnitudeText(): string {
-    const magnitude = this.selectedTarget().magnitude;
-    return magnitude === undefined ? '动态' : magnitude.toFixed(2);
+    const appearance: SolarSystemAppearance | undefined = this.selectedAppearance();
+    if (appearance !== undefined) return appearance.magnitude.toFixed(2);
+    const magnitude: number | undefined = this.selectedTarget().magnitude;
+    return magnitude === undefined ? '--' : magnitude.toFixed(2);
   }
 
   private coordinateText(): string {
@@ -1633,11 +1640,61 @@ struct Index {
   }
 
   private angularSizeText(): string {
-    const size = this.selectedTarget().angularSizeDegrees;
+    const appearance: SolarSystemAppearance | undefined = this.selectedAppearance();
+    if (appearance !== undefined && appearance.angularDiameterArcSeconds > 0.0) {
+      if (appearance.angularDiameterArcSeconds >= 60.0) {
+        return (appearance.angularDiameterArcSeconds / 60.0).toFixed(2) + '\'';
+      }
+      return appearance.angularDiameterArcSeconds.toFixed(1) + '"';
+    }
+    const size: number | undefined = this.selectedTarget().angularSizeDegrees;
     if (size === undefined || size === 0) {
       return '恒星点源';
     }
     return size.toFixed(2) + '°';
+  }
+
+  private selectedAppearance(): SolarSystemAppearance | undefined {
+    return EphemerisService.appearance(this.selectedTarget(), this.activeSkyTimestampMs());
+  }
+
+  private solarSystemAppearanceText(): string {
+    const appearance: SolarSystemAppearance | undefined = this.selectedAppearance();
+    if (appearance === undefined) return '按当前时刻计算';
+    if (appearance.objectId === 'solar-sun') return '完整日面 · 普通 GOTO 永久禁用';
+    let result: string = `照明 ${(appearance.illuminatedFraction * 100.0).toFixed(1)}%`;
+    if (appearance.objectId === 'solar-moon' && appearance.moonPhaseDegrees !== undefined) {
+      result = `${this.moonPhaseLabel(appearance.moonPhaseDegrees)} · ${result}`;
+    }
+    if (appearance.ringTiltDegrees !== undefined) {
+      const sign: string = appearance.ringTiltDegrees >= 0.0 ? '+' : '';
+      result += ` · 环倾角 ${sign}${appearance.ringTiltDegrees.toFixed(1)}°`;
+    } else if (appearance.objectId === 'solar-moon' || appearance.objectId === 'planet-mercury' ||
+      appearance.objectId === 'planet-venus') {
+      result += ` · 相位角 ${appearance.phaseAngleDegrees.toFixed(1)}°`;
+    }
+    return result;
+  }
+
+  private solarSystemDistanceText(): string {
+    const appearance: SolarSystemAppearance | undefined = this.selectedAppearance();
+    if (appearance === undefined) return '--';
+    if (appearance.objectId === 'solar-moon') {
+      return `${(appearance.distanceAu * 149597870.7).toFixed(0)} km`;
+    }
+    return `${appearance.distanceAu.toFixed(4)} AU`;
+  }
+
+  private moonPhaseLabel(phaseDegrees: number): string {
+    const normalized: number = AstronomyService.normalizeDegrees(phaseDegrees);
+    if (normalized < 22.5 || normalized >= 337.5) return '朔月';
+    if (normalized < 67.5) return '娥眉月';
+    if (normalized < 112.5) return '上弦月';
+    if (normalized < 157.5) return '盈凸月';
+    if (normalized < 202.5) return '满月';
+    if (normalized < 247.5) return '亏凸月';
+    if (normalized < 292.5) return '下弦月';
+    return '残月';
   }
 
   private selectedVisibilityText(): string {

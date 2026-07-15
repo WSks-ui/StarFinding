@@ -47,17 +47,20 @@ export class NormalSkyOrientationService {
       const east: EquatorialCoordinate = NormalSkyOrientationService.horizontalCoordinate(0.0, 90.0, observer);
       northAngle = NormalSkyProjectionService.screenDirectionAngle(north, query.viewport);
       eastAngle = NormalSkyProjectionService.screenDirectionAngle(east, query.viewport);
-      if (query.directionGuides) {
-        NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.NORTH, north, query);
-        NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.EAST, east, query);
-        NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.SOUTH,
-          NormalSkyOrientationService.horizontalCoordinate(0.0, 180.0, observer), query);
-        NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.WEST,
-          NormalSkyOrientationService.horizontalCoordinate(0.0, 270.0, observer), query);
-        NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.ZENITH,
-          NormalSkyOrientationService.horizontalCoordinate(90.0, 0.0, observer), query);
-      }
-    } else if (query.directionGuides) {
+    }
+    if (query.directionGuides && observer !== undefined) {
+      NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.NORTH,
+        NormalSkyOrientationService.horizontalCoordinate(0.0, 0.0, observer), query);
+      NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.EAST,
+        NormalSkyOrientationService.horizontalCoordinate(0.0, 90.0, observer), query);
+      NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.SOUTH,
+        NormalSkyOrientationService.horizontalCoordinate(0.0, 180.0, observer), query);
+      NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.WEST,
+        NormalSkyOrientationService.horizontalCoordinate(0.0, 270.0, observer), query);
+      NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.ZENITH,
+        NormalSkyOrientationService.horizontalCoordinate(90.0, 0.0, observer), query);
+    }
+    if (query.directionGuides) {
       NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.NORTH_CELESTIAL_POLE,
         {
           raHours: query.viewport.centerRaHours,
@@ -71,6 +74,7 @@ export class NormalSkyOrientationService {
           frame: EquatorialFrame.ICRS_J2000
         }, query);
     }
+    NormalSkyOrientationService.separateMarkerCollisions(markers, query);
     return {
       orientation: query.viewport.orientation,
       centerRaHours: query.viewport.centerRaHours,
@@ -141,6 +145,31 @@ export class NormalSkyOrientationService {
       topPixels: NormalSkyOrientationService.clamp(requested.topPixels, 12.0, maximumVertical),
       bottomPixels: NormalSkyOrientationService.clamp(requested.bottomPixels, 12.0, maximumVertical)
     };
+  }
+
+  /** 同一方向附近的地平与天极标记沿切线错开，避免标签在宽视场边缘完全重叠。 */
+  private static separateMarkerCollisions(markers: SkyDirectionMarker[],
+    query: NormalSkyOrientationQuery): void {
+    const bounds: SkyGuideInsets = NormalSkyOrientationService.resolveInsets(query);
+    const minimumX: number = bounds.leftPixels;
+    const maximumX: number = Math.max(minimumX + 1.0, query.size.widthPixels - bounds.rightPixels);
+    const minimumY: number = bounds.topPixels;
+    const maximumY: number = Math.max(minimumY + 1.0, query.size.heightPixels - bounds.bottomPixels);
+    for (let index: number = 0; index < markers.length; index++) {
+      const marker: SkyDirectionMarker = markers[index];
+      for (let previousIndex: number = 0; previousIndex < index; previousIndex++) {
+        const previous: SkyDirectionMarker = markers[previousIndex];
+        const deltaX: number = marker.xPixels - previous.xPixels;
+        const deltaY: number = marker.yPixels - previous.yPixels;
+        if (deltaX * deltaX + deltaY * deltaY >= 24.0 * 24.0) continue;
+        const radians: number = marker.angleDegrees * Math.PI / 180.0;
+        const offsetSign: number = index % 2 === 0 ? 1.0 : -1.0;
+        marker.xPixels = NormalSkyOrientationService.clamp(
+          marker.xPixels + Math.cos(radians) * 16.0 * offsetSign, minimumX, maximumX);
+        marker.yPixels = NormalSkyOrientationService.clamp(
+          marker.yPixels + Math.sin(radians) * 16.0 * offsetSign, minimumY, maximumY);
+      }
+    }
   }
 
   private static rayDistanceToBounds(centerX: number, centerY: number, directionX: number,
