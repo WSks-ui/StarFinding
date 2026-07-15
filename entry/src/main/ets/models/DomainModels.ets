@@ -414,6 +414,44 @@ export interface ObservationPlanningConstraints {
   maxSunAltitudeDegrees: number;
 }
 
+export enum ObservationNightSelection {
+  TONIGHT = 'tonight',
+  TOMORROW = 'tomorrow'
+}
+
+/**
+ * 以设备时区中午为边界的一段观测夜。中午到次日中午可以完整覆盖傍晚、午夜和清晨，
+ * 避免“今晚”随打开页面的分钟数滚动，造成同一晚前后两次规划结果不一致。
+ */
+export interface ObservationNightPeriod {
+  startAtMs: number;
+  endAtMs: number;
+  timezoneOffsetMinutes: number;
+  selection: ObservationNightSelection;
+}
+
+export enum PlanningPageState {
+  NEEDS_LOCATION = 'needs_location',
+  ASTRONOMY_ONLY = 'astronomy_only',
+  WEATHER_LOADING = 'weather_loading',
+  READY = 'ready',
+  WEATHER_UNAVAILABLE = 'weather_unavailable'
+}
+
+/** 规划目标列表只保存业务结果，颜色和排版由 ArkUI 组件决定。 */
+export interface PlanningTargetSummary {
+  targetId: string;
+  targetName: string;
+  designation: string;
+  included: boolean;
+  bestWindowStartAtMs?: number;
+  bestWindowEndAtMs?: number;
+  astronomyScore?: number;
+  overallScore?: number;
+  recommendation: OutingRecommendation;
+  unavailableReason: string;
+}
+
 /** 某一时刻的目标、太阳、月球和天气联合状态。 */
 export interface ObservationSample {
   timestampMs: number;

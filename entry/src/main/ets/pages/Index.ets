@@ -38,6 +38,7 @@ import {
   NormalSkyTimeState,
   NormalSkyViewState,
   NormalSkyViewport,
+  ObservationNightPeriod,
   ObservationPlanningConstraints,
   ObservationPlanningResult,
   ObservationWindow,
@@ -96,6 +97,7 @@ import {
   OnStepLX200Client,
   ObservationExecutionPolicy,
   ObservationPlanningService,
+  PlanningPeriodService,
   RaspberryPiClient,
   VisibleStar,
   VisibleStarCatalogMetadata,
@@ -113,6 +115,7 @@ import { MotionTokens } from '../utils/MotionTokens';
 const FEATURED_TARGET_IDS: string[] = [
   'star-vega', 'star-altair', 'star-deneb', 'messier-31', 'messier-8', 'solar-moon'
 ];
+const MAX_PLANNED_TARGETS: number = 8;
 
 interface PlannedTargetSummary {
   targetId: string;
@@ -236,9 +239,11 @@ struct Index {
   @State private aiFileUrl: string = '';
   @State private aiModelVersion: string = '';
   @State private planningDayOffset: number = 0;
-  @State private plannedTargetIds: string[] = ['star-vega'];
+  @State private plannedTargetIds: string[] = [];
+  @State private activePlanningTargetId: string = '';
   @State private plannedTargetSummaries: PlannedTargetSummary[] = [];
   @State private planningResult: ObservationPlanningResult | undefined = undefined;
+  @State private activePlanningResult: ObservationPlanningResult | undefined = undefined;
   @State private planningBusy: boolean = false;
   @State private planningLocationSource: string = '等待定位';
   @State private manualLatitudeText: string = '';
@@ -995,11 +1000,11 @@ struct Index {
             .layoutWeight(1).height(48).fontSize(14)
             .fontColor($r('app.color.sky_text_primary'))
             .backgroundColor($r('app.color.app_surface_primary')).borderRadius(24)
-            .onClick(() => { this.addSelectedTargetToPlan(false); })
+            .onClick(() => { this.addSelectedTargetToPlan(); })
           Button('查看规划')
             .layoutWeight(1).height(48).fontSize(14).fontWeight(FontWeight.Bold)
             .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(24)
-            .onClick(() => { this.addSelectedTargetToPlan(true); })
+            .onClick(() => { this.openPlanningForSelectedTarget(); })
         }.width('100%')
         Button('拍摄 / 观测')
           .width('100%').height(48).fontSize(14).fontWeight(FontWeight.Bold)
@@ -1161,7 +1166,7 @@ struct Index {
             Blank()
             Text('+').width(28).height(28).fontSize(17).textAlign(TextAlign.Center)
               .fontColor('#071017').backgroundColor('#72D3F5').borderRadius(5)
-              .onClick(() => { this.addSelectedTargetToPlan(false); })
+              .onClick(() => { this.addActivePlanningTargetToPlan(); })
           }.width('100%')
 
           ForEach(this.plannedTargetSummaries, (summary: PlannedTargetSummary) => {
@@ -1456,6 +1461,7 @@ struct Index {
 
   /** 从设备、任务或后期返回星图时直接打开指定抽屉，不能沿用星图内“再次点击关闭”的切换语义。 */
   private navigateToSkyPanel(panel: number): void {
+    if (panel === 2) this.ensureActivePlanningTarget();
     this.workspaceDirection = -1;
     this.getUIContext().animateTo(MotionTokens.standard(), () => {
       this.activeSection = 0;
@@ -1479,6 +1485,7 @@ struct Index {
   }
 
   private openSkyPanel(panel: number): void {
+    if (panel === 2 && this.skyOverlayPanel !== 2) this.ensureActivePlanningTarget();
     this.getUIContext().animateTo(MotionTokens.spring(), () => {
       this.activeSection = 0;
       this.skyChromeVisible = true;
@@ -1725,35 +1732,45 @@ struct Index {
     return this.plannedTargetIds.includes(this.selectedTargetId);
   }
 
-  private addSelectedTargetToPlan(openPlanning: boolean): void {
+  private addSelectedTargetToPlan(): void {
     const target: CelestialObject = this.selectedTarget();
-    if (!this.plannedTargetIds.includes(target.id)) {
-      this.plannedTargetIds = this.plannedTargetIds.concat([target.id]);
-      if (CelestialCatalog.getById(target.id) === undefined) {
-        this.customPlanningTargets.push(target);
-      }
-      this.operationMessage = `已把 ${target.nameZh} 加入观测计划`;
-    }
+    this.activePlanningTargetId = target.id;
+    this.addTargetToPlan(target);
     this.refreshPlanning();
-    if (openPlanning) {
-      this.workspaceDirection = -1;
-      this.getUIContext().animateTo(MotionTokens.spring(), () => {
-        this.activeSection = 0;
-        this.skyChromeVisible = true;
-        this.skyOverlayPanel = 2;
-      });
-    }
   }
 
-  private addPlanningTarget(targetId: string): void {
-    const target: CelestialObject | undefined = CelestialCatalog.getById(targetId);
-    if (target === undefined) return;
-    this.selectedCustomTarget = undefined;
-    this.selectedTargetId = targetId;
-    if (!this.plannedTargetIds.includes(targetId)) {
-      this.plannedTargetIds = this.plannedTargetIds.concat([targetId]);
-    }
+  /** 查看规划只切换规划上下文，不得隐式修改用户的目标清单。 */
+  private openPlanningForSelectedTarget(): void {
+    const target: CelestialObject = this.selectedTarget();
+    this.activePlanningTargetId = target.id;
+    this.rememberPlanningTarget(target);
     this.refreshPlanning();
+    this.workspaceDirection = -1;
+    this.getUIContext().animateTo(MotionTokens.spring(), () => {
+      this.activeSection = 0;
+      this.skyChromeVisible = true;
+      this.skyOverlayPanel = 2;
+    });
+  }
+
+  private addActivePlanningTargetToPlan(): void {
+    const target: CelestialObject = this.activePlanningTarget();
+    this.addTargetToPlan(target);
+    this.refreshPlanning();
+  }
+
+  private addTargetToPlan(target: CelestialObject): void {
+    if (this.plannedTargetIds.includes(target.id)) {
+      this.operationMessage = `${target.nameZh} 已在观测计划中`;
+      return;
+    }
+    if (this.plannedTargetIds.length >= MAX_PLANNED_TARGETS) {
+      this.operationMessage = `观测计划最多保留 ${MAX_PLANNED_TARGETS} 个目标`;
+      return;
+    }
+    this.rememberPlanningTarget(target);
+    this.plannedTargetIds = this.plannedTargetIds.concat([target.id]);
+    this.operationMessage = `已把 ${target.nameZh} 加入观测计划`;
   }
 
   private removePlannedTarget(targetId: string): void {
@@ -1769,15 +1786,39 @@ struct Index {
       }
     }
     this.customPlanningTargets = customRemaining;
+    if (this.activePlanningTargetId === targetId) {
+      this.activePlanningTargetId = remaining.length > 0 ? remaining[0] : this.selectedTargetId;
+    }
     this.refreshPlanning();
   }
 
   private selectPlanningTarget(targetId: string): void {
     const target: CelestialObject | undefined = this.planningTargetById(targetId);
     if (target === undefined) return;
-    this.selectedTargetId = targetId;
-    this.selectedCustomTarget = CelestialCatalog.getById(targetId) === undefined ? target : undefined;
+    this.activePlanningTargetId = targetId;
     this.refreshPlanning();
+  }
+
+  private ensureActivePlanningTarget(): void {
+    if (this.activePlanningTargetId.length > 0 &&
+      this.planningTargetById(this.activePlanningTargetId) !== undefined) return;
+    const target: CelestialObject = this.selectedTarget();
+    this.activePlanningTargetId = target.id;
+    this.rememberPlanningTarget(target);
+  }
+
+  private activePlanningTarget(): CelestialObject {
+    this.ensureActivePlanningTarget();
+    const target: CelestialObject | undefined = this.planningTargetById(this.activePlanningTargetId);
+    return target === undefined ? this.selectedTarget() : target;
+  }
+
+  private rememberPlanningTarget(target: CelestialObject): void {
+    if (CelestialCatalog.getById(target.id) !== undefined) return;
+    for (let index: number = 0; index < this.customPlanningTargets.length; index++) {
+      if (this.customPlanningTargets[index].id === target.id) return;
+    }
+    this.customPlanningTargets.push(target);
   }
 
   private planningTargetById(targetId: string): CelestialObject | undefined {
@@ -1806,12 +1847,17 @@ struct Index {
   }
 
   private planningStartAtMs(): number {
-    return Date.now() + this.planningDayOffset * 86400000;
+    return this.planningPeriod().startAtMs;
+  }
+
+  private planningPeriod(): ObservationNightPeriod {
+    return PlanningPeriodService.resolve(Date.now(), this.planningDayOffset);
   }
 
   private refreshPlanning(): void {
     if (this.observer === undefined) {
       this.planningResult = undefined;
+      this.activePlanningResult = undefined;
       this.plannedTargetSummaries = [];
       return;
     }
@@ -1821,9 +1867,14 @@ struct Index {
     try {
       this.planningResult = ObservationPlanningService.plan(
         this.selectedTarget(), this.observer, startAtMs, this.weatherForecast, constraints);
+      const planningTarget: CelestialObject = this.activePlanningTarget();
+      this.activePlanningResult = planningTarget.id === this.selectedTargetId ? this.planningResult :
+        ObservationPlanningService.plan(
+          planningTarget, this.observer, startAtMs, this.weatherForecast, constraints);
       this.refreshPlannedTargetSummaries(startAtMs, constraints);
     } catch (error) {
       this.planningResult = undefined;
+      this.activePlanningResult = undefined;
       this.operationMessage = `观测规划失败：${error}`;
     }
   }
