@@ -131,6 +131,8 @@ interface PlanningHeightBar {
 
 function emptyNormalSkyScene(): NormalSkyScene {
   return {
+    staticObjects: [],
+    dynamicObjects: [],
     objects: [],
     constellationLines: [],
     gridLines: [],
@@ -146,6 +148,8 @@ function emptyNormalSkyScene(): NormalSkyScene {
       eastScreenAngleDegrees: -90.0,
       markers: []
     },
+    staticRevision: 0,
+    dynamicRevision: 0,
     generatedAtMs: 0
   };
 }
@@ -2396,6 +2400,7 @@ struct Index {
 
   private returnNormalSkyToRealtime(): void {
     this.normalTimeState = NormalSkyTimeService.realtime(Date.now());
+    this.normalSkySceneService.invalidateForTimeSelection();
     this.operationMessage = '普通星图已回到真实当前时间';
     this.updateNormalScene();
   }
@@ -2404,6 +2409,7 @@ struct Index {
     this.clearNormalMotion();
     this.normalTimeState = NormalSkyTimeService.selectTime(
       this.normalTimeState, timestampMs);
+    this.normalSkySceneService.invalidateForTimeSelection();
     this.operationMessage = '已进入模拟时间；设备 GOTO、同步和拍摄保持禁用';
     this.updateNormalScene();
   }

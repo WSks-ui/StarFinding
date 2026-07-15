@@ -30,29 +30,49 @@ export struct NormalSkyMap {
 
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
   private context: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.settings);
-  private canvasReady: boolean = false;
+  private dynamicSettings: RenderingContextSettings = new RenderingContextSettings(true);
+  private dynamicContext: CanvasRenderingContext2D = new CanvasRenderingContext2D(this.dynamicSettings);
+  private staticCanvasReady: boolean = false;
+  private dynamicCanvasReady: boolean = false;
+  private lastStaticRevision: number = -1;
+  private lastStaticWidth: number = 0.0;
+  private lastStaticHeight: number = 0.0;
   private touchTracking: boolean = false;
   private touchStartX: number = 0.0;
   private touchStartY: number = 0.0;
 
   aboutToDisappear(): void {
-    this.canvasReady = false;
+    this.staticCanvasReady = false;
+    this.dynamicCanvasReady = false;
   }
 
   build() {
-    Canvas(this.context)
+    Stack() {
+      Canvas(this.context)
+        .width(Math.max(1.0, this.widthPixels))
+        .height(Math.max(1.0, this.heightPixels))
+        .onReady(() => {
+          this.staticCanvasReady = true;
+          this.lastStaticRevision = -1;
+          this.drawScene();
+        })
+      Canvas(this.dynamicContext)
+        .width(Math.max(1.0, this.widthPixels))
+        .height(Math.max(1.0, this.heightPixels))
+        .onReady(() => {
+          this.dynamicCanvasReady = true;
+          this.drawScene();
+        })
+        .onTouch((event: TouchEvent) => {
+          this.handleTouch(event);
+        })
+    }
       .width(Math.max(1.0, this.widthPixels))
       .height(Math.max(1.0, this.heightPixels))
       .clip(true)
-      .onReady(() => {
-        this.canvasReady = true;
-        this.drawScene();
-      })
       .onAreaChange((_oldArea: Area, _newArea: Area) => {
+        this.lastStaticRevision = -1;
         this.drawScene();
-      })
-      .onTouch((event: TouchEvent) => {
-        this.handleTouch(event);
       })
   }
 
@@ -61,11 +81,22 @@ export struct NormalSkyMap {
   }
 
   private drawScene(): void {
-    if (!this.canvasReady) {
-      return;
-    }
+    if (!this.staticCanvasReady && !this.dynamicCanvasReady) return;
     const width: number = Math.max(1.0, this.widthPixels);
     const height: number = Math.max(1.0, this.heightPixels);
+    const sizeChanged: boolean = Math.abs(width - this.lastStaticWidth) > 0.01 ||
+      Math.abs(height - this.lastStaticHeight) > 0.01;
+    if (this.staticCanvasReady &&
+      (sizeChanged || this.lastStaticRevision !== this.scene.staticRevision)) {
+      this.drawStaticScene(width, height);
+      this.lastStaticRevision = this.scene.staticRevision;
+      this.lastStaticWidth = width;
+      this.lastStaticHeight = height;
+    }
+    if (this.dynamicCanvasReady) this.drawDynamicScene(width, height);
+  }
+
+  private drawStaticScene(width: number, height: number): void {
     this.context.clearRect(0.0, 0.0, width, height);
     this.context.fillStyle = '#050A10';
     this.context.globalAlpha = 1.0;
@@ -73,12 +104,21 @@ export struct NormalSkyMap {
     this.drawPolylines(this.scene.gridLines, '#29404E', 0.48, 0.7);
     this.drawPolylines(this.scene.eclipticLines, '#B69955', 0.68, 1.0);
     this.drawPolylines(this.scene.constellationLines, '#426B82', 0.76, 1.1);
+    this.drawObjects(this.scene.staticObjects, width, height);
+    this.resetContextState();
+  }
+
+  private drawDynamicScene(width: number, height: number): void {
+    const staticContext: CanvasRenderingContext2D = this.context;
+    this.context = this.dynamicContext;
+    this.context.clearRect(0.0, 0.0, width, height);
     this.drawTrajectoryLines(this.scene.trajectoryLines);
     this.drawHorizonMask(this.scene.horizonMask);
     this.drawPolylines(this.scene.horizonLines, '#78C9C5', 0.88, 1.4);
-    this.drawObjects(this.scene.objects, width, height);
+    this.drawObjects(this.scene.dynamicObjects, width, height);
     this.drawDirectionMarkers(this.scene.orientationSnapshot.markers);
     this.resetContextState();
+    this.context = staticContext;
   }
 
   private drawPolylines(lines: SkyPolyline[], color: string, opacity: number, lineWidth: number): void {

@@ -11,7 +11,10 @@ import {
 } from '../main/ets/models/NormalSkyModels';
 import { NormalSkyCatalogService } from '../main/ets/services/NormalSkyCatalogService';
 import { NormalSkyProjectionService } from '../main/ets/services/NormalSkyProjectionService';
-import { NormalSkySceneService } from '../main/ets/services/NormalSkySceneService';
+import {
+  NormalSkySceneCacheStats,
+  NormalSkySceneService
+} from '../main/ets/services/NormalSkySceneService';
 import { EphemerisService } from '../main/ets/services/EphemerisService';
 import { VisibleStarCatalogService } from '../main/ets/services/VisibleStarCatalogService';
 
@@ -150,6 +153,69 @@ export default function normalSkySceneServiceTest(): void {
         timestampMs: timestampMs
       });
       expect(scene.trajectoryLines.length > 0 && scene.trajectoryLines[0].points.length > 1).assertTrue();
+    });
+
+    it('模拟播放复用固定目录层和分桶轨迹且持续刷新动态层', 0, () => {
+      const firstAtMs: number = Date.UTC(2026, 6, 15, 0, 0, 0);
+      const secondAtMs: number = firstAtMs + 6.0 * 3600000.0;
+      const mars: CelestialObject | undefined = CelestialCatalog.getById('planet-mars');
+      if (mars === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const coordinate = EphemerisService.skyCoordinate(mars, firstAtMs);
+      if (coordinate === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const viewport: NormalSkyViewport = {
+        centerRaHours: coordinate.raHours,
+        centerDecDegrees: coordinate.decDegrees,
+        fieldOfViewDegrees: 90.0,
+        rotationDegrees: 0.0,
+        orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+      };
+      const service: NormalSkySceneService = new NormalSkySceneService(
+        new VisibleStarCatalogService(), new NormalSkyCatalogService());
+      const first: NormalSkyScene = service.build({
+        viewport: viewport,
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: mars.id,
+        timestampMs: firstAtMs
+      });
+      const second: NormalSkyScene = service.build({
+        viewport: viewport,
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: mars.id,
+        timestampMs: secondAtMs
+      });
+      const secondMars: ProjectedSkyObject | undefined = findProjected(second.dynamicObjects, mars.id);
+      const stats: NormalSkySceneCacheStats = service.getCacheStats();
+      expect(first.staticObjects === second.staticObjects &&
+        first.staticRevision === second.staticRevision).assertTrue();
+      expect(first.dynamicObjects !== second.dynamicObjects &&
+        second.dynamicRevision > first.dynamicRevision).assertTrue();
+      expect(secondMars !== undefined && secondMars.appearance !== undefined &&
+        secondMars.appearance.timestampMs === secondAtMs).assertTrue();
+      expect(stats.staticBuildCount).assertEqual(1);
+      expect(stats.staticCacheHitCount).assertEqual(1);
+      expect(stats.dynamicBuildCount).assertEqual(2);
+      expect(stats.trajectoryBuildCount).assertEqual(1);
+      expect(stats.trajectoryCacheHitCount).assertEqual(1);
+
+      service.invalidateForTimeSelection();
+      const third: NormalSkyScene = service.build({
+        viewport: viewport,
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: mars.id,
+        timestampMs: secondAtMs
+      });
+      expect(third.staticRevision > second.staticRevision).assertTrue();
+      expect(service.getCacheStats().staticBuildCount).assertEqual(2);
+      expect(service.getCacheStats().trajectoryBuildCount).assertEqual(2);
     });
 
     it('一百一十个梅西耶目标均映射为深空图符', 0, () => {

@@ -43,10 +43,41 @@ export interface NormalSkySceneQuery {
   showDirectionMarkers?: boolean;
 }
 
+interface NormalSkyStaticCache {
+  key: string;
+  revision: number;
+  objects: ProjectedSkyObject[];
+  constellationLines: SkyPolyline[];
+  gridLines: SkyPolyline[];
+  eclipticLines: SkyPolyline[];
+}
+
+interface NormalSkyTrajectoryCache {
+  key: string;
+  lines: SkyPolyline[];
+}
+
+export interface NormalSkySceneCacheStats {
+  staticBuildCount: number;
+  staticCacheHitCount: number;
+  dynamicBuildCount: number;
+  trajectoryBuildCount: number;
+  trajectoryCacheHitCount: number;
+}
+
 /** 把多个离线目录合成为 Canvas 一次可绘制的场景。 */
 export class NormalSkySceneService {
   private readonly visibleStars: VisibleStarCatalogService;
   private readonly lineCatalog: NormalSkyCatalogService;
+  private staticCache: NormalSkyStaticCache | undefined = undefined;
+  private trajectoryCache: NormalSkyTrajectoryCache | undefined = undefined;
+  private staticRevision: number = 0;
+  private dynamicRevision: number = 0;
+  private staticBuildCount: number = 0;
+  private staticCacheHitCount: number = 0;
+  private dynamicBuildCount: number = 0;
+  private trajectoryBuildCount: number = 0;
+  private trajectoryCacheHitCount: number = 0;
 
   constructor(visibleStars: VisibleStarCatalogService, lineCatalog: NormalSkyCatalogService) {
     this.visibleStars = visibleStars;
@@ -54,28 +85,26 @@ export class NormalSkySceneService {
   }
 
   build(query: NormalSkySceneQuery): NormalSkyScene {
-    const objects: ProjectedSkyObject[] = [];
-    const brightStars: CelestialObject[] = CelestialCatalog.brightStars();
-    this.appendCatalogObjects(objects, brightStars, query);
-    this.appendVisibleStars(objects, brightStars, query);
-    if (query.layers.constellationLines) {
-      this.appendCatalogObjects(objects, CelestialCatalog.constellations(), query);
-    }
-    if (query.layers.deepSky) {
-      this.appendCatalogObjects(objects, CelestialCatalog.messierObjects(), query);
-    }
+    const staticLayer: NormalSkyStaticCache = this.resolveStaticLayer(query);
+    const dynamicObjects: ProjectedSkyObject[] = [];
     if (query.layers.solarSystem) {
-      this.appendCatalogObjects(objects, CelestialCatalog.solarSystem(), query);
+      this.appendCatalogObjects(dynamicObjects, CelestialCatalog.solarSystem(), query, true);
     }
-
+    const horizonMask: SkyScreenRect[] = query.layers.horizon && query.observer !== undefined ?
+      this.buildHorizonMask(query) : [];
+    const objects: ProjectedSkyObject[] = staticLayer.objects.concat(dynamicObjects);
+    this.dynamicRevision++;
+    this.dynamicBuildCount++;
     return {
+      staticObjects: staticLayer.objects,
+      dynamicObjects: dynamicObjects,
       objects: objects,
-      constellationLines: query.layers.constellationLines ? this.buildConstellationLines(query) : [],
-      gridLines: query.layers.equatorialGrid ? this.buildEquatorialGrid(query) : [],
-      eclipticLines: query.layers.ecliptic ? this.buildEcliptic(query) : [],
+      constellationLines: staticLayer.constellationLines,
+      gridLines: staticLayer.gridLines,
+      eclipticLines: staticLayer.eclipticLines,
       horizonLines: query.layers.horizon && query.observer !== undefined ? this.buildHorizon(query) : [],
-      trajectoryLines: query.layers.solarSystem ? this.buildSelectedTrajectory(query) : [],
-      horizonMask: query.layers.horizon && query.observer !== undefined ? this.buildHorizonMask(query) : [],
+      trajectoryLines: query.layers.solarSystem ? this.buildSelectedTrajectoryCached(query) : [],
+      horizonMask: horizonMask,
       orientationSnapshot: NormalSkyOrientationService.build({
         viewport: query.viewport,
         size: query.size,
@@ -83,12 +112,60 @@ export class NormalSkySceneService {
         observer: query.observer,
         guideInsets: query.guideInsets
       }),
+      staticRevision: staticLayer.revision,
+      dynamicRevision: this.dynamicRevision,
       generatedAtMs: query.timestampMs
     };
   }
 
+  getCacheStats(): NormalSkySceneCacheStats {
+    return {
+      staticBuildCount: this.staticBuildCount,
+      staticCacheHitCount: this.staticCacheHitCount,
+      dynamicBuildCount: this.dynamicBuildCount,
+      trajectoryBuildCount: this.trajectoryBuildCount,
+      trajectoryCacheHitCount: this.trajectoryCacheHitCount
+    };
+  }
+
+  /** 日期选择会改变恒星自行参考时刻；连续播放期间固定层仍保持缓存。 */
+  invalidateForTimeSelection(): void {
+    this.staticCache = undefined;
+    this.trajectoryCache = undefined;
+  }
+
+  private resolveStaticLayer(query: NormalSkySceneQuery): NormalSkyStaticCache {
+    const key: string = this.staticCacheKey(query);
+    if (this.staticCache !== undefined && this.staticCache.key === key) {
+      this.staticCacheHitCount++;
+      return this.staticCache;
+    }
+    const objects: ProjectedSkyObject[] = [];
+    const brightStars: CelestialObject[] = CelestialCatalog.brightStars();
+    this.appendCatalogObjects(objects, brightStars, query, false);
+    this.appendVisibleStars(objects, brightStars, query, false);
+    if (query.layers.constellationLines) {
+      this.appendCatalogObjects(objects, CelestialCatalog.constellations(), query, false);
+    }
+    if (query.layers.deepSky) {
+      this.appendCatalogObjects(objects, CelestialCatalog.messierObjects(), query, false);
+    }
+    this.staticRevision++;
+    this.staticBuildCount++;
+    const cache: NormalSkyStaticCache = {
+      key: key,
+      revision: this.staticRevision,
+      objects: objects,
+      constellationLines: query.layers.constellationLines ? this.buildConstellationLines(query) : [],
+      gridLines: query.layers.equatorialGrid ? this.buildEquatorialGrid(query) : [],
+      eclipticLines: query.layers.ecliptic ? this.buildEcliptic(query) : []
+    };
+    this.staticCache = cache;
+    return cache;
+  }
+
   private appendVisibleStars(result: ProjectedSkyObject[], brightStars: CelestialObject[],
-    query: NormalSkySceneQuery): void {
+    query: NormalSkySceneQuery, includeHorizon: boolean): void {
     if (!this.visibleStars.isLoaded()) {
       return;
     }
@@ -132,14 +209,14 @@ export class NormalSkySceneService {
         label: star.name.length > 0 && star.magnitude <= labelMagnitude ? star.name : '',
         designation: star.id,
         color: this.starColor(star.spectralType),
-        aboveHorizon: this.aboveHorizon(coordinate, query.observer),
+        aboveHorizon: includeHorizon ? this.aboveHorizon(coordinate, query.observer) : undefined,
         selected: selected
       });
     }
   }
 
   private appendCatalogObjects(result: ProjectedSkyObject[], objects: CelestialObject[],
-    query: NormalSkySceneQuery): void {
+    query: NormalSkySceneQuery, includeHorizon: boolean): void {
     for (let index: number = 0; index < objects.length; index++) {
       const object: CelestialObject = objects[index];
       const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(
@@ -172,7 +249,7 @@ export class NormalSkySceneService {
         label: this.objectLabel(object, query.viewport.fieldOfViewDegrees, selected),
         designation: object.designation,
         color: this.objectColor(object),
-        aboveHorizon: this.aboveHorizon(coordinate, query.observer),
+        aboveHorizon: includeHorizon ? this.aboveHorizon(coordinate, query.observer) : undefined,
         selected: selected
       });
     }
@@ -265,6 +342,18 @@ export class NormalSkySceneService {
     return result;
   }
 
+  private buildSelectedTrajectoryCached(query: NormalSkySceneQuery): SkyPolyline[] {
+    const key: string = this.trajectoryCacheKey(query);
+    if (this.trajectoryCache !== undefined && this.trajectoryCache.key === key) {
+      this.trajectoryCacheHitCount++;
+      return this.trajectoryCache.lines;
+    }
+    const lines: SkyPolyline[] = this.buildSelectedTrajectory(query);
+    this.trajectoryBuildCount++;
+    this.trajectoryCache = { key: key, lines: lines };
+    return lines;
+  }
+
   private buildSelectedTrajectory(query: NormalSkySceneQuery): SkyPolyline[] {
     const target: CelestialObject | undefined = CelestialCatalog.getById(query.selectedTargetId);
     if (target === undefined || target.precision !== CatalogPrecision.DYNAMIC) return [];
@@ -280,6 +369,32 @@ export class NormalSkySceneService {
     this.appendProjectedLine(result, `trajectory-${target.id}`,
       SkyPolylineKind.TRAJECTORY, coordinates, query);
     return result;
+  }
+
+  private staticCacheKey(query: NormalSkySceneQuery): string {
+    const selectedTarget: CelestialObject | undefined = CelestialCatalog.getById(query.selectedTargetId);
+    const selectedKey: string = selectedTarget !== undefined &&
+      selectedTarget.precision === CatalogPrecision.DYNAMIC ? '' : query.selectedTargetId;
+    return `${this.projectionCacheKey(query)}|${selectedKey}|` +
+      `${query.layers.constellationLines ? 1 : 0}${query.layers.equatorialGrid ? 1 : 0}` +
+      `${query.layers.ecliptic ? 1 : 0}${query.layers.deepSky ? 1 : 0}|` +
+      `${this.visibleStars.isLoaded() ? 1 : 0}${this.lineCatalog.isLoaded() ? 1 : 0}`;
+  }
+
+  private trajectoryCacheKey(query: NormalSkySceneQuery): string {
+    const target: CelestialObject | undefined = CelestialCatalog.getById(query.selectedTargetId);
+    if (target === undefined || target.precision !== CatalogPrecision.DYNAMIC) {
+      return `${this.projectionCacheKey(query)}|none`;
+    }
+    const bucketSize: number = target.id === 'solar-moon' ? 3600000.0 : 86400000.0;
+    const timestampBucket: number = Math.floor(query.timestampMs / bucketSize);
+    return `${this.projectionCacheKey(query)}|${target.id}|${timestampBucket}`;
+  }
+
+  private projectionCacheKey(query: NormalSkySceneQuery): string {
+    return `${query.viewport.centerRaHours.toFixed(8)},${query.viewport.centerDecDegrees.toFixed(8)},` +
+      `${query.viewport.fieldOfViewDegrees.toFixed(6)},${query.viewport.rotationDegrees.toFixed(6)},` +
+      `${query.viewport.orientation}|${query.size.widthPixels.toFixed(2)},${query.size.heightPixels.toFixed(2)}`;
   }
 
   /** 以屏幕条带近似地平线以下区域；条带随投影重建，不会把不可见区固定在屏幕某一侧。 */

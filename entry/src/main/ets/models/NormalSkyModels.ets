@@ -185,6 +185,10 @@ export interface ProjectedSkyObject {
 }
 
 export interface NormalSkyScene {
+  /** 固定目录层与动态天空层分开保存，Canvas 可独立决定是否重绘。 */
+  staticObjects: ProjectedSkyObject[];
+  dynamicObjects: ProjectedSkyObject[];
+  /** 命中测试使用的合并视图；顺序固定为目录层在前、动态层在后。 */
   objects: ProjectedSkyObject[];
   constellationLines: SkyPolyline[];
   gridLines: SkyPolyline[];
@@ -193,6 +197,8 @@ export interface NormalSkyScene {
   trajectoryLines: SkyPolyline[];
   horizonMask: SkyScreenRect[];
   orientationSnapshot: SkyOrientationSnapshot;
+  staticRevision: number;
+  dynamicRevision: number;
   generatedAtMs: number;
 }
 
