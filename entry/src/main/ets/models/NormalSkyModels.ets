@@ -6,14 +6,29 @@ export enum SkyMapOrientation {
   HORIZON_ZENITH = 'horizon_zenith'
 }
 
-/**
- * 普通星图唯一持久化的视口状态。拖拽、缩放和旋转必须更新此状态，不能长期保存像素偏移。
- */
+/** 四元数视图状态生成的只读投影快照，供 Canvas、方向辅助和控件显示使用。 */
 export interface NormalSkyViewport {
   centerRaHours: number;
   centerDecDegrees: number;
   fieldOfViewDegrees: number;
   rotationDegrees: number;
+  orientation: SkyMapOrientation;
+}
+
+export interface NormalSkyQuaternion {
+  x: number;
+  y: number;
+  z: number;
+  w: number;
+}
+
+/**
+ * 普通星图唯一长期姿态。四元数把局部“前、东、北”正交基旋转到 ICRS 天球，
+ * 因而跨越天极时不会反复把朝向压缩成赤经、赤纬后再恢复。
+ */
+export interface NormalSkyViewState {
+  viewQuaternion: NormalSkyQuaternion;
+  fieldOfViewDegrees: number;
   orientation: SkyMapOrientation;
 }
 

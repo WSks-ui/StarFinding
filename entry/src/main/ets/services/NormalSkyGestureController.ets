@@ -1,8 +1,8 @@
-import { NormalSkyViewport, SkyMapSize } from '../models/NormalSkyModels';
-import { NormalSkyProjectionService } from './NormalSkyProjectionService';
+import { NormalSkyViewState, SkyMapSize } from '../models/NormalSkyModels';
+import { NormalSkyViewStateService } from './NormalSkyViewStateService';
 
 export interface NormalSkyGestureUpdate {
-  viewport: NormalSkyViewport;
+  viewState: NormalSkyViewState;
   changed: boolean;
   scaleChanged: boolean;
   rotationChanged: boolean;
@@ -46,49 +46,51 @@ export class NormalSkyGestureController {
     this.lastPointerRotationDegrees = 0.0;
   }
 
-  updatePointerScale(viewport: NormalSkyViewport, size: SkyMapSize, totalScale: number,
+  updatePointerScale(viewState: NormalSkyViewState, size: SkyMapSize, totalScale: number,
     anchorX: number, anchorY: number): NormalSkyGestureUpdate {
     if (!Number.isFinite(totalScale) || totalScale <= 0.0) {
-      return this.unchanged(viewport);
+      return this.unchanged(viewState);
     }
     if (!this.pointerScaleActive) {
       if (Math.abs(totalScale - 1.0) < NormalSkyGestureController.SCALE_ACTIVATION_DELTA) {
-        return this.unchanged(viewport);
+        return this.unchanged(viewState);
       }
       this.pointerScaleActive = true;
     }
     const incrementalScale: number = totalScale / Math.max(0.001, this.lastPointerScale);
     this.lastPointerScale = totalScale;
     return {
-      viewport: NormalSkyProjectionService.zoomAt(viewport, size, incrementalScale, anchorX, anchorY),
+      viewState: NormalSkyViewStateService.zoomAt(
+        viewState, size, incrementalScale, anchorX, anchorY),
       changed: true,
       scaleChanged: true,
       rotationChanged: false
     };
   }
 
-  updatePointerRotation(viewport: NormalSkyViewport, size: SkyMapSize, totalDegrees: number,
+  updatePointerRotation(viewState: NormalSkyViewState, size: SkyMapSize, totalDegrees: number,
     anchorX: number, anchorY: number): NormalSkyGestureUpdate {
     if (!Number.isFinite(totalDegrees)) {
-      return this.unchanged(viewport);
+      return this.unchanged(viewState);
     }
     if (!this.pointerRotationActive) {
       if (Math.abs(totalDegrees) < NormalSkyGestureController.ROTATION_ACTIVATION_DEGREES) {
-        return this.unchanged(viewport);
+        return this.unchanged(viewState);
       }
       this.pointerRotationActive = true;
     }
     const incrementalDegrees: number = totalDegrees - this.lastPointerRotationDegrees;
     this.lastPointerRotationDegrees = totalDegrees;
     return {
-      viewport: NormalSkyProjectionService.rotateAt(viewport, size, incrementalDegrees, anchorX, anchorY),
+      viewState: NormalSkyViewStateService.rotateAt(
+        viewState, size, incrementalDegrees, anchorX, anchorY),
       changed: true,
       scaleChanged: false,
       rotationChanged: true
     };
   }
 
-  updateHandTransform(viewport: NormalSkyViewport, size: SkyMapSize, incrementalScale: number,
+  updateHandTransform(viewState: NormalSkyViewState, size: SkyMapSize, incrementalScale: number,
     incrementalRotationDegrees: number, anchorX: number, anchorY: number): NormalSkyGestureUpdate {
     const safeScale: number = Number.isFinite(incrementalScale) && incrementalScale > 0.0 ?
       Math.max(0.75, Math.min(1.33, incrementalScale)) : 1.0;
@@ -97,13 +99,13 @@ export class NormalSkyGestureController {
     this.pendingHandScale *= safeScale;
     this.pendingHandRotationDegrees += safeRotation;
 
-    let candidate: NormalSkyViewport = viewport;
+    let candidate: NormalSkyViewState = viewState;
     let scaleChanged: boolean = false;
     let rotationChanged: boolean = false;
     if (this.handScaleActive ||
       Math.abs(this.pendingHandScale - 1.0) >= NormalSkyGestureController.SCALE_ACTIVATION_DELTA) {
       this.handScaleActive = true;
-      candidate = NormalSkyProjectionService.zoomAt(
+      candidate = NormalSkyViewStateService.zoomAt(
         candidate, size, this.pendingHandScale, anchorX, anchorY);
       this.pendingHandScale = 1.0;
       scaleChanged = true;
@@ -111,13 +113,13 @@ export class NormalSkyGestureController {
     if (this.handRotationActive ||
       Math.abs(this.pendingHandRotationDegrees) >= NormalSkyGestureController.ROTATION_ACTIVATION_DEGREES) {
       this.handRotationActive = true;
-      candidate = NormalSkyProjectionService.rotateAt(
+      candidate = NormalSkyViewStateService.rotateAt(
         candidate, size, this.pendingHandRotationDegrees, anchorX, anchorY);
       this.pendingHandRotationDegrees = 0.0;
       rotationChanged = true;
     }
     return {
-      viewport: candidate,
+      viewState: candidate,
       changed: scaleChanged || rotationChanged,
       scaleChanged: scaleChanged,
       rotationChanged: rotationChanged
@@ -137,9 +139,9 @@ export class NormalSkyGestureController {
     this.endHandTransform();
   }
 
-  private unchanged(viewport: NormalSkyViewport): NormalSkyGestureUpdate {
+  private unchanged(viewState: NormalSkyViewState): NormalSkyGestureUpdate {
     return {
-      viewport: viewport,
+      viewState: viewState,
       changed: false,
       scaleChanged: false,
       rotationChanged: false

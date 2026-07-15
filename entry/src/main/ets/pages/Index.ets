@@ -32,6 +32,7 @@ import {
   MountState,
   MountTargetCoordinate,
   NormalSkyScene,
+  NormalSkyViewState,
   NormalSkyViewport,
   ObservationPlanningConstraints,
   ObservationPlanningResult,
@@ -83,6 +84,7 @@ import {
   NormalSkyCatalogService,
   NormalSkyProjectionService,
   NormalSkySceneService,
+  NormalSkyViewStateService,
   ObserverLocationResult,
   ObserverLocationService,
   OnStepLX200Client,
@@ -151,7 +153,10 @@ struct Index {
   @State private targetSearch: string = '';
   @State private gestureEnabled: boolean = false;
   @State private gestureStatus: string = '未安装手势模型';
-  @State private normalViewport: NormalSkyViewport = NormalSkyProjectionService.defaultViewport();
+  @State private normalViewState: NormalSkyViewState = NormalSkyViewStateService.defaultState();
+  // Canvas 与控件只读取该快照；所有交互必须通过 normalViewState 更新四元数长期姿态。
+  @State private normalViewport: NormalSkyViewport = NormalSkyViewStateService.snapshot(
+    NormalSkyViewStateService.defaultState());
   @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
   @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
   @State private normalLayerPanelOpen: boolean = false;
@@ -726,8 +731,8 @@ struct Index {
               const deltaY: number = event.offsetY - this.lastPanOffsetY;
               this.lastPanOffsetX = event.offsetX;
               this.lastPanOffsetY = event.offsetY;
-              this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport,
-                this.normalSkySize(), deltaX, deltaY);
+              this.applyNormalViewState(NormalSkyViewStateService.pan(
+                this.normalViewState, this.normalSkySize(), deltaX, deltaY));
               this.scheduleNormalSceneUpdate();
             }
           })
@@ -743,10 +748,10 @@ struct Index {
           .onActionUpdate((event: GestureEvent) => {
             if (this.skyMode === 1) {
               const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updatePointerScale(
-                this.normalViewport, this.normalSkySize(), event.scale,
+                this.normalViewState, this.normalSkySize(), event.scale,
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
               if (update.changed) {
-                this.normalViewport = update.viewport;
+                this.applyNormalViewState(update.viewState);
                 this.scheduleNormalSceneUpdate();
               }
             }
@@ -761,10 +766,10 @@ struct Index {
           .onActionUpdate((event: GestureEvent) => {
             if (this.skyMode === 1) {
               const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updatePointerRotation(
-                this.normalViewport, this.normalSkySize(), event.angle,
+                this.normalViewState, this.normalSkySize(), event.angle,
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
               if (update.changed) {
-                this.normalViewport = update.viewport;
+                this.applyNormalViewState(update.viewState);
                 this.scheduleNormalSceneUpdate();
               }
             }
@@ -2168,6 +2173,11 @@ struct Index {
     };
   }
 
+  private applyNormalViewState(viewState: NormalSkyViewState): void {
+    this.normalViewState = NormalSkyViewStateService.normalizeState(viewState);
+    this.normalViewport = NormalSkyViewStateService.snapshot(this.normalViewState);
+  }
+
   private normalObserver(timestampMs: number): ObserverState | undefined {
     if (this.observer === undefined) {
       return undefined;
@@ -2258,35 +2268,25 @@ struct Index {
 
   private homeNormalSky(): void {
     this.clearNormalMotion();
-    this.normalViewport = NormalSkyProjectionService.homeViewport(
-      this.normalObserver(Date.now()), this.normalViewport.orientation);
+    this.applyNormalViewState(NormalSkyViewStateService.home(
+      this.normalObserver(Date.now()), this.normalViewState.orientation));
     this.updateNormalScene();
   }
 
   private resetNormalSkyNorth(): void {
     this.clearNormalMotion();
-    if (this.normalViewport.orientation === SkyMapOrientation.HORIZON_ZENITH) {
-      this.normalViewport = NormalSkyProjectionService.homeViewport(
-        this.normalObserver(Date.now()), SkyMapOrientation.HORIZON_ZENITH);
-    } else {
-      this.normalViewport = NormalSkyProjectionService.normalizeViewport({
-        centerRaHours: this.normalViewport.centerRaHours,
-        centerDecDegrees: this.normalViewport.centerDecDegrees,
-        fieldOfViewDegrees: this.normalViewport.fieldOfViewDegrees,
-        rotationDegrees: 0.0,
-        orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
-      });
-    }
+    this.applyNormalViewState(NormalSkyViewStateService.resetNorth(
+      this.normalViewState, this.normalObserver(Date.now())));
     this.updateNormalScene();
   }
 
   private toggleNormalSkyOrientation(): void {
     this.clearNormalMotion();
     const orientation: SkyMapOrientation =
-      this.normalViewport.orientation === SkyMapOrientation.EQUATORIAL_NORTH_UP ?
+      this.normalViewState.orientation === SkyMapOrientation.EQUATORIAL_NORTH_UP ?
         SkyMapOrientation.HORIZON_ZENITH : SkyMapOrientation.EQUATORIAL_NORTH_UP;
-    this.normalViewport = NormalSkyProjectionService.homeViewport(
-      this.normalObserver(Date.now()), orientation);
+    this.applyNormalViewState(NormalSkyViewStateService.home(
+      this.normalObserver(Date.now()), orientation));
     if (orientation === SkyMapOrientation.HORIZON_ZENITH && this.observer === undefined) {
       this.operationMessage = '地平线需要观测地点；当前仍可浏览完整离线天球';
     } else {
@@ -2298,8 +2298,8 @@ struct Index {
 
   private zoomNormalSky(scale: number): void {
     this.clearNormalMotion();
-    this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
-      this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0);
+    this.applyNormalViewState(NormalSkyViewStateService.zoomAt(this.normalViewState,
+      this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0));
     this.scheduleNormalSceneUpdate();
   }
 
@@ -2308,9 +2308,9 @@ struct Index {
     const target: number = this.clamp(fieldOfViewDegrees,
       NormalSkyProjectionService.MIN_FIELD_OF_VIEW_DEGREES,
       NormalSkyProjectionService.MAX_FIELD_OF_VIEW_DEGREES);
-    const scale: number = this.normalViewport.fieldOfViewDegrees / Math.max(0.001, target);
-    this.normalViewport = NormalSkyProjectionService.zoomAt(this.normalViewport,
-      this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0);
+    const scale: number = this.normalViewState.fieldOfViewDegrees / Math.max(0.001, target);
+    this.applyNormalViewState(NormalSkyViewStateService.zoomAt(this.normalViewState,
+      this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0));
     this.scheduleNormalSceneUpdate();
   }
 
@@ -2354,25 +2354,26 @@ struct Index {
     const targetField: number = target.type === CelestialType.CONSTELLATION ?
       this.clamp((target.angularSizeDegrees === undefined ? 35.0 : target.angularSizeDegrees) * 1.8,
         20.0, 90.0) : 30.0;
-    const destination: NormalSkyViewport = NormalSkyProjectionService.flyTo(
-      this.normalViewport, coordinate, targetField);
+    const destination: NormalSkyViewState = NormalSkyViewStateService.flyTo(
+      this.normalViewState, coordinate, targetField);
     if (this.skyMode !== 1) {
-      this.normalViewport = destination;
+      this.applyNormalViewState(destination);
       this.updateNormalScene();
       return;
     }
     this.startNormalFly(destination);
   }
 
-  private startNormalFly(destination: NormalSkyViewport): void {
+  private startNormalFly(destination: NormalSkyViewState): void {
     this.clearNormalMotion();
-    const source: NormalSkyViewport = this.normalViewport;
+    const source: NormalSkyViewState = this.normalViewState;
     const startedAtMs: number = Date.now();
     this.normalFlyTimer = setInterval(() => {
       const elapsed: number = Date.now() - startedAtMs;
       const linearProgress: number = Math.min(1.0, elapsed / 350.0);
       const easedProgress: number = 1.0 - Math.pow(1.0 - linearProgress, 3.0);
-      this.normalViewport = NormalSkyProjectionService.interpolate(source, destination, easedProgress);
+      this.applyNormalViewState(NormalSkyViewStateService.interpolate(
+        source, destination, easedProgress));
       this.scheduleNormalSceneUpdate();
       if (linearProgress >= 1.0) {
         this.stopNormalFly();
@@ -2382,18 +2383,26 @@ struct Index {
 
   private startNormalInertia(velocityX: number, velocityY: number): void {
     this.stopNormalInertia();
-    let currentVelocityX: number = this.clamp(velocityX, -2400.0, 2400.0);
-    let currentVelocityY: number = this.clamp(velocityY, -2400.0, 2400.0);
-    if (Math.abs(currentVelocityX) + Math.abs(currentVelocityY) < 120.0) {
+    const initialVelocityX: number = Number.isFinite(velocityX) ? velocityX : 0.0;
+    const initialVelocityY: number = Number.isFinite(velocityY) ? velocityY : 0.0;
+    if (Math.abs(initialVelocityX) + Math.abs(initialVelocityY) < 120.0) {
       return;
     }
+    const durationMs: number = 320.0;
+    const startedAtMs: number = Date.now();
+    let previousAtMs: number = startedAtMs;
     this.normalInertiaTimer = setInterval(() => {
-      this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport,
-        this.normalSkySize(), currentVelocityX * 0.016, currentVelocityY * 0.016);
-      currentVelocityX *= 0.86;
-      currentVelocityY *= 0.86;
+      const currentAtMs: number = Date.now();
+      const elapsedMs: number = currentAtMs - startedAtMs;
+      const deltaSeconds: number = Math.max(0.0, currentAtMs - previousAtMs) / 1000.0;
+      previousAtMs = currentAtMs;
+      const progress: number = this.clamp(elapsedMs / durationMs, 0.0, 1.0);
+      const decay: number = (1.0 - progress) * (1.0 - progress);
+      this.applyNormalViewState(NormalSkyViewStateService.panWithVelocity(
+        this.normalViewState, this.normalSkySize(),
+        initialVelocityX * decay, initialVelocityY * decay, deltaSeconds));
       this.scheduleNormalSceneUpdate();
-      if (Math.abs(currentVelocityX) + Math.abs(currentVelocityY) < 18.0) {
+      if (progress >= 1.0) {
         this.stopNormalInertia();
       }
     }, 16);
@@ -2448,17 +2457,18 @@ struct Index {
     let normalSkyChanged: boolean = false;
     if (frame.gesture === HandGesture.DRAG) {
       this.normalSkyGestureController.endHandTransform();
-      this.normalViewport = NormalSkyProjectionService.pan(this.normalViewport, this.normalSkySize(),
-        frame.deltaX * this.skyViewportWidth, frame.deltaY * this.skyViewportHeight);
+      this.applyNormalViewState(NormalSkyViewStateService.pan(
+        this.normalViewState, this.normalSkySize(),
+        frame.deltaX * this.skyViewportWidth, frame.deltaY * this.skyViewportHeight));
       normalSkyChanged = true;
       this.gestureStatus = '单掌拖拽';
     } else if (frame.gesture === HandGesture.ROTATE_SCALE) {
       const anchorX: number = frame.selectX * this.skyViewportWidth;
       const anchorY: number = frame.selectY * this.skyViewportHeight;
       const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updateHandTransform(
-        this.normalViewport, this.normalSkySize(), frame.scale, frame.rotationDegrees, anchorX, anchorY);
+        this.normalViewState, this.normalSkySize(), frame.scale, frame.rotationDegrees, anchorX, anchorY);
       if (update.changed) {
-        this.normalViewport = update.viewport;
+        this.applyNormalViewState(update.viewState);
         normalSkyChanged = true;
       }
       this.gestureStatus = '双掌旋转 / 缩放';
@@ -2469,8 +2479,8 @@ struct Index {
       this.gestureStatus = '捏合选择';
     } else if (frame.gesture === HandGesture.FIST_RESET) {
       this.normalSkyGestureController.endHandTransform();
-      this.normalViewport = NormalSkyProjectionService.homeViewport(
-        this.normalObserver(Date.now()), this.normalViewport.orientation);
+      this.applyNormalViewState(NormalSkyViewStateService.home(
+        this.normalObserver(Date.now()), this.normalViewState.orientation));
       normalSkyChanged = true;
       this.gestureStatus = '握拳复位';
     } else if (result.hands.length > 0) {
