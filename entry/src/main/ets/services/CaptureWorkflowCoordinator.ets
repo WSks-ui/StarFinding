@@ -3,6 +3,7 @@ import {
   CapturePlan,
   CaptureTask,
   EquatorialCoordinate,
+  EquatorialFrame,
   ImageFormat,
   MountState,
   PlateSolveResult,
@@ -294,7 +295,7 @@ export class CaptureWorkflowCoordinator {
     const solved: EquatorialCoordinate = {
       raHours: result.centerRaHours,
       decDegrees: result.centerDecDegrees,
-      epoch: 2000
+      frame: EquatorialFrame.ICRS_J2000
     };
     const errorDegrees: number = AstronomyService.angularSeparation(target, solved);
     if (errorDegrees < 0.04) {
@@ -314,7 +315,8 @@ export class CaptureWorkflowCoordinator {
       raHours: AstronomyService.normalizeHours(state.rightAscensionHours + rightAscensionErrorDegrees / 15.0),
       decDegrees: Math.max(-90.0, Math.min(90.0,
         state.declinationDegrees + target.decDegrees - result.centerDecDegrees)),
-      epoch: 2000
+      frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+      validAtMs: Date.now()
     };
     this.driftCorrectionActive = true;
     try {

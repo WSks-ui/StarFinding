@@ -8,17 +8,22 @@ import {
   CelestialType,
   DevicePose,
   EquatorialCoordinate,
+  EquatorialFrame,
   HorizontalCoordinate,
   ObserverState,
+  RefractionMode,
   ScreenProjection
 } from '../models/DomainModels';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 
 interface HygVisibleStarRecord {
   id: string;
   name: string;
   raHours: number;
   decDegrees: number;
+  pmra: number;
+  pmdec: number;
   magnitude: number;
   constellation: string;
   spectralType: string;
@@ -29,6 +34,7 @@ interface HygVisibleStarDocument {
   source: string;
   sourceUrl: string;
   license: string;
+  sourceEpochYear: number;
   magnitudeLimit: number;
   count: number;
   stars: HygVisibleStarRecord[];
@@ -40,6 +46,9 @@ export interface VisibleStar {
   name: string;
   raHours: number;
   decDegrees: number;
+  pmRaMasPerYear: number;
+  pmDecMasPerYear: number;
+  sourceEpochYear: number;
   magnitude: number;
   constellation: string;
   spectralType: string;
@@ -50,6 +59,7 @@ export interface VisibleStarCatalogMetadata {
   source: string;
   sourceUrl: string;
   license: string;
+  sourceEpochYear: number;
   magnitudeLimit: number;
   declaredCount: number;
   loadedCount: number;
@@ -85,6 +95,7 @@ export interface EquatorialViewportQuery {
   heightDegrees: number;
   maxMagnitude?: number;
   maxResults?: number;
+  timestampMs?: number;
 }
 
 /** 普通星图球面查询；与矩形窗口不同，它在赤经回绕和天极附近不会漏星。 */
@@ -93,6 +104,7 @@ export interface SphericalSkyQuery {
   radiusDegrees: number;
   maxMagnitude?: number;
   maxResults?: number;
+  timestampMs?: number;
 }
 
 /**
@@ -207,14 +219,16 @@ export class VisibleStarCatalogService {
     const centerDecDegrees: number = this.clamp(query.centerDecDegrees, -90.0, 90.0);
     const declinationScale: number = Math.max(0.01, Math.cos(centerDecDegrees * Math.PI / 180.0));
     const result: VisibleStar[] = [];
+    const timestampMs: number = query.timestampMs === undefined ? Date.now() : query.timestampMs;
 
     for (let index: number = 0; index < this.stars.length && result.length < maxResults; index++) {
       const star: VisibleStar = this.stars[index];
-      if (star.magnitude > maxMagnitude || Math.abs(star.decDegrees - centerDecDegrees) > halfHeight) {
+      const coordinate: EquatorialCoordinate = this.coordinateAt(star, timestampMs);
+      if (star.magnitude > maxMagnitude || Math.abs(coordinate.decDegrees - centerDecDegrees) > halfHeight) {
         continue;
       }
       const raDifference: number = Math.abs(AstronomyService.normalizeSignedDegrees(
-        star.raHours * 15.0 - centerRaDegrees)) * declinationScale;
+        coordinate.raHours * 15.0 - centerRaDegrees)) * declinationScale;
       if (raDifference <= halfWidth) {
         result.push(star);
       }
@@ -232,15 +246,17 @@ export class VisibleStarCatalogService {
     const center: EquatorialCoordinate = {
       raHours: AstronomyService.normalizeHours(query.center.raHours),
       decDegrees: this.clamp(query.center.decDegrees, -90.0, 90.0),
-      epoch: query.center.epoch
+      frame: query.center.frame
     };
+    const timestampMs: number = query.timestampMs === undefined ? Date.now() : query.timestampMs;
     const result: VisibleStar[] = [];
     for (let index: number = 0; index < this.stars.length && result.length < maxResults; index++) {
       const star: VisibleStar = this.stars[index];
-      if (star.magnitude > maxMagnitude || !this.passesEquatorialPrefilter(star, center, radius)) {
+      const coordinate: EquatorialCoordinate = this.coordinateAt(star, timestampMs);
+      if (star.magnitude > maxMagnitude || !this.passesEquatorialPrefilter(coordinate, center, radius)) {
         continue;
       }
-      if (AstronomyService.angularSeparation(this.coordinateOf(star), center) <= radius) {
+      if (AstronomyService.angularSeparation(coordinate, center) <= radius) {
         result.push(star);
       }
     }
@@ -269,8 +285,9 @@ export class VisibleStarCatalogService {
       azimuthDegrees: calibratedPose.headingDegrees,
       aboveHorizon: calibratedPose.pitchDegrees > 0.0
     };
-    const cameraCenterEquatorial: EquatorialCoordinate = AstronomyService.horizontalToEquatorial(
-      cameraCenter, query.observer);
+    const cameraCenterEquatorial: EquatorialCoordinate = EphemerisService.horizontalToEqj(
+      cameraCenter.azimuthDegrees, cameraCenter.altitudeDegrees, query.observer,
+      query.observer.timestampMs, RefractionMode.NORMAL);
     const degreesPerPixel: number = Math.max(
       query.viewport.horizontalFovDegrees / query.viewport.widthPixels,
       query.viewport.verticalFovDegrees / query.viewport.heightPixels);
@@ -286,14 +303,15 @@ export class VisibleStarCatalogService {
       if (star.magnitude > maxMagnitude) {
         continue;
       }
-      if (!this.passesEquatorialPrefilter(star, cameraCenterEquatorial, prefilterRadius)) {
+      const coordinate: EquatorialCoordinate = this.coordinateAt(star, query.observer.timestampMs);
+      if (!this.passesEquatorialPrefilter(coordinate, cameraCenterEquatorial, prefilterRadius)) {
         continue;
       }
-      const coordinate: EquatorialCoordinate = this.coordinateOf(star);
       if (AstronomyService.angularSeparation(coordinate, cameraCenterEquatorial) > prefilterRadius) {
         continue;
       }
-      const horizontal: HorizontalCoordinate = AstronomyService.equatorialToHorizontal(coordinate, query.observer);
+      const horizontal: HorizontalCoordinate = EphemerisService.horizontalFromEqjCoordinate(
+        coordinate, query.observer, query.observer.timestampMs, RefractionMode.NORMAL);
       if (horizontal.altitudeDegrees < minimumAltitude) {
         continue;
       }
@@ -334,6 +352,11 @@ export class VisibleStarCatalogService {
       designation: star.id,
       constellation: star.constellation,
       coordinate: this.coordinateOf(star),
+      stellarProperMotion: {
+        pmRaMasPerYear: star.pmRaMasPerYear,
+        pmDecMasPerYear: star.pmDecMasPerYear,
+        sourceEpochYear: star.sourceEpochYear
+      },
       magnitude: star.magnitude,
       angularSizeDegrees: 0.0,
       description: `HYG 可见星表恒星，光谱型 ${star.spectralType.length > 0 ? star.spectralType : '未知'}${distanceDescription}。`,
@@ -364,6 +387,8 @@ export class VisibleStarCatalogService {
 
     const parsedStars: VisibleStar[] = [];
     let rejectedCount: number = 0;
+    const sourceEpochYear: number = this.isFiniteNumber(document.sourceEpochYear) ?
+      document.sourceEpochYear : 2000.0;
     for (let index: number = 0; index < document.stars.length; index++) {
       const record: HygVisibleStarRecord | null = document.stars[index];
       if (record === null || !this.isValidRecord(record)) {
@@ -380,6 +405,9 @@ export class VisibleStarCatalogService {
         name: record.name,
         raHours: AstronomyService.normalizeHours(record.raHours),
         decDegrees: record.decDegrees,
+        pmRaMasPerYear: record.pmra,
+        pmDecMasPerYear: record.pmdec,
+        sourceEpochYear: sourceEpochYear,
         magnitude: record.magnitude,
         constellation: record.constellation,
         spectralType: record.spectralType,
@@ -394,6 +422,7 @@ export class VisibleStarCatalogService {
       source: typeof document.source === 'string' ? document.source : 'HYG Database',
       sourceUrl: typeof document.sourceUrl === 'string' ? document.sourceUrl : '',
       license: typeof document.license === 'string' ? document.license : 'CC BY-SA 4.0',
+      sourceEpochYear: sourceEpochYear,
       magnitudeLimit: this.isFiniteNumber(document.magnitudeLimit) ? document.magnitudeLimit :
         VisibleStarCatalogService.DEFAULT_MAX_MAGNITUDE,
       declaredCount: this.isFiniteNumber(document.count) ? document.count : document.stars.length,
@@ -409,13 +438,14 @@ export class VisibleStarCatalogService {
       typeof record.spectralType === 'string' && this.isFiniteNumber(record.raHours) &&
       record.raHours >= 0.0 && record.raHours <= 24.0 && this.isFiniteNumber(record.decDegrees) &&
       record.decDegrees >= -90.0 && record.decDegrees <= 90.0 && this.isFiniteNumber(record.magnitude) &&
+      this.isFiniteNumber(record.pmra) && this.isFiniteNumber(record.pmdec) &&
       this.isFiniteNumber(record.distanceParsec) && record.distanceParsec >= 0.0;
   }
 
   /** 球面角距前的保守包围窗口；接近天极时放弃赤经筛选，保证不会误删应显示的恒星。 */
-  private passesEquatorialPrefilter(star: VisibleStar, center: EquatorialCoordinate,
+  private passesEquatorialPrefilter(coordinate: EquatorialCoordinate, center: EquatorialCoordinate,
     radiusDegrees: number): boolean {
-    if (Math.abs(star.decDegrees - center.decDegrees) > radiusDegrees) {
+    if (Math.abs(coordinate.decDegrees - center.decDegrees) > radiusDegrees) {
       return false;
     }
     const furthestDeclination: number = Math.abs(center.decDegrees) + radiusDegrees;
@@ -426,12 +456,24 @@ export class VisibleStarCatalogService {
       Math.cos(furthestDeclination * Math.PI / 180.0));
     const maximumRaDifference: number = Math.min(180.0, radiusDegrees / minimumCosine);
     const raDifference: number = Math.abs(AstronomyService.normalizeSignedDegrees(
-      star.raHours * 15.0 - center.raHours * 15.0));
+      coordinate.raHours * 15.0 - center.raHours * 15.0));
     return raDifference <= maximumRaDifference;
   }
 
   private coordinateOf(star: VisibleStar): EquatorialCoordinate {
-    return { raHours: star.raHours, decDegrees: star.decDegrees, epoch: 2000.0 };
+    return {
+      raHours: star.raHours,
+      decDegrees: star.decDegrees,
+      frame: EquatorialFrame.ICRS_J2000
+    };
+  }
+
+  coordinateAt(star: VisibleStar, timestampMs: number): EquatorialCoordinate {
+    return EphemerisService.applyProperMotion(this.coordinateOf(star), {
+      pmRaMasPerYear: star.pmRaMasPerYear,
+      pmDecMasPerYear: star.pmDecMasPerYear,
+      sourceEpochYear: star.sourceEpochYear
+    }, timestampMs);
   }
 
   private calibratedPose(pose: DevicePose, calibration?: ArCalibration): DevicePose {
@@ -486,6 +528,7 @@ export class VisibleStarCatalogService {
       source: metadata.source,
       sourceUrl: metadata.sourceUrl,
       license: metadata.license,
+      sourceEpochYear: metadata.sourceEpochYear,
       magnitudeLimit: metadata.magnitudeLimit,
       declaredCount: metadata.declaredCount,
       loadedCount: metadata.loadedCount,

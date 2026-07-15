@@ -8,6 +8,7 @@ import {
   CelestialType,
   DevicePose,
   EquatorialCoordinate,
+  EquatorialFrame,
   HandGesture,
   HandLandmarks,
   HandPoint,
@@ -54,7 +55,11 @@ export default function starFindingCoreTest(): void {
         elevationMeters: 100,
         timestampMs: Date.UTC(2026, 6, 11, 14, 0, 0)
       };
-      const source: EquatorialCoordinate = { raHours: 18.6156, decDegrees: 38.7837, epoch: 2000 };
+      const source: EquatorialCoordinate = {
+        raHours: 18.6156,
+        decDegrees: 38.7837,
+        frame: EquatorialFrame.TOPOCENTRIC_OF_DATE
+      };
       const horizontal = AstronomyService.equatorialToHorizontal(source, observer);
       const restored = AstronomyService.horizontalToEquatorial(horizontal, observer);
       expect(closeTo(restored.raHours, source.raHours, 0.0001)).assertTrue();
@@ -101,7 +106,11 @@ export default function starFindingCoreTest(): void {
       const target: CelestialObject = {
         id: 'm8-test', type: CelestialType.MESSIER, nameZh: '礁湖星云', nameEn: 'Lagoon Nebula',
         designation: 'M8', constellation: '人马座',
-        coordinate: { raHours: 18.06, decDegrees: -24.38, epoch: 2000 }, magnitude: 6,
+        coordinate: {
+          raHours: 18.06,
+          decDegrees: -24.38,
+          frame: EquatorialFrame.ICRS_J2000
+        }, magnitude: 6,
         angularSizeDegrees: 1.5, description: '测试目标', tags: ['星云'],
         precision: CatalogPrecision.EXACT, gotoAllowed: true, recommendedFor18mm: true
       };

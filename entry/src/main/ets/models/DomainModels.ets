@@ -21,12 +21,65 @@ export enum CatalogPrecision {
   DYNAMIC = 'dynamic'
 }
 
-export interface EquatorialCoordinate {
-  /** J2000 或指定历元的赤经，单位为小时，范围 [0, 24)。 */
+/**
+ * 赤道坐标必须显式声明参考系。星表、屏幕投影、板解析和 OnStepX 使用的坐标不可互换。
+ */
+export enum EquatorialFrame {
+  ICRS_J2000 = 'icrs_j2000',
+  APPARENT_EQJ = 'apparent_eqj',
+  TOPOCENTRIC_OF_DATE = 'topocentric_of_date'
+}
+
+export interface FramedEquatorialCoordinate {
   raHours: number;
-  /** 赤纬，单位为度，范围 [-90, 90]。 */
   decDegrees: number;
-  epoch: number;
+  frame: EquatorialFrame;
+  /** 动态坐标的有效时刻；固定 J2000 目录坐标可省略。 */
+  validAtMs?: number;
+}
+
+/** 兼容现有投影接口的名称；其实际契约已经要求显式参考系。 */
+export type EquatorialCoordinate = FramedEquatorialCoordinate;
+
+/** 仅供赤道仪运动接口消费的当日站心坐标。 */
+export interface MountTargetCoordinate {
+  raHours: number;
+  decDegrees: number;
+  frame: EquatorialFrame;
+  calculatedAtMs: number;
+  observerKey: string;
+}
+
+export enum RefractionMode {
+  NONE = 'none',
+  NORMAL = 'normal'
+}
+
+/** 太阳系图符和详情面板共用的真实外观参数。 */
+export interface SolarSystemAppearance {
+  objectId: string;
+  timestampMs: number;
+  magnitude: number;
+  illuminatedFraction: number;
+  phaseAngleDegrees: number;
+  angularDiameterArcSeconds: number;
+  brightLimbAngleDegrees: number;
+  distanceAu: number;
+  ringTiltDegrees?: number;
+  moonPhaseDegrees?: number;
+}
+
+export interface ApparentTrajectoryPoint {
+  timestampMs: number;
+  coordinate: FramedEquatorialCoordinate;
+}
+
+export interface ApparentTrajectory {
+  objectId: string;
+  startAtMs: number;
+  endAtMs: number;
+  stepMs: number;
+  points: ApparentTrajectoryPoint[];
 }
 
 export interface HorizontalCoordinate {
@@ -37,6 +90,13 @@ export interface HorizontalCoordinate {
   aboveHorizon: boolean;
 }
 
+/** 恒星在 ICRS 切平面上的自行；赤经分量遵循星表常用的 mu_alpha*cos(delta)。 */
+export interface StellarProperMotion {
+  pmRaMasPerYear: number;
+  pmDecMasPerYear: number;
+  sourceEpochYear: number;
+}
+
 export interface CelestialObject {
   id: string;
   type: CelestialType;
@@ -45,6 +105,7 @@ export interface CelestialObject {
   designation: string;
   constellation: string;
   coordinate?: EquatorialCoordinate;
+  stellarProperMotion?: StellarProperMotion;
   magnitude?: number;
   angularSizeDegrees?: number;
   description: string;

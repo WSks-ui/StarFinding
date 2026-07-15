@@ -1,7 +1,9 @@
 import {
   EquatorialCoordinate,
+  EquatorialFrame,
   HorizontalCoordinate,
-  ObserverState
+  ObserverState,
+  RefractionMode
 } from '../models/DomainModels';
 import {
   NormalSkyProjection,
@@ -14,6 +16,7 @@ import {
   SkyOrientationSnapshot
 } from '../models/NormalSkyModels';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 import { NormalSkyProjectionService } from './NormalSkyProjectionService';
 
 export interface NormalSkyOrientationQuery {
@@ -30,11 +33,12 @@ export class NormalSkyOrientationService {
     const center: EquatorialCoordinate = {
       raHours: query.viewport.centerRaHours,
       decDegrees: query.viewport.centerDecDegrees,
-      epoch: 2000.0
+      frame: EquatorialFrame.ICRS_J2000
     };
     const observer: ObserverState | undefined = query.observer;
     const horizontal: HorizontalCoordinate | undefined = observer === undefined ? undefined :
-      AstronomyService.equatorialToHorizontal(center, observer);
+      EphemerisService.horizontalFromEqjCoordinate(
+        center, observer, observer.timestampMs, RefractionMode.NONE);
     let northAngle: number = query.viewport.rotationDegrees;
     let eastAngle: number = query.viewport.rotationDegrees - 90.0;
     const markers: SkyDirectionMarker[] = [];
@@ -55,9 +59,17 @@ export class NormalSkyOrientationService {
       }
     } else if (query.directionGuides) {
       NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.NORTH_CELESTIAL_POLE,
-        { raHours: query.viewport.centerRaHours, decDegrees: 90.0, epoch: 2000.0 }, query);
+        {
+          raHours: query.viewport.centerRaHours,
+          decDegrees: 90.0,
+          frame: EquatorialFrame.ICRS_J2000
+        }, query);
       NormalSkyOrientationService.appendMarker(markers, SkyDirectionKind.SOUTH_CELESTIAL_POLE,
-        { raHours: query.viewport.centerRaHours, decDegrees: -90.0, epoch: 2000.0 }, query);
+        {
+          raHours: query.viewport.centerRaHours,
+          decDegrees: -90.0,
+          frame: EquatorialFrame.ICRS_J2000
+        }, query);
     }
     return {
       orientation: query.viewport.orientation,
@@ -73,11 +85,8 @@ export class NormalSkyOrientationService {
 
   private static horizontalCoordinate(altitudeDegrees: number, azimuthDegrees: number,
     observer: ObserverState): EquatorialCoordinate {
-    return AstronomyService.horizontalToEquatorial({
-      altitudeDegrees: altitudeDegrees,
-      azimuthDegrees: azimuthDegrees,
-      aboveHorizon: altitudeDegrees > 0.0
-    }, observer);
+    return EphemerisService.horizontalToEqj(
+      azimuthDegrees, altitudeDegrees, observer, observer.timestampMs, RefractionMode.NONE);
   }
 
   private static appendMarker(result: SkyDirectionMarker[], kind: SkyDirectionKind,

@@ -1,6 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { util } from '@kit.ArkTS';
-import { EquatorialCoordinate } from '../models/DomainModels';
+import { EquatorialCoordinate, EquatorialFrame } from '../models/DomainModels';
 
 interface RawSkyLinePoint {
   raHours: number;
@@ -113,7 +113,11 @@ export class NormalSkyCatalogService {
           if (point !== undefined && Number.isFinite(point.raHours) && Number.isFinite(point.decDegrees) &&
             point.raHours >= 0.0 && point.raHours < 24.0 &&
             point.decDegrees >= -90.0 && point.decDegrees <= 90.0) {
-            line.push({ raHours: point.raHours, decDegrees: point.decDegrees, epoch: 2000.0 });
+            line.push({
+              raHours: point.raHours,
+              decDegrees: point.decDegrees,
+              frame: EquatorialFrame.ICRS_J2000
+            });
           }
         }
         if (line.length >= 2) {

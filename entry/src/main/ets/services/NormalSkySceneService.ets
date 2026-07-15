@@ -3,7 +3,9 @@ import {
   CelestialObject,
   CelestialType,
   EquatorialCoordinate,
-  ObserverState
+  EquatorialFrame,
+  ObserverState,
+  RefractionMode
 } from '../models/DomainModels';
 import {
   NormalSkyProjection,
@@ -20,6 +22,7 @@ import {
   SkyScreenRect
 } from '../models/NormalSkyModels';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 import { ConstellationLineGroup, NormalSkyCatalogService } from './NormalSkyCatalogService';
 import { NormalSkyProjectionService } from './NormalSkyProjectionService';
 import { NormalSkyOrientationService } from './NormalSkyOrientationService';
@@ -89,17 +92,16 @@ export class NormalSkySceneService {
       center: {
         raHours: query.viewport.centerRaHours,
         decDegrees: query.viewport.centerDecDegrees,
-        epoch: 2000.0
+        frame: EquatorialFrame.ICRS_J2000
       },
       radiusDegrees: radius,
       maxMagnitude: this.maximumMagnitude(query.viewport.fieldOfViewDegrees),
-      maxResults: this.maximumStarCount(query.viewport.fieldOfViewDegrees)
+      maxResults: this.maximumStarCount(query.viewport.fieldOfViewDegrees),
+      timestampMs: query.timestampMs
     });
     for (let index: number = 0; index < stars.length; index++) {
       const star: VisibleStar = stars[index];
-      const coordinate: EquatorialCoordinate = {
-        raHours: star.raHours, decDegrees: star.decDegrees, epoch: 2000.0
-      };
+      const coordinate: EquatorialCoordinate = this.visibleStars.coordinateAt(star, query.timestampMs);
       if (this.duplicatesCuratedStar(coordinate, brightStars)) {
         continue;
       }
@@ -135,7 +137,7 @@ export class NormalSkySceneService {
     query: NormalSkySceneQuery): void {
     for (let index: number = 0; index < objects.length; index++) {
       const object: CelestialObject = objects[index];
-      const coordinate: EquatorialCoordinate | undefined = AstronomyService.resolveCoordinate(
+      const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(
         object, query.timestampMs);
       if (coordinate === undefined || !this.shouldDisplay(object, query)) {
         continue;
@@ -205,14 +207,14 @@ export class NormalSkySceneService {
     for (let ra: number = 0.0; ra < 24.0; ra += rightAscensionStep) {
       const line: EquatorialCoordinate[] = [];
       for (let dec: number = -90.0; dec <= 90.0; dec += 3.0) {
-        line.push({ raHours: ra, decDegrees: dec, epoch: 2000.0 });
+        line.push({ raHours: ra, decDegrees: dec, frame: EquatorialFrame.ICRS_J2000 });
       }
       this.appendProjectedLine(result, `ra-${ra}`, SkyPolylineKind.GRID, line, query);
     }
     for (let dec: number = -75.0; dec <= 75.0; dec += 15.0) {
       const line: EquatorialCoordinate[] = [];
       for (let ra: number = 0.0; ra <= 24.0; ra += 0.25) {
-        line.push({ raHours: ra, decDegrees: dec, epoch: 2000.0 });
+        line.push({ raHours: ra, decDegrees: dec, frame: EquatorialFrame.ICRS_J2000 });
       }
       this.appendProjectedLine(result, `dec-${dec}`, SkyPolylineKind.GRID, line, query);
     }
@@ -230,7 +232,7 @@ export class NormalSkySceneService {
       line.push({
         raHours: AstronomyService.normalizeHours(Math.atan2(y, x) * 12.0 / Math.PI),
         decDegrees: Math.asin(z) * 180.0 / Math.PI,
-        epoch: 2000.0
+        frame: EquatorialFrame.ICRS_J2000
       });
     }
     const result: SkyPolyline[] = [];
@@ -245,9 +247,8 @@ export class NormalSkySceneService {
     }
     const line: EquatorialCoordinate[] = [];
     for (let azimuth: number = 0.0; azimuth <= 360.0; azimuth += 3.0) {
-      line.push(AstronomyService.horizontalToEquatorial({
-        altitudeDegrees: 0.0, azimuthDegrees: azimuth, aboveHorizon: false
-      }, observer));
+      line.push(EphemerisService.horizontalToEqj(
+        azimuth, 0.0, observer, query.timestampMs, RefractionMode.NONE));
     }
     const result: SkyPolyline[] = [];
     this.appendProjectedLine(result, 'horizon', SkyPolylineKind.HORIZON, line, query);
@@ -272,7 +273,8 @@ export class NormalSkySceneService {
           const coordinate: EquatorialCoordinate = NormalSkyProjectionService.unproject(
             Math.min(query.size.widthPixels, (column + 0.5) * cellSize),
             Math.min(query.size.heightPixels, (row + 0.5) * cellSize), query.viewport, query.size);
-          belowHorizon = AstronomyService.equatorialToHorizontal(coordinate, observer).altitudeDegrees < 0.0;
+          belowHorizon = EphemerisService.horizontalFromEqjCoordinate(
+            coordinate, observer, query.timestampMs, RefractionMode.NONE).altitudeDegrees < 0.0;
         }
         if (belowHorizon && spanStart < 0) {
           spanStart = column;
@@ -356,7 +358,8 @@ export class NormalSkySceneService {
     if (observer === undefined) {
       return undefined;
     }
-    return AstronomyService.equatorialToHorizontal(coordinate, observer).aboveHorizon;
+    return EphemerisService.horizontalFromEqjCoordinate(
+      coordinate, observer, observer.timestampMs, RefractionMode.NONE).aboveHorizon;
   }
 
   private objectSize(object: CelestialObject, selected: boolean, fieldOfViewDegrees: number): number {

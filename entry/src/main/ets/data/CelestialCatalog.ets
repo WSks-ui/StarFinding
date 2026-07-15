@@ -3,7 +3,8 @@ import {
   CatalogPrecision,
   CelestialObject,
   CelestialType,
-  EquatorialCoordinate
+  EquatorialCoordinate,
+  EquatorialFrame
 } from '../models/DomainModels';
 import {
   GENERATED_CONSTELLATIONS,
@@ -13,7 +14,7 @@ import {
 } from './GeneratedSkyCatalog';
 
 function coordinate(raHours: number, decDegrees: number): EquatorialCoordinate {
-  return { raHours: raHours, decDegrees: decDegrees, epoch: 2000.0 };
+  return { raHours: raHours, decDegrees: decDegrees, frame: EquatorialFrame.ICRS_J2000 };
 }
 function exactObject(id: string, type: CelestialType, nameZh: string, nameEn: string,
   designation: string, constellation: string, raHours: number, decDegrees: number,

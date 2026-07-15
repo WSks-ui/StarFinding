@@ -1,4 +1,9 @@
-import { EquatorialCoordinate, ObserverState } from '../models/DomainModels';
+import {
+  EquatorialCoordinate,
+  EquatorialFrame,
+  ObserverState,
+  RefractionMode
+} from '../models/DomainModels';
 import {
   NormalSkyProjection,
   NormalSkyViewport,
@@ -7,6 +12,7 @@ import {
   SkyMapSize
 } from '../models/NormalSkyModels';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 
 interface SkyVector3 {
   x: number;
@@ -40,11 +46,8 @@ export class NormalSkyProjectionService {
       fallback.orientation = orientation;
       return fallback;
     }
-    const zenith: EquatorialCoordinate = AstronomyService.horizontalToEquatorial({
-      altitudeDegrees: 90.0,
-      azimuthDegrees: 0.0,
-      aboveHorizon: true
-    }, observer);
+    const zenith: EquatorialCoordinate = EphemerisService.horizontalToEqj(
+      0.0, 90.0, observer, observer.timestampMs, RefractionMode.NONE);
     const viewport: NormalSkyViewport = {
       centerRaHours: zenith.raHours,
       centerDecDegrees: zenith.decDegrees,
@@ -53,11 +56,8 @@ export class NormalSkyProjectionService {
       orientation: orientation
     };
     if (orientation === SkyMapOrientation.HORIZON_ZENITH) {
-      const north: EquatorialCoordinate = AstronomyService.horizontalToEquatorial({
-        altitudeDegrees: 80.0,
-        azimuthDegrees: 0.0,
-        aboveHorizon: true
-      }, observer);
+      const north: EquatorialCoordinate = EphemerisService.horizontalToEqj(
+        0.0, 80.0, observer, observer.timestampMs, RefractionMode.NONE);
       const northProjection: NormalSkyProjection = NormalSkyProjectionService.project(
         north, viewport, { widthPixels: 1000.0, heightPixels: 1000.0 });
       const deltaX: number = northProjection.xPixels - 500.0;
@@ -217,10 +217,14 @@ export class NormalSkyProjectionService {
   static interpolate(first: NormalSkyViewport, second: NormalSkyViewport, progress: number): NormalSkyViewport {
     const ratio: number = NormalSkyProjectionService.clamp(progress, 0.0, 1.0);
     const firstVector: SkyVector3 = NormalSkyProjectionService.equatorialVector({
-      raHours: first.centerRaHours, decDegrees: first.centerDecDegrees, epoch: 2000.0
+      raHours: first.centerRaHours,
+      decDegrees: first.centerDecDegrees,
+      frame: EquatorialFrame.ICRS_J2000
     });
     const secondVector: SkyVector3 = NormalSkyProjectionService.equatorialVector({
-      raHours: second.centerRaHours, decDegrees: second.centerDecDegrees, epoch: 2000.0
+      raHours: second.centerRaHours,
+      decDegrees: second.centerDecDegrees,
+      frame: EquatorialFrame.ICRS_J2000
     });
     const center: EquatorialCoordinate = NormalSkyProjectionService.vectorCoordinate(
       NormalSkyProjectionService.slerp(firstVector, secondVector, ratio));
@@ -341,7 +345,7 @@ export class NormalSkyProjectionService {
     return {
       raHours: AstronomyService.normalizeHours(Math.atan2(normalized.y, normalized.x) * 12.0 / Math.PI),
       decDegrees: Math.asin(NormalSkyProjectionService.clamp(normalized.z, -1.0, 1.0)) * 180.0 / Math.PI,
-      epoch: 2000.0
+      frame: EquatorialFrame.ICRS_J2000
     };
   }
 
@@ -355,7 +359,7 @@ export class NormalSkyProjectionService {
     return {
       raHours: raHours,
       decDegrees: Math.atan2(normalized.z, horizontalLength) * 180.0 / Math.PI,
-      epoch: 2000.0
+      frame: EquatorialFrame.ICRS_J2000
     };
   }
 

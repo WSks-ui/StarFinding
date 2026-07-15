@@ -1,4 +1,5 @@
 export * from './AstronomyService';
+export * from './EphemerisService';
 export * from './OnStepLX200Client';
 export * from './RaspberryPiClient';
 export * from './CapturePlanner';

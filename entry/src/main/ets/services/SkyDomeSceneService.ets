@@ -4,8 +4,10 @@ import {
   CelestialType,
   DevicePose,
   EquatorialCoordinate,
+  EquatorialFrame,
   HorizontalCoordinate,
-  ObserverState
+  ObserverState,
+  RefractionMode
 } from '../models/DomainModels';
 import {
   ArPoseSample,
@@ -20,6 +22,7 @@ import {
   SkyDomeViewport
 } from '../models/ArSkyModels';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 import { SkyDomeProjectionService } from './SkyDomeProjectionService';
 import { VisibleStar } from './VisibleStarCatalogService';
 
@@ -59,11 +62,15 @@ export class SkyDomeSceneService {
 
     for (let index: number = 0; index < query.featuredTargets.length; index++) {
       const target: CelestialObject = query.featuredTargets[index];
-      const coordinate: EquatorialCoordinate | undefined = AstronomyService.resolveCoordinate(target, timestampMs);
+      const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, timestampMs);
       if (coordinate === undefined) {
         continue;
       }
-      const horizontal: HorizontalCoordinate = AstronomyService.equatorialToHorizontal(coordinate, query.observer);
+      const horizontal: HorizontalCoordinate | undefined = EphemerisService.horizontalCoordinate(
+        target, query.observer, timestampMs, RefractionMode.NORMAL);
+      if (horizontal === undefined) {
+        continue;
+      }
       inputs.push({
         id: `target:${target.id}`,
         label: target.nameZh,
@@ -139,11 +146,13 @@ export class SkyDomeSceneService {
       if (star.magnitude > magnitudeLimit) {
         continue;
       }
-      const horizontal: HorizontalCoordinate = AstronomyService.equatorialToHorizontal({
+      const coordinate: EquatorialCoordinate = {
         raHours: star.raHours,
         decDegrees: star.decDegrees,
-        epoch: 2000.0
-      }, query.observer);
+        frame: EquatorialFrame.ICRS_J2000
+      };
+      const horizontal: HorizontalCoordinate = EphemerisService.horizontalFromEqjCoordinate(
+        coordinate, query.observer, query.observer.timestampMs, RefractionMode.NORMAL);
       // 沉浸模式保留地平线下少量星点，使用户转向目标时天穹边缘不会突然出现空洞。
       if (horizontal.altitudeDegrees < -8.0) {
         continue;
@@ -187,11 +196,13 @@ export class SkyDomeSceneService {
       const raDegrees: number = AstronomyService.normalizeDegrees(
         Math.atan2(equatorialY, equatorialX) * 180.0 / Math.PI);
       const decDegrees: number = Math.asin(Math.max(-1.0, Math.min(1.0, equatorialZ))) * 180.0 / Math.PI;
-      const horizontal: HorizontalCoordinate = AstronomyService.equatorialToHorizontal({
+      const coordinate: EquatorialCoordinate = {
         raHours: raDegrees / 15.0,
         decDegrees: decDegrees,
-        epoch: 2000.0
-      }, query.observer);
+        frame: EquatorialFrame.ICRS_J2000
+      };
+      const horizontal: HorizontalCoordinate = EphemerisService.horizontalFromEqjCoordinate(
+        coordinate, query.observer, query.observer.timestampMs, RefractionMode.NORMAL);
       result.push({
         id: `milky-way-${Math.round(longitudeDegrees)}`,
         label: '',

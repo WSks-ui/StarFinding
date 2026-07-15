@@ -38,6 +38,7 @@ import {
   ObserverState,
   OutingRecommendation,
   ProjectedSkyObject,
+  RefractionMode,
   SkyLayerVisibility,
   SkyGuideInsets,
   SkyMapOrientation,
@@ -69,6 +70,7 @@ import {
   CaptureWorkflowProgress,
   CaptureWorkflowResult,
   DevicePoseService,
+  EphemerisService,
   GatewayTask,
   GestureInterpreter,
   HandFrameSourceStatus,
@@ -1549,12 +1551,11 @@ struct Index {
   }
 
   private selectedCoordinate(): EquatorialCoordinate | undefined {
-    return AstronomyService.resolveCoordinate(this.selectedTarget(), Date.now());
+    return EphemerisService.skyCoordinate(this.selectedTarget(), Date.now());
   }
 
   private selectedHorizontal(): HorizontalCoordinate | undefined {
-    const coordinate: EquatorialCoordinate | undefined = this.selectedCoordinate();
-    if (coordinate === undefined || this.observer === undefined) {
+    if (this.observer === undefined) {
       return undefined;
     }
     const currentObserver: ObserverState = {
@@ -1563,7 +1564,8 @@ struct Index {
       elevationMeters: this.observer.elevationMeters,
       timestampMs: Date.now()
     };
-    return AstronomyService.equatorialToHorizontal(coordinate, currentObserver);
+    return EphemerisService.horizontalCoordinate(
+      this.selectedTarget(), currentObserver, currentObserver.timestampMs, RefractionMode.NORMAL);
   }
 
   private magnitudeText(): string {
@@ -2920,8 +2922,11 @@ struct Index {
     const coordinate: EquatorialCoordinate = {
       raHours: selectedCoordinate.raHours,
       decDegrees: selectedCoordinate.decDegrees,
-      epoch: selectedCoordinate.epoch
+      frame: selectedCoordinate.frame
     };
+    if (selectedCoordinate.validAtMs !== undefined) {
+      coordinate.validAtMs = selectedCoordinate.validAtMs;
+    }
     const capturePlan: CapturePlan = this.buildCapturePlan();
     const targetDesignation: string = this.selectedTarget().designation;
     const runGeneration: number = ++this.captureRunGeneration;

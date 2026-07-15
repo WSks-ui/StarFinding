@@ -9,13 +9,16 @@ import {
   ObservationWindow,
   ObserverState,
   OutingRecommendation,
+  RefractionMode,
   RiseTransitSet,
   VisibilityStatus,
   WeatherDataStatus,
   WeatherForecast,
   WeatherHourlySample
 } from '../models/DomainModels';
+import { CelestialCatalog } from '../data/CelestialCatalog';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 
 interface WindowAccumulator {
   samples: ObservationSample[];
@@ -25,15 +28,13 @@ interface WindowAccumulator {
 
 /**
  * 纯本地观测规划器。这里不得读取赤道仪、相机或网关状态，确保没有外部硬件时仍能完成规划。
- * 当前星历采用项目内的低精度太阳系算法，适合小时级出行与广角构图规划，不应标称为专业测量星历。
+ * 星历和地平转换统一由离线 EphemerisService 提供，规划过程不依赖网络或外部设备。
  */
 export class ObservationPlanningService {
   private static readonly DEFAULT_HORIZON_HOURS: number = 48;
   private static readonly DEFAULT_SAMPLE_MINUTES: number = 10;
   private static readonly DEFAULT_MIN_ALTITUDE: number = 20;
   private static readonly DEFAULT_MAX_SUN_ALTITUDE: number = -12;
-  private static readonly SYNODIC_MONTH_DAYS: number = 29.530588853;
-  private static readonly REFERENCE_NEW_MOON_JD: number = 2451550.1;
 
   static defaultConstraints(): ObservationPlanningConstraints {
     return {
@@ -46,45 +47,30 @@ export class ObservationPlanningService {
 
   static horizontalAt(target: CelestialObject, observer: ObserverState,
     timestampMs: number): HorizontalCoordinate | undefined {
-    const coordinate: EquatorialCoordinate | undefined = AstronomyService.resolveCoordinate(target, timestampMs);
-    if (coordinate === undefined) {
-      return undefined;
-    }
-    return AstronomyService.equatorialToHorizontal(coordinate, {
+    const timedObserver: ObserverState = {
       latitudeDegrees: observer.latitudeDegrees,
       longitudeDegrees: observer.longitudeDegrees,
       elevationMeters: observer.elevationMeters,
       timestampMs: timestampMs
-    });
+    };
+    return EphemerisService.horizontalCoordinate(
+      target, timedObserver, timestampMs, RefractionMode.NORMAL);
   }
 
-  /** 由朔望月年龄计算月面亮面比例，返回 0-100。 */
+  /** Astronomy Engine 的月面亮度，返回 0-100。 */
   static moonIlluminationPercent(timestampMs: number): number {
-    const julianDay: number = AstronomyService.julianDay(timestampMs);
-    let ageDays: number = (julianDay - ObservationPlanningService.REFERENCE_NEW_MOON_JD) %
-      ObservationPlanningService.SYNODIC_MONTH_DAYS;
-    if (ageDays < 0) {
-      ageDays += ObservationPlanningService.SYNODIC_MONTH_DAYS;
-    }
-    const phaseRadians: number = 2 * Math.PI * ageDays / ObservationPlanningService.SYNODIC_MONTH_DAYS;
-    return 50 * (1 - Math.cos(phaseRadians));
+    return EphemerisService.moonIlluminationPercent(timestampMs);
   }
 
   static moonPhaseName(timestampMs: number): string {
-    const julianDay: number = AstronomyService.julianDay(timestampMs);
-    let ageDays: number = (julianDay - ObservationPlanningService.REFERENCE_NEW_MOON_JD) %
-      ObservationPlanningService.SYNODIC_MONTH_DAYS;
-    if (ageDays < 0) {
-      ageDays += ObservationPlanningService.SYNODIC_MONTH_DAYS;
-    }
-    const phase: number = ageDays / ObservationPlanningService.SYNODIC_MONTH_DAYS;
-    if (phase < 0.03 || phase >= 0.97) return '新月';
-    if (phase < 0.22) return '娥眉月';
-    if (phase < 0.28) return '上弦月';
-    if (phase < 0.47) return '盈凸月';
-    if (phase < 0.53) return '满月';
-    if (phase < 0.72) return '亏凸月';
-    if (phase < 0.78) return '下弦月';
+    const phaseDegrees: number = EphemerisService.moonPhaseAngleDegrees(timestampMs);
+    if (phaseDegrees < 10.8 || phaseDegrees >= 349.2) return '新月';
+    if (phaseDegrees < 79.2) return '娥眉月';
+    if (phaseDegrees < 100.8) return '上弦月';
+    if (phaseDegrees < 169.2) return '盈凸月';
+    if (phaseDegrees < 190.8) return '满月';
+    if (phaseDegrees < 259.2) return '亏凸月';
+    if (phaseDegrees < 280.8) return '下弦月';
     return '残月';
   }
 
@@ -100,7 +86,7 @@ export class ObservationPlanningService {
     ObservationPlanningService.validateInput(observer, startAtMs, constraints);
     const endAtMs: number = startAtMs + constraints.horizonHours * 3600000;
     const weatherStatus: WeatherDataStatus = forecast === undefined ? WeatherDataStatus.NOT_REQUESTED : forecast.status;
-    const firstCoordinate: EquatorialCoordinate | undefined = AstronomyService.resolveCoordinate(target, startAtMs);
+    const firstCoordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, startAtMs);
     if (firstCoordinate === undefined) {
       return ObservationPlanningService.coordinateUnavailableResult(
         target, startAtMs, endAtMs, constraints, weatherStatus);
@@ -116,10 +102,13 @@ export class ObservationPlanningService {
     const riseTransitSet: RiseTransitSet = ObservationPlanningService.buildRiseTransitSet(samples, windows.length);
     const bestWindow: ObservationWindow | undefined = ObservationPlanningService.selectBestWindow(windows);
     const referenceTime: number = bestWindow === undefined ? startAtMs : bestWindow.peakAtMs;
-    const moonCoordinate: EquatorialCoordinate = AstronomyService.moonCoordinate(referenceTime);
-    const targetCoordinate: EquatorialCoordinate | undefined = AstronomyService.resolveCoordinate(target, referenceTime);
-    const moonSeparation: number | undefined = targetCoordinate === undefined ? undefined :
-      AstronomyService.angularSeparation(targetCoordinate, moonCoordinate);
+    const moon: CelestialObject | undefined = CelestialCatalog.getById('solar-moon');
+    const moonCoordinate: EquatorialCoordinate | undefined = moon === undefined ? undefined :
+      EphemerisService.skyCoordinate(moon, referenceTime);
+    const targetCoordinate: EquatorialCoordinate | undefined =
+      EphemerisService.skyCoordinate(target, referenceTime);
+    const moonSeparation: number | undefined = targetCoordinate === undefined || moonCoordinate === undefined ?
+      undefined : AstronomyService.angularSeparation(targetCoordinate, moonCoordinate);
     const warnings: string[] = ObservationPlanningService.buildWarnings(target, weatherStatus, windows);
     const recommendation: OutingRecommendation = ObservationPlanningService.recommend(bestWindow, weatherStatus);
     const summary: string = ObservationPlanningService.summary(recommendation, bestWindow, target.nameZh);
@@ -171,7 +160,7 @@ export class ObservationPlanningService {
 
   private static buildSample(target: CelestialObject, observer: ObserverState, timestampMs: number,
     forecast?: WeatherForecast): ObservationSample | undefined {
-    const coordinate: EquatorialCoordinate | undefined = AstronomyService.resolveCoordinate(target, timestampMs);
+    const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, timestampMs);
     if (coordinate === undefined) return undefined;
     const timedObserver: ObserverState = {
       latitudeDegrees: observer.latitudeDegrees,
@@ -179,11 +168,19 @@ export class ObservationPlanningService {
       elevationMeters: observer.elevationMeters,
       timestampMs: timestampMs
     };
-    const horizontal: HorizontalCoordinate = AstronomyService.equatorialToHorizontal(coordinate, timedObserver);
-    const sunCoordinate: EquatorialCoordinate = AstronomyService.sunCoordinate(timestampMs);
-    const moonCoordinate: EquatorialCoordinate = AstronomyService.moonCoordinate(timestampMs);
-    const sunHorizontal: HorizontalCoordinate = AstronomyService.equatorialToHorizontal(sunCoordinate, timedObserver);
-    const moonHorizontal: HorizontalCoordinate = AstronomyService.equatorialToHorizontal(moonCoordinate, timedObserver);
+    const horizontal: HorizontalCoordinate | undefined = EphemerisService.horizontalCoordinate(
+      target, timedObserver, timestampMs, RefractionMode.NORMAL);
+    const sun: CelestialObject | undefined = CelestialCatalog.getById('solar-sun');
+    const moon: CelestialObject | undefined = CelestialCatalog.getById('solar-moon');
+    if (horizontal === undefined || sun === undefined || moon === undefined) return undefined;
+    const sunCoordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(sun, timestampMs);
+    const moonCoordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(moon, timestampMs);
+    const sunHorizontal: HorizontalCoordinate | undefined = EphemerisService.horizontalCoordinate(
+      sun, timedObserver, timestampMs, RefractionMode.NORMAL);
+    const moonHorizontal: HorizontalCoordinate | undefined = EphemerisService.horizontalCoordinate(
+      moon, timedObserver, timestampMs, RefractionMode.NORMAL);
+    if (sunCoordinate === undefined || moonCoordinate === undefined ||
+      sunHorizontal === undefined || moonHorizontal === undefined) return undefined;
     const illumination: number = ObservationPlanningService.moonIlluminationPercent(timestampMs);
     const separation: number = AstronomyService.angularSeparation(coordinate, moonCoordinate);
     const astronomyScore: number = ObservationPlanningService.astronomyScore(

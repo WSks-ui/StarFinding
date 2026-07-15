@@ -1,7 +1,8 @@
 import { describe, expect, it } from '@ohos/hypium';
 import {
   CelestialType,
-  EquatorialCoordinate
+  EquatorialCoordinate,
+  EquatorialFrame
 } from '../main/ets/models/DomainModels';
 import {
   NormalSkyViewport,
@@ -26,7 +27,7 @@ function viewport(raHours: number, decDegrees: number, fieldOfViewDegrees: numbe
 }
 
 function coordinate(raHours: number, decDegrees: number): EquatorialCoordinate {
-  return { raHours: raHours, decDegrees: decDegrees, epoch: 2000.0 };
+  return { raHours: raHours, decDegrees: decDegrees, frame: EquatorialFrame.ICRS_J2000 };
 }
 
 function closeTo(actual: number, expected: number, tolerance: number): boolean {

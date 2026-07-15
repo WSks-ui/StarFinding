@@ -17,3 +17,14 @@ The offline constellation centers, constellation line geometry and Messier catal
 d3-celestial is licensed under the BSD 3-Clause License. The reproducible importer is stored at
 `tools/import_d3_celestial.mjs`; it generates `GeneratedSkyCatalog.ets` and `normal_sky_lines.json`
 without adding a runtime network dependency.
+
+## Astronomy Engine 2.1.19
+
+The offline ephemeris implementation in `entry/src/main/ets/vendor/astronomy-engine/astronomy.js`
+is vendored from [Astronomy Engine](https://github.com/cosinekitty/astronomy), version `2.1.19`,
+by Don Cross. The vendored ESM file has SHA-256
+`068F1445ED0C636C94818FE6D20D7D125120E605E0BAB9FC4675C3D531BE5AD7`.
+
+Astronomy Engine is licensed under the MIT License. The application uses it entirely offline through
+a narrow numeric JavaScript bridge; no ephemeris data or executable code is downloaded at runtime.
+The complete license text is retained beside the vendored source as `LICENSE.txt`.

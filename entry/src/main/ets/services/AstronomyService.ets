@@ -5,6 +5,7 @@ import {
   CelestialObject,
   DevicePose,
   EquatorialCoordinate,
+  EquatorialFrame,
   HorizontalCoordinate,
   ObserverState,
   ScreenProjection
@@ -102,7 +103,8 @@ export class AstronomyService {
     return {
       raHours: rightAscensionDegrees / 15.0,
       decDegrees: decRad * AstronomyService.RAD_TO_DEG,
-      epoch: 2000.0
+      frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+      validAtMs: observer.timestampMs
     };
   }
 
@@ -323,7 +325,11 @@ export class AstronomyService {
       Math.atan2(equatorialY, equatorialX) * AstronomyService.RAD_TO_DEG);
     const declinationDegrees: number = Math.atan2(equatorialZ,
       Math.sqrt(equatorialX * equatorialX + equatorialY * equatorialY)) * AstronomyService.RAD_TO_DEG;
-    return { raHours: raDegrees / 15.0, decDegrees: declinationDegrees, epoch: 2000.0 };
+    return {
+      raHours: raDegrees / 15.0,
+      decDegrees: declinationDegrees,
+      frame: EquatorialFrame.APPARENT_EQJ
+    };
   }
 
   private static horizontalVector(azimuthDegrees: number, altitudeDegrees: number): Vector3 {

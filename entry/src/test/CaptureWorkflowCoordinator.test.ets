@@ -5,6 +5,7 @@ import {
   CaptureTask,
   ConnectionState,
   EquatorialCoordinate,
+  EquatorialFrame,
   ImageFormat,
   MountState,
   PlateSolveResult,
@@ -26,7 +27,11 @@ import {
   TimelapseOptions
 } from '../main/ets/services/RaspberryPiClient';
 
-const TEST_TARGET: EquatorialCoordinate = { raHours: 10.0, decDegrees: 20.0, epoch: 2000 };
+const TEST_TARGET: EquatorialCoordinate = {
+  raHours: 10.0,
+  decDegrees: 20.0,
+  frame: EquatorialFrame.ICRS_J2000
+};
 
 function createPlan(mode: CaptureMode, enablePlateSolve: boolean = false): CapturePlan {
   return {
