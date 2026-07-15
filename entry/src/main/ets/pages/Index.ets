@@ -17,6 +17,7 @@ import { CelestialCatalog } from '../data';
 import {
   ArCalibration,
   CameraCapabilities,
+  CameraState,
   CatalogPrecision,
   CelestialObject,
   CelestialType,
@@ -28,6 +29,7 @@ import {
   EnhancementTask,
   EquatorialCoordinate,
   GestureFrame,
+  GatewayHealth,
   HandGesture,
   HorizontalCoordinate,
   ImageFormat,
@@ -171,6 +173,7 @@ struct Index {
   @State private calibrationText: string = '未校准';
   @State private calibrationFeedbackActive: boolean = false;
   @State private mountConnection: ConnectionState = ConnectionState.DISCONNECTED;
+  @State private gatewayServiceConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @State private gatewayConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @State private mountHomed: boolean = false;
   @State private mountCoordinatesTopocentric: boolean = false;
@@ -209,7 +212,11 @@ struct Index {
   @State private mountRaHours: number = 0;
   @State private mountDecDegrees: number = 0;
   @State private mountSlewing: boolean = false;
+  @State private mountUpdatedAtMs: number = 0;
+  @State private gatewayUpdatedAtMs: number = 0;
   @State private gatewayDetail: string = '10.42.0.1:8000';
+  @State private gatewayServiceVersion: string = '';
+  @State private deviceOperationMessage: string = '';
   @State private taskStage: string = '等待创建';
   @State private activeTaskId: string = '';
   @State private catalogStatus: string = '星表加载中';
@@ -247,6 +254,7 @@ struct Index {
   private cameraCapabilities: CameraCapabilities | undefined = undefined;
   private weatherForecast: WeatherForecast | undefined = undefined;
   private mountPollTimer: number = -1;
+  private gatewayPollTimer: number = -1;
   private taskPollTimer: number = -1;
   private readonly mountClient: OnStepLX200Client = new OnStepLX200Client();
   private readonly gatewayClient: RaspberryPiClient = new RaspberryPiClient();
@@ -313,11 +321,14 @@ struct Index {
     this.updateNormalScene();
     this.startNormalSceneTimer();
     this.updateProjectedTargets(true);
+    if (this.mountConnection === ConnectionState.CONNECTED) this.startMountPolling();
+    if (this.gatewayServiceConnection === ConnectionState.CONNECTED) this.startGatewayPolling();
   }
 
   aboutToDisappear(): void {
     this.poseService.stop();
     this.clearMountPolling();
+    this.clearGatewayPolling();
     this.clearTaskPolling();
     this.clearNormalMotion();
     this.clearNormalSceneTimer();
@@ -369,10 +380,11 @@ struct Index {
     this.Header()
     if (this.activeSection === 1) {
       DeviceWorkspace({
-        compact: this.isCompactWorkspace(),
+        compact: this.contentViewportWidth < 900,
         pageMargin: this.workspacePageMargin(),
         mountConnection: this.mountConnection,
-        gatewayConnection: this.gatewayConnection,
+        gatewayServiceConnection: this.gatewayServiceConnection,
+        cameraConnection: this.gatewayConnection,
         gatewayDetail: this.gatewayDetail,
         mountHomed: this.mountHomed,
         coordinateModeCompatible: this.mountCoordinatesTopocentric,
@@ -384,6 +396,10 @@ struct Index {
         mountRaHours: this.mountRaHours,
         mountDecDegrees: this.mountDecDegrees,
         mountSlewing: this.mountSlewing,
+        mountUpdatedAtMs: this.mountUpdatedAtMs,
+        gatewayUpdatedAtMs: this.gatewayUpdatedAtMs,
+        deviceMessage: this.deviceOperationMessage,
+        emergencyMessage: this.emergencyMessage,
         onToggleMount: (): void => { this.toggleMountConnection(); },
         onToggleGateway: (): void => { this.toggleGatewayConnection(); },
         onHomeMount: (): void => { this.homeMount(); },
@@ -2717,28 +2733,25 @@ struct Index {
       if (this.mountConnection === ConnectionState.CONNECTED) {
         await this.mountClient.disconnect();
         this.clearMountPolling();
-        this.mountConnection = ConnectionState.DISCONNECTED;
-        this.mountHomed = false;
-        this.mountCoordinatesTopocentric = false;
-        this.locationSynced = false;
-        this.tracking = false;
-        this.operationMessage = '赤道仪已断开';
+        this.resetMountUiState(ConnectionState.DISCONNECTED);
+        this.reportDeviceOperation('赤道仪已断开');
       } else {
         this.mountConnection = ConnectionState.CONNECTING;
-        this.operationMessage = '正在连接 10.42.0.20:9999';
+        this.reportDeviceOperation('正在连接 10.42.0.20:9999 并执行坐标模式自检');
         await this.mountClient.connect();
         this.mountCoordinatesTopocentric = this.mountClient.isCoordinateModeCompatible();
         const state: MountState = await this.mountClient.refreshState();
         this.applyMountState(state);
         this.startMountPolling();
-        this.operationMessage = this.mountCoordinatesTopocentric ?
+        this.reportDeviceOperation(this.mountCoordinatesTopocentric ?
           'OnStepX 已连接并确认 TOPOCENTRIC(1)；自动运动前请先回零' :
-          `OnStepX 已连接，但 :GXEE# 返回 ${this.mountClient.getCoordinateModeResponse() || '空值'}；GOTO/SYNC 已锁定`;
+          `OnStepX 已连接，但 :GXEE# 返回 ${this.mountClient.getCoordinateModeResponse() || '空值'}；GOTO/SYNC 已锁定`);
       }
     } catch (error) {
-      this.mountConnection = ConnectionState.ERROR;
-      this.mountCoordinatesTopocentric = false;
-      this.operationMessage = `赤道仪连接失败：${error}`;
+      this.clearMountPolling();
+      await this.mountClient.disconnect();
+      this.resetMountUiState(ConnectionState.ERROR);
+      this.reportDeviceOperation(`赤道仪连接失败：${error}`);
     } finally {
       this.operationBusy = false;
     }
@@ -2748,31 +2761,53 @@ struct Index {
     if (this.operationBusy) {
       return;
     }
-    if (this.gatewayConnection === ConnectionState.CONNECTED ||
-      this.gatewayConnection === ConnectionState.SIMULATED) {
+    if (this.gatewayServiceConnection === ConnectionState.CONNECTED) {
+      this.clearGatewayPolling();
+      this.gatewayServiceConnection = ConnectionState.DISCONNECTED;
       this.gatewayConnection = ConnectionState.DISCONNECTED;
       this.cameraCapabilities = undefined;
       this.gatewayDetail = '10.42.0.1:8000';
-      this.operationMessage = '相机网关已从当前页面断开';
+      this.gatewayServiceVersion = '';
+      this.gatewayUpdatedAtMs = 0;
+      this.reportDeviceOperation('已停止相机网关与 EOS R7 状态检测');
       return;
     }
     this.operationBusy = true;
-    this.gatewayConnection = ConnectionState.CONNECTING;
+    this.gatewayServiceConnection = ConnectionState.CONNECTING;
+    this.gatewayConnection = ConnectionState.DISCONNECTED;
+    this.reportDeviceOperation('正在检测 10.42.0.1:8000 相机网关');
     try {
-      const health = await this.gatewayClient.health();
+      const health: GatewayHealth = await this.gatewayClient.health();
       if (!health.online) {
         throw new Error('网关健康检查未通过');
       }
-      const cameraState = await this.gatewayClient.cameraStatus();
-      this.cameraCapabilities = await this.gatewayClient.cameraCapabilities();
-      this.gatewayConnection = cameraState.connection;
-      this.gatewayDetail = `${cameraState.cameraModel} · ${health.serviceVersion}`;
-      this.operationMessage = cameraState.connection === ConnectionState.SIMULATED ?
-        '网关正在使用模拟相机，真实拍摄保持禁用' : 'EOS R7 网关已连接';
+      this.gatewayServiceConnection = ConnectionState.CONNECTED;
+      this.gatewayServiceVersion = health.serviceVersion;
+      const cameraState: CameraState = await this.gatewayClient.cameraStatus();
+      this.applyGatewayCameraState(cameraState);
+      if (cameraState.connection === ConnectionState.CONNECTED ||
+        cameraState.connection === ConnectionState.SIMULATED) {
+        this.cameraCapabilities = await this.gatewayClient.cameraCapabilities();
+      } else {
+        this.cameraCapabilities = undefined;
+      }
+      this.startGatewayPolling();
+      if (cameraState.connection === ConnectionState.SIMULATED) {
+        this.reportDeviceOperation('网关在线，但正在使用模拟相机；真实拍摄保持禁用');
+      } else if (cameraState.connection === ConnectionState.CONNECTED) {
+        this.reportDeviceOperation('相机网关在线并检测到真实 EOS R7');
+      } else {
+        this.reportDeviceOperation('相机网关在线，但尚未检测到 EOS R7 USB 连接');
+      }
     } catch (error) {
-      this.gatewayConnection = ConnectionState.ERROR;
+      this.clearGatewayPolling();
+      this.gatewayServiceConnection = ConnectionState.ERROR;
+      this.gatewayConnection = ConnectionState.DISCONNECTED;
+      this.cameraCapabilities = undefined;
       this.gatewayDetail = '10.42.0.1:8000';
-      this.operationMessage = `相机网关连接失败：${error}`;
+      this.gatewayServiceVersion = '';
+      this.gatewayUpdatedAtMs = 0;
+      this.reportDeviceOperation(`相机网关检测失败：${error}`);
     } finally {
       this.operationBusy = false;
     }
@@ -2799,7 +2834,10 @@ struct Index {
     try {
       this.applyMountState(await this.mountClient.refreshState());
     } catch (error) {
-      this.operationMessage = `赤道仪状态轮询失败：${error}`;
+      this.clearMountPolling();
+      await this.mountClient.disconnect();
+      this.resetMountUiState(ConnectionState.ERROR);
+      this.reportDeviceOperation(`赤道仪连接已中断，安全状态已撤销：${error}`);
     }
   }
 
@@ -2808,6 +2846,7 @@ struct Index {
     this.mountRaHours = state.rightAscensionHours;
     this.mountDecDegrees = state.declinationDegrees;
     this.mountSlewing = state.slewing;
+    this.mountUpdatedAtMs = state.updatedAtMs;
     // :GU# 的 H 只表示“当前正在机械零位”。一旦可靠见到 H，本次连接周期内保留回零证明。
     if (state.homed) {
       this.mountHomed = true;
@@ -2816,15 +2855,92 @@ struct Index {
       state.trackingMode !== TrackingMode.UNKNOWN;
   }
 
+  private startGatewayPolling(): void {
+    this.clearGatewayPolling();
+    this.gatewayPollTimer = setInterval(() => {
+      this.pollGatewayState();
+    }, 3000);
+  }
+
+  private clearGatewayPolling(): void {
+    if (this.gatewayPollTimer >= 0) {
+      clearInterval(this.gatewayPollTimer);
+      this.gatewayPollTimer = -1;
+    }
+  }
+
+  private async pollGatewayState(): Promise<void> {
+    if (this.gatewayServiceConnection !== ConnectionState.CONNECTED) return;
+    try {
+      const previousConnection: ConnectionState = this.gatewayConnection;
+      const cameraState: CameraState = await this.gatewayClient.cameraStatus();
+      this.applyGatewayCameraState(cameraState);
+      if (this.cameraCapabilities === undefined &&
+        (cameraState.connection === ConnectionState.CONNECTED ||
+          cameraState.connection === ConnectionState.SIMULATED)) {
+        this.cameraCapabilities = await this.gatewayClient.cameraCapabilities();
+      }
+      if (previousConnection !== cameraState.connection) {
+        if (cameraState.connection === ConnectionState.CONNECTED) {
+          this.reportDeviceOperation('已检测到真实 EOS R7，拍摄功能可以进行安全检查');
+        } else if (cameraState.connection === ConnectionState.SIMULATED) {
+          this.reportDeviceOperation('检测到模拟相机，真实拍摄保持禁用');
+        } else {
+          this.cameraCapabilities = undefined;
+          this.reportDeviceOperation('EOS R7 USB 已断开，新的拍摄任务已禁用');
+        }
+      }
+    } catch (error) {
+      this.clearGatewayPolling();
+      this.gatewayServiceConnection = ConnectionState.ERROR;
+      this.gatewayConnection = ConnectionState.DISCONNECTED;
+      this.cameraCapabilities = undefined;
+      this.gatewayDetail = '10.42.0.1:8000';
+      this.gatewayServiceVersion = '';
+      this.gatewayUpdatedAtMs = 0;
+      this.reportDeviceOperation(`相机网关连接已中断：${error}`);
+    }
+  }
+
+  private applyGatewayCameraState(state: CameraState): void {
+    this.gatewayConnection = state.connection;
+    this.gatewayUpdatedAtMs = state.updatedAtMs;
+    const serviceLabel: string = this.gatewayServiceVersion.length > 0 ?
+      this.gatewayServiceVersion : 'StarFinding Gateway';
+    this.gatewayDetail = state.cameraModel.length > 0 ?
+      `${state.cameraModel} · ${serviceLabel}` : serviceLabel;
+  }
+
+  private resetMountUiState(connection: ConnectionState): void {
+    this.mountConnection = connection;
+    this.mountHomed = false;
+    this.mountCoordinatesTopocentric = false;
+    this.locationSynced = false;
+    this.tracking = false;
+    this.mountSlewing = false;
+    this.mountRaHours = 0;
+    this.mountDecDegrees = 0;
+    this.mountUpdatedAtMs = 0;
+  }
+
+  private reportDeviceOperation(message: string): void {
+    this.deviceOperationMessage = message;
+    this.operationMessage = message;
+  }
+
   private async homeMount(): Promise<void> {
     if (this.operationBusy) return;
+    if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountCoordinatesTopocentric) {
+      this.reportDeviceOperation('请先连接赤道仪并通过 TOPOCENTRIC 坐标模式自检');
+      return;
+    }
     this.operationBusy = true;
     this.mountHomed = false;
     try {
       await this.mountClient.home();
-      this.operationMessage = '两轴正在寻找常闭原点开关；完成后状态将自动更新';
+      this.reportDeviceOperation('两轴正在寻找常闭原点开关；完成后状态将自动更新');
     } catch (error) {
-      this.operationMessage = `回零失败：${error}`;
+      this.reportDeviceOperation(`回零失败：${error}`);
     } finally {
       this.operationBusy = false;
     }
@@ -2832,8 +2948,12 @@ struct Index {
 
   private async syncObserverToMount(): Promise<void> {
     if (this.operationBusy || this.observer === undefined) return;
+    if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountCoordinatesTopocentric) {
+      this.reportDeviceOperation('赤道仪尚未完成连接自检，不能同步地点和时间');
+      return;
+    }
     if (this.simulatedDeviceTimeBlocked()) {
-      this.operationMessage = '模拟时间只用于浏览和规划，已阻止同步设备时间';
+      this.reportDeviceOperation('模拟时间只用于浏览和规划，已阻止同步设备时间');
       return;
     }
     this.operationBusy = true;
@@ -2847,10 +2967,10 @@ struct Index {
       const utcFromLocalOffsetHours: number = new Date().getTimezoneOffset() / 60.0;
       await this.mountClient.setObserver(current, utcFromLocalOffsetHours);
       this.locationSynced = true;
-      this.operationMessage = '系统定位、本机日期和时间已同步到 OnStepX';
+      this.reportDeviceOperation('系统定位、本机日期和时间已同步到 OnStepX');
     } catch (error) {
       this.locationSynced = false;
-      this.operationMessage = `位置时间同步失败：${error}`;
+      this.reportDeviceOperation(`位置时间同步失败：${error}`);
     } finally {
       this.operationBusy = false;
     }
@@ -2858,18 +2978,23 @@ struct Index {
 
   private async toggleTracking(): Promise<void> {
     if (this.operationBusy) return;
+    if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountCoordinatesTopocentric ||
+      !this.mountHomed || !this.locationSynced) {
+      this.reportDeviceOperation('完成连接自检、两轴回零和地点时间同步后才能控制跟踪');
+      return;
+    }
     this.operationBusy = true;
     try {
       if (this.tracking) {
         await this.mountClient.stopTracking();
-        this.operationMessage = '恒星时跟踪已停止';
+        this.reportDeviceOperation('恒星时跟踪已停止');
       } else {
         await this.mountClient.startTracking(TrackingMode.SIDEREAL);
-        this.operationMessage = '恒星时跟踪已启动';
+        this.reportDeviceOperation('恒星时跟踪已启动');
       }
       await this.pollMountState();
     } catch (error) {
-      this.operationMessage = `跟踪控制失败：${error}`;
+      this.reportDeviceOperation(`跟踪控制失败：${error}`);
     } finally {
       this.operationBusy = false;
     }
@@ -2877,13 +3002,17 @@ struct Index {
 
   private async parkMount(): Promise<void> {
     if (this.operationBusy) return;
+    if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountHomed) {
+      this.reportDeviceOperation('赤道仪连接并完成回零后才能执行停放');
+      return;
+    }
     this.operationBusy = true;
     try {
       await this.mountClient.park();
       this.tracking = false;
-      this.operationMessage = '赤道仪正在停放，请观察机械运动和物理限位';
+      this.reportDeviceOperation('赤道仪正在停放，请观察机械运动和物理限位');
     } catch (error) {
-      this.operationMessage = `停放失败：${error}`;
+      this.reportDeviceOperation(`停放失败：${error}`);
     } finally {
       this.operationBusy = false;
     }

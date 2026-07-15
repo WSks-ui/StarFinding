@@ -231,6 +231,318 @@
     {
       "name": "planning_weather_unavailable",
       "value": "天气不可用，仅按天文条件规划"
+    },
+    {
+      "name": "device_mount_title",
+      "value": "OnStepX 赤道仪"
+    },
+    {
+      "name": "device_mount_endpoint",
+      "value": "10.42.0.20 · TCP 9999"
+    },
+    {
+      "name": "device_gateway_title",
+      "value": "相机网关"
+    },
+    {
+      "name": "device_gateway_endpoint",
+      "value": "10.42.0.1 · HTTP 8000"
+    },
+    {
+      "name": "device_connect_self_test",
+      "value": "连接并自检"
+    },
+    {
+      "name": "device_check_gateway",
+      "value": "检测网关"
+    },
+    {
+      "name": "device_reconnect",
+      "value": "重新连接"
+    },
+    {
+      "name": "device_recheck",
+      "value": "重新检测"
+    },
+    {
+      "name": "device_disconnect",
+      "value": "断开"
+    },
+    {
+      "name": "device_stop_monitoring",
+      "value": "停止检测"
+    },
+    {
+      "name": "device_state_connected",
+      "value": "已连接"
+    },
+    {
+      "name": "device_state_connecting",
+      "value": "连接中"
+    },
+    {
+      "name": "device_state_error",
+      "value": "连接异常"
+    },
+    {
+      "name": "device_state_simulated",
+      "value": "模拟设备"
+    },
+    {
+      "name": "device_state_disconnected",
+      "value": "未连接"
+    },
+    {
+      "name": "device_workflow_title",
+      "value": "赤道仪就绪流程"
+    },
+    {
+      "name": "device_workflow_subtitle",
+      "value": "按顺序完成四步，自动运动才会解锁"
+    },
+    {
+      "name": "device_step_connect",
+      "value": "连接自检"
+    },
+    {
+      "name": "device_step_connect_detail",
+      "value": "TCP 与坐标模式"
+    },
+    {
+      "name": "device_step_home",
+      "value": "两轴回零"
+    },
+    {
+      "name": "device_step_home_detail",
+      "value": "确认机械原点"
+    },
+    {
+      "name": "device_step_sync",
+      "value": "同步地点时间"
+    },
+    {
+      "name": "device_step_sync_detail",
+      "value": "使用真实当前位置"
+    },
+    {
+      "name": "device_step_ready",
+      "value": "设备就绪"
+    },
+    {
+      "name": "device_step_ready_detail",
+      "value": "允许观测与拍摄"
+    },
+    {
+      "name": "device_step_blocked_detail",
+      "value": "坐标模式不兼容，自动运动已锁定"
+    },
+    {
+      "name": "device_operation_feedback",
+      "value": "操作反馈"
+    },
+    {
+      "name": "device_operation_idle",
+      "value": "尚未执行设备操作"
+    },
+    {
+      "name": "device_mount_operations",
+      "value": "赤道仪操作"
+    },
+    {
+      "name": "device_mount_operations_note",
+      "value": "物理急停与机械安全检查必须独立完成"
+    },
+    {
+      "name": "device_action_home",
+      "value": "两轴回零"
+    },
+    {
+      "name": "device_action_sync",
+      "value": "同步地点时间"
+    },
+    {
+      "name": "device_action_tracking_start",
+      "value": "开始恒星跟踪"
+    },
+    {
+      "name": "device_action_tracking_stop",
+      "value": "停止恒星跟踪"
+    },
+    {
+      "name": "device_action_park",
+      "value": "停放设备"
+    },
+    {
+      "name": "device_system_checks",
+      "value": "设备检查"
+    },
+    {
+      "name": "device_check_network",
+      "value": "OnStepX 网络"
+    },
+    {
+      "name": "device_check_coordinate",
+      "value": "坐标模式"
+    },
+    {
+      "name": "device_check_home",
+      "value": "机械零位"
+    },
+    {
+      "name": "device_check_location",
+      "value": "Pad 地点时间"
+    },
+    {
+      "name": "device_check_camera",
+      "value": "EOS R7"
+    },
+    {
+      "name": "device_check_emergency",
+      "value": "物理急停"
+    },
+    {
+      "name": "device_detail_coordinate",
+      "value": ":GXEE# 必须返回 1"
+    },
+    {
+      "name": "device_detail_home",
+      "value": "AUX3 / AUX4 常闭原点开关"
+    },
+    {
+      "name": "device_detail_camera",
+      "value": "由 Linux 网关通过 USB 检测"
+    },
+    {
+      "name": "device_detail_emergency",
+      "value": "独立切断电机电源"
+    },
+    {
+      "name": "device_status_unchecked",
+      "value": "未检查"
+    },
+    {
+      "name": "device_status_unconfirmed",
+      "value": "未确认"
+    },
+    {
+      "name": "device_status_homed",
+      "value": "已回零"
+    },
+    {
+      "name": "device_status_waiting_home",
+      "value": "待回零"
+    },
+    {
+      "name": "device_status_topocentric",
+      "value": "TOPOCENTRIC"
+    },
+    {
+      "name": "device_status_incompatible",
+      "value": "不兼容"
+    },
+    {
+      "name": "device_status_synced",
+      "value": "已同步"
+    },
+    {
+      "name": "device_status_waiting_sync",
+      "value": "待同步"
+    },
+    {
+      "name": "device_status_location_unavailable",
+      "value": "未定位"
+    },
+    {
+      "name": "device_status_real_camera",
+      "value": "真实相机"
+    },
+    {
+      "name": "device_status_simulated_camera",
+      "value": "模拟相机"
+    },
+    {
+      "name": "device_status_camera_missing",
+      "value": "未检测到"
+    },
+    {
+      "name": "device_status_manual_confirm",
+      "value": "需人工确认"
+    },
+    {
+      "name": "device_telemetry_title",
+      "value": "实时遥测"
+    },
+    {
+      "name": "device_telemetry_note",
+      "value": "每 2 秒读取 OnStepX，软件软限位不替代物理急停"
+    },
+    {
+      "name": "device_telemetry_offline",
+      "value": "暂无真实遥测"
+    },
+    {
+      "name": "device_telemetry_offline_detail",
+      "value": "连接赤道仪并完成首次状态读取后显示"
+    },
+    {
+      "name": "device_telemetry_ra",
+      "value": "赤经"
+    },
+    {
+      "name": "device_telemetry_dec",
+      "value": "赤纬"
+    },
+    {
+      "name": "device_telemetry_motion",
+      "value": "运动状态"
+    },
+    {
+      "name": "device_telemetry_location",
+      "value": "位置时间"
+    },
+    {
+      "name": "device_telemetry_coordinate",
+      "value": "坐标模式"
+    },
+    {
+      "name": "device_telemetry_tracking",
+      "value": "跟踪模式"
+    },
+    {
+      "name": "device_telemetry_safety",
+      "value": "安全状态"
+    },
+    {
+      "name": "device_telemetry_updated",
+      "value": "最后更新"
+    },
+    {
+      "name": "device_value_slewing",
+      "value": "转动中"
+    },
+    {
+      "name": "device_value_stationary",
+      "value": "静止"
+    },
+    {
+      "name": "device_value_motion_locked",
+      "value": "运动已锁定"
+    },
+    {
+      "name": "device_value_sidereal",
+      "value": "恒星时"
+    },
+    {
+      "name": "device_value_tracking_stopped",
+      "value": "已停止"
+    },
+    {
+      "name": "device_value_soft_limit_ready",
+      "value": "回零证明有效"
+    },
+    {
+      "name": "device_value_waiting_home",
+      "value": "等待回零"
     }
   ]
 }
