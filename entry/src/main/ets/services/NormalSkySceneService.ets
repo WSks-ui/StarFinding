@@ -33,6 +33,7 @@ export interface NormalSkySceneQuery {
   timestampMs: number;
   observer?: ObserverState;
   guideInsets?: SkyGuideInsets;
+  showDirectionMarkers?: boolean;
 }
 
 /** 把多个离线目录合成为 Canvas 一次可绘制的场景。 */
@@ -70,7 +71,7 @@ export class NormalSkySceneService {
       orientationSnapshot: NormalSkyOrientationService.build({
         viewport: query.viewport,
         size: query.size,
-        directionGuides: query.layers.directionGuides,
+        directionGuides: query.layers.directionGuides && query.showDirectionMarkers !== false,
         observer: query.observer,
         guideInsets: query.guideInsets
       }),

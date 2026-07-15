@@ -75,6 +75,7 @@ import {
   HandLandmarkAnalysisResult,
   NormalSkyGestureController,
   NormalSkyGestureUpdate,
+  NormalSkyLayoutService,
   NormalSkyCatalogMetadata,
   NormalSkyCatalogService,
   NormalSkyProjectionService,
@@ -796,13 +797,16 @@ struct Index {
 
   @Builder
   private NormalSkyDirectionOverlay() {
-    NormalSkyOrientationOverlay({
-      snapshot: this.normalScene.orientationSnapshot,
-      viewportWidth: this.skyViewportWidth,
-      viewportHeight: this.skyViewportHeight,
-      guideInsets: this.normalSkyGuideInsets(),
-      onResetNorth: (): void => { this.resetNormalSkyNorth(); }
-    })
+    if (NormalSkyLayoutService.showCompass(this.skyViewportWidth, this.normalLayerPanelOpen)) {
+      NormalSkyOrientationOverlay({
+        snapshot: this.normalScene.orientationSnapshot,
+        viewportWidth: this.skyViewportWidth,
+        viewportHeight: this.skyViewportHeight,
+        guideInsets: this.normalSkyGuideInsets(),
+        compactDrawerOpen: this.useSkyBottomSheet() && this.skyOverlayPanel > 0,
+        onResetNorth: (): void => { this.resetNormalSkyNorth(); }
+      })
+    }
   }
 
   @Builder
@@ -2198,7 +2202,9 @@ struct Index {
       selectedTargetId: this.selectedTargetId,
       timestampMs: timestampMs,
       observer: this.normalObserver(timestampMs),
-      guideInsets: this.normalSkyGuideInsets()
+      guideInsets: this.normalSkyGuideInsets(),
+      showDirectionMarkers: NormalSkyLayoutService.showDirectionMarkers(
+        this.useSkyBottomSheet(), this.skyOverlayPanel)
     });
   }
 
@@ -2232,18 +2238,15 @@ struct Index {
   }
 
   private normalSkyGuideInsets(): SkyGuideInsets {
-    if (!this.skyChromeVisible) {
-      return { leftPixels: 24.0, rightPixels: 24.0, topPixels: 24.0, bottomPixels: 24.0 };
-    }
-    const compact: boolean = this.useSkyBottomSheet();
-    const drawerInset: number = !compact && this.skyOverlayPanel > 0 ? this.skyDrawerWidth() + 28.0 : 76.0;
-    const layerInset: number = this.normalLayerPanelOpen && !compact ? 286.0 : 76.0;
-    return {
-      leftPixels: compact ? 24.0 : 96.0,
-      rightPixels: compact ? 24.0 : Math.max(drawerInset, layerInset),
-      topPixels: compact ? 102.0 : 112.0,
-      bottomPixels: compact ? 116.0 : 88.0
-    };
+    return NormalSkyLayoutService.guideInsets({
+      viewportWidth: this.skyViewportWidth,
+      viewportHeight: this.skyViewportHeight,
+      chromeVisible: this.skyChromeVisible,
+      compact: this.useSkyBottomSheet(),
+      overlayPanel: this.skyOverlayPanel,
+      drawerWidth: this.skyDrawerWidth(),
+      layerPanelOpen: this.normalLayerPanelOpen
+    });
   }
 
   private homeNormalSky(): void {

@@ -8,6 +8,7 @@ import gestureInteractionTest from './GestureInteraction.test';
 import normalSkySceneServiceTest from './NormalSkySceneService.test';
 import normalSkyGestureControllerTest from './NormalSkyGestureController.test';
 import normalSkyOrientationServiceTest from './NormalSkyOrientationService.test';
+import normalSkyLayoutServiceTest from './NormalSkyLayoutService.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -20,4 +21,5 @@ export default function testsuite() {
   normalSkySceneServiceTest();
   normalSkyGestureControllerTest();
   normalSkyOrientationServiceTest();
+  normalSkyLayoutServiceTest();
 }

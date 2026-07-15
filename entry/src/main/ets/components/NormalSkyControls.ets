@@ -4,6 +4,7 @@ import {
   SkyMapOrientation
 } from '../models/NormalSkyModels';
 import { MotionTokens } from '../utils/MotionTokens';
+import { NormalSkyLayoutService } from '../services/NormalSkyLayoutService';
 
 /** 普通星图控制坞只负责呈现，所有天球状态变更由页面控制器处理。 */
 @Component
@@ -141,10 +142,10 @@ export struct NormalSkyControls {
   }
 
   private panelHeight(): number {
-    return Math.min(440.0, Math.max(250.0, this.viewportHeight - 130.0));
+    return NormalSkyLayoutService.panelHeight(this.viewportHeight);
   }
 
   private rootHeight(): number {
-    return this.panelOpen ? this.panelHeight() + 34.0 : 310.0;
+    return NormalSkyLayoutService.panelRootHeight(this.viewportHeight, this.panelOpen);
   }
 }

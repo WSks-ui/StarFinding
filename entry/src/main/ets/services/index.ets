@@ -20,3 +20,4 @@ export * from './NormalSkyCatalogService';
 export * from './NormalSkySceneService';
 export * from './NormalSkyGestureController';
 export * from './NormalSkyOrientationService';
+export * from './NormalSkyLayoutService';
