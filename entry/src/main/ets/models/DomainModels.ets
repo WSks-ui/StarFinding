@@ -43,6 +43,7 @@ export type EquatorialCoordinate = FramedEquatorialCoordinate;
 
 /** 仅供赤道仪运动接口消费的当日站心坐标。 */
 export interface MountTargetCoordinate {
+  targetId: string;
   raHours: number;
   decDegrees: number;
   frame: EquatorialFrame;
@@ -266,6 +267,8 @@ export interface PlateSolveResult {
   taskId: string;
   status: TaskStatus;
   solved: boolean;
+  /** astrometry.net 的 WCS 中心固定标记为 ICRS J2000，禁止与赤道仪当日坐标直接相减。 */
+  frame: EquatorialFrame;
   centerRaHours: number;
   centerDecDegrees: number;
   fieldWidthDegrees: number;

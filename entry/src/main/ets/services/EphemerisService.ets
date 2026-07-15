@@ -79,6 +79,7 @@ export class EphemerisService {
     }
     EphemerisService.requireValues(values, 2, `计算 ${object.id} 站心当日坐标`);
     return {
+      targetId: object.id,
       raHours: EphemerisService.normalizeHours(values[0]),
       decDegrees: values[1],
       frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
@@ -187,7 +188,7 @@ export class EphemerisService {
   }
 
   static eqjToTopocentricOfDate(coordinate: FramedEquatorialCoordinate,
-    observer: ObserverState, timestampMs: number): MountTargetCoordinate {
+    observer: ObserverState, timestampMs: number, targetId: string): MountTargetCoordinate {
     if (coordinate.frame === EquatorialFrame.TOPOCENTRIC_OF_DATE) {
       throw new Error('站心当日坐标不能再次执行 J2000 到当日转换');
     }
@@ -195,6 +196,7 @@ export class EphemerisService {
     const values: number[] = eqjToEqd(coordinate.raHours, coordinate.decDegrees, timestampMs);
     EphemerisService.requireValues(values, 2, '转换 J2000 到站心当日坐标');
     return {
+      targetId: targetId,
       raHours: EphemerisService.normalizeHours(values[0]),
       decDegrees: values[1],
       frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
@@ -299,7 +301,8 @@ export class EphemerisService {
   static requireMountCoordinate(coordinate: MountTargetCoordinate): void {
     if (coordinate.frame !== EquatorialFrame.TOPOCENTRIC_OF_DATE ||
       !Number.isFinite(coordinate.raHours) || !Number.isFinite(coordinate.decDegrees) ||
-      !Number.isFinite(coordinate.calculatedAtMs) || coordinate.observerKey.length === 0) {
+      !Number.isFinite(coordinate.calculatedAtMs) || coordinate.observerKey.length === 0 ||
+      coordinate.targetId.length === 0) {
       throw new Error('赤道仪只接受带观测地点和计算时刻的站心当日坐标');
     }
   }

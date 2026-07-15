@@ -8,6 +8,8 @@ import {
   EquatorialFrame,
   ImageFormat,
   MountState,
+  MountTargetCoordinate,
+  ObserverState,
   PlateSolveResult,
   TaskStatus,
   TrackingMode
@@ -151,6 +153,7 @@ class WorkflowFakeGateway extends RaspberryPiClient {
       taskId: taskId,
       status: TaskStatus.SUCCEEDED,
       solved: true,
+      frame: EquatorialFrame.ICRS_J2000,
       centerRaHours: 9.99,
       centerDecDegrees: 20.0,
       fieldWidthDegrees: 60,
@@ -205,7 +208,19 @@ class WorkflowFakeMount extends OnStepLX200Client {
     };
   }
 
-  async gotoRaDec(_coordinate: EquatorialCoordinate): Promise<void> {
+  getSyncedObserver(): ObserverState | undefined {
+    return {
+      latitudeDegrees: 34.75,
+      longitudeDegrees: 113.62,
+      elevationMeters: 100.0,
+      timestampMs: Date.now()
+    };
+  }
+
+  async setObserver(_observer: ObserverState, _utcFromLocalOffsetHours: number): Promise<void> {
+  }
+
+  async gotoRaDec(_coordinate: MountTargetCoordinate): Promise<void> {
     this.gotoCalls++;
     if (this.cancelDuringGoto && this.coordinator !== undefined) {
       this.cancelDuringGoto = false;

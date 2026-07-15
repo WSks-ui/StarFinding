@@ -6,10 +6,13 @@ import {
   EquatorialFrame,
   ImageFormat,
   MountState,
+  MountTargetCoordinate,
+  ObserverState,
   PlateSolveResult,
   TaskStatus
 } from '../models/DomainModels';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 import { OnStepLX200Client } from './OnStepLX200Client';
 import { GatewayFile, GatewayTask, RaspberryPiClient } from './RaspberryPiClient';
 
@@ -167,7 +170,7 @@ export class CaptureWorkflowCoordinator {
           if (result.solved) {
             plateSolveCount++;
             if (plan.enableDriftCorrection && completed < plan.frameCount &&
-              await this.correctDrift(target, result)) {
+              await this.correctDrift(target, result, plan.targetId)) {
               correctionCount++;
             }
           }
@@ -290,12 +293,17 @@ export class CaptureWorkflowCoordinator {
     throw new Error(`网关任务 ${taskId} 超时`);
   }
 
-  private async correctDrift(target: EquatorialCoordinate, result: PlateSolveResult): Promise<boolean> {
+  private async correctDrift(target: EquatorialCoordinate, result: PlateSolveResult,
+    targetId: string): Promise<boolean> {
     this.throwIfCancelled();
+    if (result.frame !== EquatorialFrame.ICRS_J2000 ||
+      target.frame === EquatorialFrame.TOPOCENTRIC_OF_DATE) {
+      throw new Error('板解析与目标坐标未统一到 J2000 轴系');
+    }
     const solved: EquatorialCoordinate = {
       raHours: result.centerRaHours,
       decDegrees: result.centerDecDegrees,
-      frame: EquatorialFrame.ICRS_J2000
+      frame: result.frame
     };
     const errorDegrees: number = AstronomyService.angularSeparation(target, solved);
     if (errorDegrees < 0.04) {
@@ -306,18 +314,36 @@ export class CaptureWorkflowCoordinator {
       throw new Error(`板解析偏差 ${errorDegrees.toFixed(2)}° 超过 2° 修正安全阈值`);
     }
 
-    const state: MountState = await this.mount.refreshState();
-    // refreshState 期间用户可能已经取消；真正发出物理 GOTO 前必须再次检查。
-    this.throwIfCancelled();
-    const rightAscensionErrorDegrees: number = AstronomyService.normalizeSignedDegrees(
-      target.raHours * 15.0 - result.centerRaHours * 15.0);
-    const corrected: EquatorialCoordinate = {
-      raHours: AstronomyService.normalizeHours(state.rightAscensionHours + rightAscensionErrorDegrees / 15.0),
-      decDegrees: Math.max(-90.0, Math.min(90.0,
-        state.declinationDegrees + target.decDegrees - result.centerDecDegrees)),
-      frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
-      validAtMs: Date.now()
+    const syncedObserver: ObserverState | undefined = this.mount.getSyncedObserver();
+    if (syncedObserver === undefined) {
+      throw new Error('漂移修正前缺少已同步观测地点');
+    }
+    const correctionTimeMs: number = Date.now();
+    const currentObserver: ObserverState = {
+      latitudeDegrees: syncedObserver.latitudeDegrees,
+      longitudeDegrees: syncedObserver.longitudeDegrees,
+      elevationMeters: syncedObserver.elevationMeters,
+      timestampMs: correctionTimeMs
     };
+    await this.mount.setObserver(
+      currentObserver, new Date().getTimezoneOffset() / 60.0);
+    this.throwIfCancelled();
+    const state: MountState = await this.mount.refreshState();
+    this.throwIfCancelled();
+    const currentMountCoordinate: MountTargetCoordinate = {
+      targetId: targetId,
+      raHours: state.rightAscensionHours,
+      decDegrees: state.declinationDegrees,
+      frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+      calculatedAtMs: correctionTimeMs,
+      observerKey: EphemerisService.observerKey(currentObserver)
+    };
+    const currentEqj: EquatorialCoordinate = EphemerisService.topocentricOfDateToEqj(
+      currentMountCoordinate);
+    const correctedEqj: EquatorialCoordinate = AstronomyService.applyShortestSkyRotation(
+      solved, target, currentEqj);
+    const corrected: MountTargetCoordinate = EphemerisService.eqjToTopocentricOfDate(
+      correctedEqj, currentObserver, correctionTimeMs, targetId);
     this.driftCorrectionActive = true;
     try {
       await this.mount.gotoRaDec(corrected);

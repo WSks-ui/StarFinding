@@ -16,6 +16,7 @@ export struct DeviceWorkspace {
   @Prop gatewayConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @Prop gatewayDetail: string = '';
   @Prop mountHomed: boolean = false;
+  @Prop coordinateModeCompatible: boolean = false;
   @Prop tracking: boolean = false;
   @Prop locationSynced: boolean = false;
   @Prop observerAvailable: boolean = false;
@@ -71,7 +72,7 @@ export struct DeviceWorkspace {
             .borderRadius($r('app.float.corner_card'))
           }
           .layoutWeight(1)
-          .height(300)
+          .height(360)
           .padding(20)
           .backgroundColor($r('app.color.app_background_secondary'))
           .borderRadius($r('app.float.corner_card'))
@@ -83,11 +84,12 @@ export struct DeviceWorkspace {
             this.TelemetryLine('赤纬', this.formatDec(this.mountDecDegrees))
             this.TelemetryLine('运动状态', this.mountSlewing ? '转动中' : '静止')
             this.TelemetryLine('位置同步', this.locationSynced ? '已同步' : '未同步')
+            this.TelemetryLine('坐标模式', this.coordinateModeCompatible ? '站心 TOPOCENTRIC' : '运动已锁定')
             this.TelemetryLine('跟踪模式', this.tracking ? '恒星时' : '已停止')
             this.TelemetryLine('安全状态', this.mountHomed ? '软限位有效' : '等待回零')
           }
           .width(this.compact ? '100%' : 330)
-          .height(300)
+          .height(360)
           .padding(20)
           .backgroundColor($r('app.color.app_background_secondary'))
           .borderRadius($r('app.float.corner_card'))
@@ -205,6 +207,9 @@ export struct DeviceWorkspace {
         color: this.connectionColor(this.mountConnection) },
       { name: '机械零位', detail: 'AUX3 / AUX4 常闭原点开关', state: this.mountHomed ? '已回零' : '未回零',
         color: this.mountHomed ? $r('app.color.app_success') : $r('app.color.app_warning') },
+      { name: '坐标模式', detail: ':GXEE# 必须返回 1',
+        state: this.coordinateModeCompatible ? 'TOPOCENTRIC' : '不兼容',
+        color: this.coordinateModeCompatible ? $r('app.color.app_success') : $r('app.color.app_error') },
       { name: '位置时间', detail: this.locationText, state: this.locationSynced ? '已同步' : '待同步',
         color: this.locationSynced ? $r('app.color.app_success') : $r('app.color.app_warning') },
       { name: '物理急停', detail: '独立切断电机电源', state: '需人工确认', color: '#E05B64' }

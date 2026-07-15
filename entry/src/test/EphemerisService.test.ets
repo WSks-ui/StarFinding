@@ -68,6 +68,7 @@ export default function ephemerisServiceTest(): void {
         EphemerisService.topocentricCoordinate(target, observer, timestampMs);
       expect(mount !== undefined).assertTrue();
       if (mount === undefined) return;
+      expect(mount.targetId).assertEqual('star-vega');
       expect(mount.frame).assertEqual(EquatorialFrame.TOPOCENTRIC_OF_DATE);
       expect(mount.observerKey).assertEqual(EphemerisService.observerKey(observer));
       const horizontal = EphemerisService.horizontalCoordinate(

@@ -2,12 +2,14 @@ import { socket } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
 import {
   ConnectionState,
-  EquatorialCoordinate,
+  EquatorialFrame,
   MountState,
+  MountTargetCoordinate,
   ObserverState,
   TrackingMode
 } from '../models/DomainModels';
 import { AstronomyService } from './AstronomyService';
+import { EphemerisService } from './EphemerisService';
 
 enum LX200ResponseMode {
   HASH_TERMINATED = 'hash',
@@ -47,12 +49,18 @@ export class OnStepLX200Client {
   static readonly HOME_SEARCH_COMMAND: string = ':hC#';
   // :Q# 只停止 GOTO/导向，不会关闭恒星时跟踪；软件急停必须同时发送 :Td#。
   static readonly EMERGENCY_STOP_COMMAND: string = ':Td#:Q#:Q#';
+  static readonly COORDINATE_MODE_QUERY_COMMAND: string = ':GXEE#';
+  static readonly MAX_TARGET_AGE_MS: number = 30000;
+  static readonly MAX_OBSERVER_SYNC_AGE_MS: number = 120000;
   private tcpSocket: socket.TCPSocket | undefined = undefined;
   private commandQueue: PendingCommand[] = [];
   private activeCommand: PendingCommand | undefined = undefined;
   private receiveBuffer: string = '';
   private timeoutHandle: number = -1;
   private listeners: MountStateListener[] = [];
+  private coordinateModeVerified: boolean = false;
+  private coordinateModeResponse: string = '';
+  private syncedObserver: ObserverState | undefined = undefined;
   private state: MountState = {
     connection: ConnectionState.DISCONNECTED,
     host: '',
@@ -99,6 +107,25 @@ export class OnStepLX200Client {
     return this.state.connection === ConnectionState.CONNECTED;
   }
 
+  isCoordinateModeCompatible(): boolean {
+    return this.coordinateModeVerified;
+  }
+
+  getCoordinateModeResponse(): string {
+    return this.coordinateModeResponse;
+  }
+
+  getSyncedObserver(): ObserverState | undefined {
+    const observer: ObserverState | undefined = this.syncedObserver;
+    if (observer === undefined) return undefined;
+    return {
+      latitudeDegrees: observer.latitudeDegrees,
+      longitudeDegrees: observer.longitudeDegrees,
+      elevationMeters: observer.elevationMeters,
+      timestampMs: observer.timestampMs
+    };
+  }
+
   async connect(host: string = OnStepLX200Client.DEFAULT_HOST,
     port: number = OnStepLX200Client.DEFAULT_PORT, timeoutMs: number = 5000): Promise<void> {
     if (this.tcpSocket !== undefined) {
@@ -127,6 +154,17 @@ export class OnStepLX200Client {
       });
       await client.setExtraOptions({ keepAlive: true, TCPNoDelay: true });
       this.setConnectionState(ConnectionState.CONNECTED, '');
+      this.coordinateModeVerified = false;
+      this.coordinateModeResponse = '';
+      this.syncedObserver = undefined;
+      try {
+        await this.verifyCoordinateMode();
+      } catch (verificationError) {
+        // 坐标模式查询失败不应切断状态读取和急停通道，但所有 GOTO/SYNC 会继续保持锁定。
+        this.coordinateModeVerified = false;
+        this.state.lastError = `无法确认 OnStepX 坐标模式：${verificationError}`;
+        this.touchState();
+      }
     } catch (error) {
       this.setConnectionState(ConnectionState.ERROR, `${error}`);
       try {
@@ -142,6 +180,9 @@ export class OnStepLX200Client {
   async disconnect(): Promise<void> {
     const client: socket.TCPSocket | undefined = this.tcpSocket;
     this.tcpSocket = undefined;
+    this.coordinateModeVerified = false;
+    this.coordinateModeResponse = '';
+    this.syncedObserver = undefined;
     this.rejectAllCommands('赤道仪连接已断开');
     if (client !== undefined) {
       client.off('message');
@@ -186,8 +227,8 @@ export class OnStepLX200Client {
     return this.getState();
   }
 
-  async gotoRaDec(coordinate: EquatorialCoordinate): Promise<void> {
-    OnStepLX200Client.validateCoordinate(coordinate);
+  async gotoRaDec(coordinate: MountTargetCoordinate): Promise<void> {
+    this.validateMotionCoordinate(coordinate);
     const raAccepted: string = await this.enqueue(
       `:Sr${OnStepLX200Client.formatRightAscension(coordinate.raHours)}#`,
       LX200ResponseMode.SINGLE_CHARACTER, 2500);
@@ -209,8 +250,8 @@ export class OnStepLX200Client {
     this.touchState();
   }
 
-  async syncRaDec(coordinate: EquatorialCoordinate): Promise<void> {
-    OnStepLX200Client.validateCoordinate(coordinate);
+  async syncRaDec(coordinate: MountTargetCoordinate): Promise<void> {
+    this.validateMotionCoordinate(coordinate);
     const raAccepted: string = await this.enqueue(
       `:Sr${OnStepLX200Client.formatRightAscension(coordinate.raHours)}#`,
       LX200ResponseMode.SINGLE_CHARACTER, 2500);
@@ -308,12 +349,37 @@ export class OnStepLX200Client {
     if (timezoneResult !== '1' || timeResult !== '1' || dateResult !== '1') {
       throw new Error('OnStepX 拒绝时区、时间或日期参数');
     }
+    this.syncedObserver = {
+      latitudeDegrees: observer.latitudeDegrees,
+      longitudeDegrees: observer.longitudeDegrees,
+      elevationMeters: observer.elevationMeters,
+      timestampMs: observer.timestampMs
+    };
+  }
+
+  /**
+   * 固件 MOUNT_COORDS=TOPOCENTRIC 时，OnStepX :GXEE# 固定返回 1。
+   * Mount.command.cpp 对 GXEE 设置 supressFrame=true，因此该回包没有 # 终止符。
+   */
+  async verifyCoordinateMode(): Promise<boolean> {
+    const response: string = await this.enqueue(
+      OnStepLX200Client.COORDINATE_MODE_QUERY_COMMAND, LX200ResponseMode.SINGLE_CHARACTER, 2500);
+    this.coordinateModeResponse = response.trim();
+    this.coordinateModeVerified = this.coordinateModeResponse === '1';
+    if (!this.coordinateModeVerified) {
+      this.state.lastError = `OnStepX 坐标模式返回 ${this.coordinateModeResponse || '空值'}，需要 TOPOCENTRIC(1)`;
+      this.touchState();
+    }
+    return this.coordinateModeVerified;
   }
 
   async rawCommand(command: string, expectsHashTerminator: boolean = true,
     timeoutMs: number = 2500): Promise<string> {
     if (!command.startsWith(':') || !command.endsWith('#')) {
       throw new Error('LX200 命令必须以冒号开始并以 # 结束');
+    }
+    if (OnStepLX200Client.isProtectedMotionCommand(command)) {
+      throw new Error('运动和坐标同步命令必须通过带站心坐标校验的专用接口发送');
     }
     return this.enqueue(command, expectsHashTerminator ? LX200ResponseMode.HASH_TERMINATED :
       LX200ResponseMode.SINGLE_CHARACTER, timeoutMs);
@@ -434,6 +500,9 @@ export class OnStepLX200Client {
 
   private handleDisconnected(message: string): void {
     this.tcpSocket = undefined;
+    this.coordinateModeVerified = false;
+    this.coordinateModeResponse = '';
+    this.syncedObserver = undefined;
     this.rejectAllCommands(message);
     this.setConnectionState(ConnectionState.ERROR, message);
   }
@@ -452,11 +521,45 @@ export class OnStepLX200Client {
     }
   }
 
-  private static validateCoordinate(coordinate: EquatorialCoordinate): void {
-    if (coordinate.raHours < 0.0 || coordinate.raHours >= 24.0 ||
+  private validateMotionCoordinate(coordinate: MountTargetCoordinate): void {
+    if (!this.coordinateModeVerified) {
+      throw new Error('OnStepX 未确认 MOUNT_COORDS=TOPOCENTRIC，GOTO/SYNC 已锁定');
+    }
+    const observer: ObserverState | undefined = this.syncedObserver;
+    if (observer === undefined) {
+      throw new Error('尚未把当前地点和真实时间同步到 OnStepX');
+    }
+    const nowMs: number = Date.now();
+    if (Math.abs(nowMs - observer.timestampMs) > OnStepLX200Client.MAX_OBSERVER_SYNC_AGE_MS) {
+      throw new Error('OnStepX 地点时间同步已过期，请重新同步后再运动');
+    }
+    OnStepLX200Client.validateMountTargetCoordinate(
+      coordinate, EphemerisService.observerKey(observer), nowMs);
+  }
+
+  static validateMountTargetCoordinate(coordinate: MountTargetCoordinate,
+    expectedObserverKey: string, nowMs: number): void {
+    EphemerisService.requireMountCoordinate(coordinate);
+    if (coordinate.frame !== EquatorialFrame.TOPOCENTRIC_OF_DATE ||
+      coordinate.raHours < 0.0 || coordinate.raHours >= 24.0 ||
       coordinate.decDegrees < -90.0 || coordinate.decDegrees > 90.0) {
       throw new Error('赤经或赤纬超出有效范围');
     }
+    if (coordinate.targetId === 'solar-sun') {
+      throw new Error('太阳目标永久禁止普通 GOTO/SYNC');
+    }
+    if (coordinate.observerKey !== expectedObserverKey) {
+      throw new Error('目标坐标的观测地点与已同步地点不一致');
+    }
+    if (!Number.isFinite(nowMs) ||
+      Math.abs(nowMs - coordinate.calculatedAtMs) > OnStepLX200Client.MAX_TARGET_AGE_MS) {
+      throw new Error('站心目标坐标已过期，必须按真实时间重新计算');
+    }
+  }
+
+  private static isProtectedMotionCommand(command: string): boolean {
+    return command.startsWith(':Sr') || command.startsWith(':Sd') || command === ':MS#' ||
+      command === ':CM#' || command === ':CS#';
   }
 
   static parseRightAscension(text: string): number | undefined {

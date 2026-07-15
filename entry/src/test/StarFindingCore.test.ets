@@ -13,6 +13,7 @@ import {
   HandLandmarks,
   HandPoint,
   ImageFormat,
+  MountTargetCoordinate,
   ObserverState
 } from '../main/ets/models/DomainModels';
 import { AstronomyService } from '../main/ets/services/AstronomyService';
@@ -145,6 +146,113 @@ export default function starFindingCoreTest(): void {
 
     it('软件急停同时停止跟踪和运动', 0, () => {
       expect(OnStepLX200Client.EMERGENCY_STOP_COMMAND).assertEqual(':Td#:Q#:Q#');
+    });
+
+    it('OnStepX 坐标模式查询固定使用 GXEE', 0, () => {
+      expect(OnStepLX200Client.COORDINATE_MODE_QUERY_COMMAND).assertEqual(':GXEE#');
+    });
+
+    it('赤道仪仅接受地点匹配且未过期的站心当日坐标', 0, () => {
+      const nowMs: number = Date.UTC(2026, 6, 15, 12, 0, 0);
+      const coordinate: MountTargetCoordinate = {
+        targetId: 'star-vega',
+        raHours: 18.6,
+        decDegrees: 38.7,
+        frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+        calculatedAtMs: nowMs,
+        observerKey: '34.750000,113.620000,100.0'
+      };
+      let accepted: boolean = true;
+      try {
+        OnStepLX200Client.validateMountTargetCoordinate(
+          coordinate, coordinate.observerKey, nowMs + 1000);
+      } catch (error) {
+        accepted = false;
+      }
+      expect(accepted).assertTrue();
+    });
+
+    it('赤道仪拒绝太阳和过期站心坐标', 0, () => {
+      const nowMs: number = Date.UTC(2026, 6, 15, 12, 0, 0);
+      const coordinate: MountTargetCoordinate = {
+        targetId: 'solar-sun',
+        raHours: 8.0,
+        decDegrees: 20.0,
+        frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+        calculatedAtMs: nowMs,
+        observerKey: '34.750000,113.620000,100.0'
+      };
+      let sunRejected: boolean = false;
+      try {
+        OnStepLX200Client.validateMountTargetCoordinate(
+          coordinate, coordinate.observerKey, nowMs);
+      } catch (error) {
+        sunRejected = true;
+      }
+      const staleCoordinate: MountTargetCoordinate = {
+        targetId: 'star-vega',
+        raHours: 18.6,
+        decDegrees: 38.7,
+        frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+        calculatedAtMs: nowMs - OnStepLX200Client.MAX_TARGET_AGE_MS - 1,
+        observerKey: coordinate.observerKey
+      };
+      let staleRejected: boolean = false;
+      try {
+        OnStepLX200Client.validateMountTargetCoordinate(
+          staleCoordinate, staleCoordinate.observerKey, nowMs);
+      } catch (error) {
+        staleRejected = true;
+      }
+      expect(sunRejected && staleRejected).assertTrue();
+    });
+
+    it('赤道仪拒绝地点不匹配和 J2000 坐标', 0, () => {
+      const nowMs: number = Date.UTC(2026, 6, 15, 12, 0, 0);
+      const coordinate: MountTargetCoordinate = {
+        targetId: 'star-vega',
+        raHours: 18.6,
+        decDegrees: 38.7,
+        frame: EquatorialFrame.ICRS_J2000,
+        calculatedAtMs: nowMs,
+        observerKey: '34.750000,113.620000,100.0'
+      };
+      let frameRejected: boolean = false;
+      try {
+        OnStepLX200Client.validateMountTargetCoordinate(
+          coordinate, coordinate.observerKey, nowMs);
+      } catch (error) {
+        frameRejected = true;
+      }
+      const topocentric: MountTargetCoordinate = {
+        targetId: 'star-vega',
+        raHours: coordinate.raHours,
+        decDegrees: coordinate.decDegrees,
+        frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+        calculatedAtMs: nowMs,
+        observerKey: coordinate.observerKey
+      };
+      let observerRejected: boolean = false;
+      try {
+        OnStepLX200Client.validateMountTargetCoordinate(
+          topocentric, '30.000000,120.000000,0.0', nowMs);
+      } catch (error) {
+        observerRejected = true;
+      }
+      expect(frameRejected && observerRejected).assertTrue();
+    });
+
+    it('最短球面旋转跨 0h 和高赤纬仍准确', 0, () => {
+      const source: EquatorialCoordinate = {
+        raHours: 23.99, decDegrees: 89.0, frame: EquatorialFrame.ICRS_J2000
+      };
+      const target: EquatorialCoordinate = {
+        raHours: 0.01, decDegrees: 89.1, frame: EquatorialFrame.ICRS_J2000
+      };
+      const rotated: EquatorialCoordinate = AstronomyService.applyShortestSkyRotation(
+        source, target, source);
+      expect(Number.isFinite(rotated.raHours) && Number.isFinite(rotated.decDegrees)).assertTrue();
+      expect(AstronomyService.angularSeparation(rotated, target) < 0.000001).assertTrue();
     });
 
     it('单掌位移被解释为拖拽', 0, () => {

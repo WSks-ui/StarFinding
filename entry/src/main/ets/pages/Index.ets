@@ -30,6 +30,7 @@ import {
   HorizontalCoordinate,
   ImageFormat,
   MountState,
+  MountTargetCoordinate,
   NormalSkyScene,
   NormalSkyViewport,
   ObservationPlanningConstraints,
@@ -165,6 +166,7 @@ struct Index {
   @State private mountConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @State private gatewayConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @State private mountHomed: boolean = false;
+  @State private mountCoordinatesTopocentric: boolean = false;
   @State private tracking: boolean = false;
   @State private captureMode: number = 0;
   @State private expertOpen: boolean = false;
@@ -363,6 +365,7 @@ struct Index {
         gatewayConnection: this.gatewayConnection,
         gatewayDetail: this.gatewayDetail,
         mountHomed: this.mountHomed,
+        coordinateModeCompatible: this.mountCoordinatesTopocentric,
         tracking: this.tracking,
         locationSynced: this.locationSynced,
         observerAvailable: this.observer !== undefined,
@@ -2074,7 +2077,8 @@ struct Index {
 
   private canStartCapture(): boolean {
     if (this.operationBusy || this.mountConnection !== ConnectionState.CONNECTED ||
-      !this.mountHomed || !this.locationSynced || !this.selectedTarget().gotoAllowed) {
+      !this.mountHomed || !this.mountCoordinatesTopocentric || !this.selectedTarget().gotoAllowed ||
+      this.selectedTarget().id === 'solar-sun') {
       return false;
     }
     const horizontal: HorizontalCoordinate | undefined = this.selectedHorizontal();
@@ -2087,14 +2091,15 @@ struct Index {
   private captureReadinessText(): string {
     if (this.operationBusy) return '正在执行设备操作，请稍候';
     if (this.mountConnection !== ConnectionState.CONNECTED) return '请先连接 OnStepX 赤道仪';
+    if (!this.mountCoordinatesTopocentric) return '固件坐标模式不是 TOPOCENTRIC(1)，自动运动已锁定';
     if (!this.mountHomed) return '自动运动前必须完成两轴回零';
     if (this.observer === undefined) return '需要系统定位才能计算目标方向';
-    if (!this.locationSynced) return '请先把位置和时间同步到 OnStepX';
+    if (this.selectedTarget().id === 'solar-sun') return '太阳永久禁止普通 GOTO';
     if (!this.selectedTarget().gotoAllowed || this.selectedCoordinate() === undefined) return '目标缺少可靠坐标，禁止自动 GOTO';
     const horizontal: HorizontalCoordinate | undefined = this.selectedHorizontal();
     if (horizontal === undefined || horizontal.altitudeDegrees < 10.0) return '目标当前低于 10° 安全高度';
     if (this.captureMode > 0 && this.gatewayConnection !== ConnectionState.CONNECTED) return '请先连接 EOS R7 相机网关';
-    return '目标方向与设备安全检查通过';
+    return this.locationSynced ? '目标方向与设备安全检查通过' : '准备就绪；开始前将自动同步地点和真实时间';
   }
 
   private adjustSetting(setting: number, delta: number, minimum: number, maximum: number): void {
@@ -2720,6 +2725,7 @@ struct Index {
         this.clearMountPolling();
         this.mountConnection = ConnectionState.DISCONNECTED;
         this.mountHomed = false;
+        this.mountCoordinatesTopocentric = false;
         this.locationSynced = false;
         this.tracking = false;
         this.operationMessage = '赤道仪已断开';
@@ -2727,13 +2733,17 @@ struct Index {
         this.mountConnection = ConnectionState.CONNECTING;
         this.operationMessage = '正在连接 10.42.0.20:9999';
         await this.mountClient.connect();
+        this.mountCoordinatesTopocentric = this.mountClient.isCoordinateModeCompatible();
         const state: MountState = await this.mountClient.refreshState();
         this.applyMountState(state);
         this.startMountPolling();
-        this.operationMessage = 'OnStepX 已连接；自动运动前请先回零并同步位置';
+        this.operationMessage = this.mountCoordinatesTopocentric ?
+          'OnStepX 已连接并确认 TOPOCENTRIC(1)；自动运动前请先回零' :
+          `OnStepX 已连接，但 :GXEE# 返回 ${this.mountClient.getCoordinateModeResponse() || '空值'}；GOTO/SYNC 已锁定`;
       }
     } catch (error) {
       this.mountConnection = ConnectionState.ERROR;
+      this.mountCoordinatesTopocentric = false;
       this.operationMessage = `赤道仪连接失败：${error}`;
     } finally {
       this.operationBusy = false;
@@ -2916,27 +2926,40 @@ struct Index {
 
   private async startCaptureTask(): Promise<void> {
     if (!this.canStartCapture()) return;
-    const selectedCoordinate: EquatorialCoordinate | undefined = this.selectedCoordinate();
-    if (selectedCoordinate === undefined) return;
-    // GOTO 之前冻结目标、模式和相机参数，避免等待机械运动期间修改 UI 导致拍摄对象与任务元数据错配。
-    const coordinate: EquatorialCoordinate = {
-      raHours: selectedCoordinate.raHours,
-      decDegrees: selectedCoordinate.decDegrees,
-      frame: selectedCoordinate.frame
-    };
-    if (selectedCoordinate.validAtMs !== undefined) {
-      coordinate.validAtMs = selectedCoordinate.validAtMs;
-    }
+    const target: CelestialObject = this.selectedTarget();
+    if (target.id === 'solar-sun' || this.observer === undefined) return;
+    // GOTO 之前冻结目标和相机参数；坐标必须在地点时间同步完成后按同一真实时刻重新计算。
     const capturePlan: CapturePlan = this.buildCapturePlan();
-    const targetDesignation: string = this.selectedTarget().designation;
+    const targetDesignation: string = target.designation;
     const runGeneration: number = ++this.captureRunGeneration;
     this.operationBusy = true;
     this.emergencyMessage = '';
     try {
       this.setCapturePanelVisible(false);
+      const motionTimeMs: number = Date.now();
+      const currentObserver: ObserverState = {
+        latitudeDegrees: this.observer.latitudeDegrees,
+        longitudeDegrees: this.observer.longitudeDegrees,
+        elevationMeters: this.observer.elevationMeters,
+        timestampMs: motionTimeMs
+      };
+      const geometricHorizontal: HorizontalCoordinate | undefined = EphemerisService.horizontalCoordinate(
+        target, currentObserver, motionTimeMs, RefractionMode.NONE);
+      if (geometricHorizontal === undefined || geometricHorizontal.altitudeDegrees < 10.0) {
+        throw new Error('目标无折射几何高度低于 10°，禁止自动运动');
+      }
+      const utcFromLocalOffsetHours: number = new Date().getTimezoneOffset() / 60.0;
+      await this.mountClient.setObserver(currentObserver, utcFromLocalOffsetHours);
+      this.locationSynced = true;
+      const mountCoordinate: MountTargetCoordinate | undefined = EphemerisService.topocentricCoordinate(
+        target, currentObserver, motionTimeMs);
+      const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, motionTimeMs);
+      if (mountCoordinate === undefined || coordinate === undefined) {
+        throw new Error('无法生成带坐标帧的目标方向');
+      }
       this.taskStage = `正在 GOTO ${targetDesignation}`;
       this.operationMessage = this.taskStage;
-      await this.mountClient.gotoRaDec(coordinate);
+      await this.mountClient.gotoRaDec(mountCoordinate);
       this.throwIfCaptureRunCancelled(runGeneration);
       await this.waitForMountMotion(runGeneration);
       this.throwIfCaptureRunCancelled(runGeneration);

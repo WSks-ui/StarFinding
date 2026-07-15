@@ -182,6 +182,57 @@ export class AstronomyService {
     return Math.acos(AstronomyService.clamp(cosine, -1.0, 1.0)) * AstronomyService.RAD_TO_DEG;
   }
 
+  /**
+   * 把 source 指向 target 的最短球面旋转施加到 value。用于板解析闭环时，三者必须已在
+   * 同一 J2000 三维轴系中；该算法不会在 0h 回绕或高赤纬处直接相减赤经赤纬。
+   */
+  static applyShortestSkyRotation(source: EquatorialCoordinate, target: EquatorialCoordinate,
+    value: EquatorialCoordinate): EquatorialCoordinate {
+    if (source.frame === EquatorialFrame.TOPOCENTRIC_OF_DATE ||
+      target.frame === EquatorialFrame.TOPOCENTRIC_OF_DATE ||
+      value.frame === EquatorialFrame.TOPOCENTRIC_OF_DATE) {
+      throw new Error('最短球面旋转要求先把坐标统一到 J2000 轴系');
+    }
+    const from: Vector3 = AstronomyService.equatorialVector(source);
+    const to: Vector3 = AstronomyService.equatorialVector(target);
+    const input: Vector3 = AstronomyService.equatorialVector(value);
+    const axisScaled: Vector3 = AstronomyService.cross(from, to);
+    const sine: number = Math.sqrt(AstronomyService.dot(axisScaled, axisScaled));
+    const cosine: number = AstronomyService.clamp(AstronomyService.dot(from, to), -1.0, 1.0);
+    let rotated: Vector3;
+    if (sine < 0.0000000001 && cosine > 0.0) {
+      rotated = input;
+    } else if (sine < 0.0000000001) {
+      // 对跖方向的最短轴不唯一；选择与 source 稳定正交的轴完成 180° 旋转。
+      const reference: Vector3 = Math.abs(from.z) < 0.9 ?
+        { x: 0.0, y: 0.0, z: 1.0 } : { x: 1.0, y: 0.0, z: 0.0 };
+      const axis: Vector3 = AstronomyService.normalizeVector(AstronomyService.cross(from, reference));
+      const projection: number = AstronomyService.dot(axis, input);
+      rotated = {
+        x: 2.0 * axis.x * projection - input.x,
+        y: 2.0 * axis.y * projection - input.y,
+        z: 2.0 * axis.z * projection - input.z
+      };
+    } else {
+      const firstCross: Vector3 = AstronomyService.cross(axisScaled, input);
+      const secondCross: Vector3 = AstronomyService.cross(axisScaled, firstCross);
+      const scale: number = (1.0 - cosine) / (sine * sine);
+      rotated = {
+        x: input.x + firstCross.x + secondCross.x * scale,
+        y: input.y + firstCross.y + secondCross.y * scale,
+        z: input.z + firstCross.z + secondCross.z * scale
+      };
+    }
+    const result: Vector3 = AstronomyService.normalizeVector(rotated);
+    const coordinate: EquatorialCoordinate = {
+      raHours: AstronomyService.normalizeHours(Math.atan2(result.y, result.x) * 12.0 / Math.PI),
+      decDegrees: Math.asin(AstronomyService.clamp(result.z, -1.0, 1.0)) * AstronomyService.RAD_TO_DEG,
+      frame: value.frame
+    };
+    if (value.validAtMs !== undefined) coordinate.validAtMs = value.validAtMs;
+    return coordinate;
+  }
+
   /** 固定天体直接返回 J2000 坐标；太阳、月球和行星按当前时刻计算低精度视位置。 */
   static resolveCoordinate(object: CelestialObject, timestampMs: number): EquatorialCoordinate | undefined {
     if (object.precision === CatalogPrecision.EXACT) {
@@ -340,6 +391,25 @@ export class AstronomyService {
       y: Math.cos(altitude) * Math.cos(azimuth),
       z: Math.sin(altitude)
     };
+  }
+
+  private static equatorialVector(coordinate: EquatorialCoordinate): Vector3 {
+    const rightAscension: number = coordinate.raHours * 15.0 * AstronomyService.DEG_TO_RAD;
+    const declination: number = coordinate.decDegrees * AstronomyService.DEG_TO_RAD;
+    const cosineDeclination: number = Math.cos(declination);
+    return {
+      x: cosineDeclination * Math.cos(rightAscension),
+      y: cosineDeclination * Math.sin(rightAscension),
+      z: Math.sin(declination)
+    };
+  }
+
+  private static normalizeVector(vector: Vector3): Vector3 {
+    const length: number = Math.sqrt(AstronomyService.dot(vector, vector));
+    if (!Number.isFinite(length) || length <= 0.0) {
+      throw new Error('球面旋转产生无效三维方向');
+    }
+    return { x: vector.x / length, y: vector.y / length, z: vector.z / length };
   }
 
   private static dot(first: Vector3, second: Vector3): number {
