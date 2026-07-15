@@ -73,15 +73,14 @@ export struct WorkspaceNavigationDock {
   private DockButton(icon: Resource, label: string, active: boolean, compact: boolean,
     action: () => void) {
     Stack({ alignContent: Alignment.Center }) {
-      if (active) {
-        Row()
-          .width('100%')
-          .height('100%')
-          .backgroundColor($r('app.color.app_brand'))
-          .borderRadius($r('app.float.corner_control'))
-          .geometryTransition('workspace-navigation-indicator', { follow: true })
-          .transition(TransitionEffect.OPACITY.animation(MotionTokens.quick()))
-      }
+      // 工作区转场时新旧导航会短暂并存，选中层必须限制在当前按钮内，不能跨 Dock 共享几何 ID。
+      Row()
+        .width('100%')
+        .height('100%')
+        .backgroundColor($r('app.color.app_brand'))
+        .borderRadius($r('app.float.corner_control'))
+        .opacity(active ? 1 : 0)
+        .animation(MotionTokens.quick())
 
       Column({ space: 3 }) {
         SymbolGlyph(icon)
