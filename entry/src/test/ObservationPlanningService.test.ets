@@ -13,6 +13,10 @@ import {
   WeatherHourlySample
 } from '../main/ets/models/DomainModels';
 import { ObservationPlanningService } from '../main/ets/services/ObservationPlanningService';
+import {
+  JPL_RISE_SET_SAMPLES,
+  JplRiseSetSample
+} from './fixtures/JplHorizonsSamples';
 
 function zhengzhouObserver(timestampMs: number): ObserverState {
   return {
@@ -136,6 +140,32 @@ export default function observationPlanningServiceTest(): void {
         target, zhengzhouObserver(Date.UTC(2026, 6, 12, 14, 0, 0)), Date.UTC(2026, 6, 12, 14, 0, 0));
       expect(first !== undefined && second !== undefined &&
         Math.abs(first.azimuthDegrees - second.azimuthDegrees) > 1).assertTrue();
+    });
+
+    it('正常大气折射升落时刻与 JPL Horizons 相差不超过五分钟', 0, () => {
+      for (let index: number = 0; index < JPL_RISE_SET_SAMPLES.length; index++) {
+        const sample: JplRiseSetSample = JPL_RISE_SET_SAMPLES[index];
+        const observer: ObserverState = {
+          latitudeDegrees: sample.latitudeDegrees,
+          longitudeDegrees: sample.longitudeDegrees,
+          elevationMeters: sample.elevationMeters,
+          timestampMs: sample.startAtMs
+        };
+        const result: ObservationPlanningResult = ObservationPlanningService.plan(
+          requireTarget(sample.objectId), observer, sample.startAtMs, undefined, {
+            horizonHours: 24.0,
+            sampleMinutes: 10.0,
+            minAltitudeDegrees: 0.0,
+            maxSunAltitudeDegrees: 0.0
+          });
+        expect(result.riseTransitSet.riseAtMs !== undefined &&
+          result.riseTransitSet.setAtMs !== undefined).assertTrue();
+        if (result.riseTransitSet.riseAtMs === undefined ||
+          result.riseTransitSet.setAtMs === undefined) continue;
+        const toleranceMs: number = sample.toleranceMinutes * 60000.0;
+        expect(Math.abs(result.riseTransitSet.riseAtMs - sample.riseAtMs) <= toleranceMs).assertTrue();
+        expect(Math.abs(result.riseTransitSet.setAtMs - sample.setAtMs) <= toleranceMs).assertTrue();
+      }
     });
   });
 }

@@ -13,6 +13,14 @@ import {
 } from '../main/ets/models/DomainModels';
 import { AstronomyService } from '../main/ets/services/AstronomyService';
 import { EphemerisService } from '../main/ets/services/EphemerisService';
+import {
+  JPL_GEOCENTRIC_EQUATORIAL_SAMPLES,
+  JPL_ILLUMINATION_SAMPLES,
+  JPL_TOPOCENTRIC_EQUATORIAL_SAMPLES,
+  JplGeocentricEquatorialSample,
+  JplIlluminationSample,
+  JplTopocentricEquatorialSample
+} from './fixtures/JplHorizonsSamples';
 
 function requireTarget(id: string): CelestialObject {
   const target: CelestialObject | undefined = CelestialCatalog.getById(id);
@@ -33,6 +41,55 @@ function requireCoordinate(target: CelestialObject, timestampMs: number): Framed
 
 export default function ephemerisServiceTest(): void {
   describe('离线权威星历', () => {
+    it('2000、2024 闰日和 2026 地心坐标满足 JPL 精度门槛', 0, () => {
+      for (let index: number = 0; index < JPL_GEOCENTRIC_EQUATORIAL_SAMPLES.length; index++) {
+        const sample: JplGeocentricEquatorialSample = JPL_GEOCENTRIC_EQUATORIAL_SAMPLES[index];
+        const actual: FramedEquatorialCoordinate = requireCoordinate(
+          requireTarget(sample.objectId), sample.timestampMs);
+        const expected: EquatorialCoordinate = {
+          raHours: sample.raHours,
+          decDegrees: sample.decDegrees,
+          frame: EquatorialFrame.APPARENT_EQJ,
+          validAtMs: sample.timestampMs
+        };
+        expect(AstronomyService.angularSeparation(actual, expected) <= sample.toleranceDegrees).assertTrue();
+      }
+    });
+
+    it('月球站心坐标与月面照明满足 JPL 精度门槛', 0, () => {
+      for (let index: number = 0; index < JPL_TOPOCENTRIC_EQUATORIAL_SAMPLES.length; index++) {
+        const sample: JplTopocentricEquatorialSample = JPL_TOPOCENTRIC_EQUATORIAL_SAMPLES[index];
+        const observer: ObserverState = {
+          latitudeDegrees: sample.latitudeDegrees,
+          longitudeDegrees: sample.longitudeDegrees,
+          elevationMeters: sample.elevationMeters,
+          timestampMs: sample.timestampMs
+        };
+        const actual: MountTargetCoordinate | undefined = EphemerisService.topocentricCoordinate(
+          requireTarget(sample.objectId), observer, sample.timestampMs);
+        expect(actual !== undefined).assertTrue();
+        if (actual === undefined) continue;
+        const expected: EquatorialCoordinate = {
+          raHours: sample.raHours,
+          decDegrees: sample.decDegrees,
+          frame: EquatorialFrame.TOPOCENTRIC_OF_DATE,
+          validAtMs: sample.timestampMs
+        };
+        const comparable: EquatorialCoordinate = {
+          raHours: actual.raHours,
+          decDegrees: actual.decDegrees,
+          frame: actual.frame,
+          validAtMs: actual.calculatedAtMs
+        };
+        expect(AstronomyService.angularSeparation(comparable, expected) <= sample.toleranceDegrees).assertTrue();
+      }
+      for (let index: number = 0; index < JPL_ILLUMINATION_SAMPLES.length; index++) {
+        const sample: JplIlluminationSample = JPL_ILLUMINATION_SAMPLES[index];
+        const actualPercent: number = EphemerisService.moonIlluminationPercent(sample.timestampMs);
+        expect(Math.abs(actualPercent - sample.illuminatedPercent) <= sample.tolerancePercent).assertTrue();
+      }
+    });
+
     it('2026 年行星角距符合 JPL Horizons', 0, () => {
       const timestampMs: number = Date.UTC(2026, 6, 15, 0, 0, 0);
       const mars: FramedEquatorialCoordinate = requireCoordinate(

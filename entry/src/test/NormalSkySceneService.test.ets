@@ -218,6 +218,56 @@ export default function normalSkySceneServiceTest(): void {
       expect(service.getCacheStats().trajectoryBuildCount).assertEqual(2);
     });
 
+    it('模拟日期变化会更新金星盈亏而不是复用固定图符', 0, () => {
+      const firstAtMs: number = Date.UTC(2026, 3, 1, 0, 0, 0);
+      const secondAtMs: number = Date.UTC(2026, 6, 15, 0, 0, 0);
+      const venus: CelestialObject | undefined = CelestialCatalog.getById('planet-venus');
+      if (venus === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const firstCoordinate = EphemerisService.skyCoordinate(venus, firstAtMs);
+      const secondCoordinate = EphemerisService.skyCoordinate(venus, secondAtMs);
+      if (firstCoordinate === undefined || secondCoordinate === undefined) {
+        expect(false).assertTrue();
+        return;
+      }
+      const service: NormalSkySceneService = new NormalSkySceneService(
+        new VisibleStarCatalogService(), new NormalSkyCatalogService());
+      const first: NormalSkyScene = service.build({
+        viewport: {
+          centerRaHours: firstCoordinate.raHours, centerDecDegrees: firstCoordinate.decDegrees,
+          fieldOfViewDegrees: 30.0, rotationDegrees: 0.0,
+          orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+        },
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: venus.id,
+        timestampMs: firstAtMs
+      });
+      const second: NormalSkyScene = service.build({
+        viewport: {
+          centerRaHours: secondCoordinate.raHours, centerDecDegrees: secondCoordinate.decDegrees,
+          fieldOfViewDegrees: 30.0, rotationDegrees: 0.0,
+          orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+        },
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: venus.id,
+        timestampMs: secondAtMs
+      });
+      const firstVenus: ProjectedSkyObject | undefined = findProjected(first.dynamicObjects, venus.id);
+      const secondVenus: ProjectedSkyObject | undefined = findProjected(second.dynamicObjects, venus.id);
+      expect(firstVenus !== undefined && firstVenus.appearance !== undefined &&
+        secondVenus !== undefined && secondVenus.appearance !== undefined).assertTrue();
+      if (firstVenus === undefined || firstVenus.appearance === undefined ||
+        secondVenus === undefined || secondVenus.appearance === undefined) return;
+      expect(Math.abs(firstVenus.appearance.illuminatedFraction -
+        secondVenus.appearance.illuminatedFraction) > 0.2).assertTrue();
+      expect(firstVenus.brightLimbScreenAngleDegrees !== undefined &&
+        secondVenus.brightLimbScreenAngleDegrees !== undefined).assertTrue();
+    });
+
     it('一百一十个梅西耶目标均映射为深空图符', 0, () => {
       const messier: CelestialObject[] = CelestialCatalog.messierObjects();
       expect(messier.length).assertEqual(110);
