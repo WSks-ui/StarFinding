@@ -71,6 +71,166 @@
     {
       "name": "normal_sky_time_week_speed",
       "value": "7天/秒"
+    },
+    {
+      "name": "planning_title_tonight",
+      "value": "今晚规划"
+    },
+    {
+      "name": "planning_title_tomorrow",
+      "value": "明晚规划"
+    },
+    {
+      "name": "planning_device_time",
+      "value": "设备时间"
+    },
+    {
+      "name": "planning_tonight",
+      "value": "今晚"
+    },
+    {
+      "name": "planning_tomorrow",
+      "value": "明晚"
+    },
+    {
+      "name": "planning_location",
+      "value": "地点"
+    },
+    {
+      "name": "planning_refresh",
+      "value": "更新"
+    },
+    {
+      "name": "planning_location_required",
+      "value": "先设置观测地点"
+    },
+    {
+      "name": "planning_location_required_detail",
+      "value": "地点用于计算真实升落、高度和今晚窗口"
+    },
+    {
+      "name": "planning_use_current_location",
+      "value": "使用当前位置"
+    },
+    {
+      "name": "planning_enter_coordinates",
+      "value": "输入坐标"
+    },
+    {
+      "name": "planning_latitude",
+      "value": "纬度"
+    },
+    {
+      "name": "planning_longitude",
+      "value": "经度"
+    },
+    {
+      "name": "planning_apply_coordinates",
+      "value": "应用坐标"
+    },
+    {
+      "name": "planning_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "planning_add_target",
+      "value": "加入计划"
+    },
+    {
+      "name": "planning_target_added",
+      "value": "已在清单"
+    },
+    {
+      "name": "planning_target_list",
+      "value": "计划目标"
+    },
+    {
+      "name": "planning_empty_targets",
+      "value": "还没有加入计划目标"
+    },
+    {
+      "name": "planning_astronomy_score",
+      "value": "天文分"
+    },
+    {
+      "name": "planning_weather_score",
+      "value": "天气分"
+    },
+    {
+      "name": "planning_overall_score",
+      "value": "综合分"
+    },
+    {
+      "name": "planning_rise",
+      "value": "升起"
+    },
+    {
+      "name": "planning_transit",
+      "value": "中天"
+    },
+    {
+      "name": "planning_set",
+      "value": "落下"
+    },
+    {
+      "name": "planning_altitude_trend",
+      "value": "高度趋势"
+    },
+    {
+      "name": "planning_best_window",
+      "value": "最佳窗口"
+    },
+    {
+      "name": "planning_moonlight",
+      "value": "月光"
+    },
+    {
+      "name": "planning_weather",
+      "value": "天气"
+    },
+    {
+      "name": "planning_cloud_rain_wind",
+      "value": "云 / 雨 / 风"
+    },
+    {
+      "name": "planning_set_location_first",
+      "value": "设置地点后计算"
+    },
+    {
+      "name": "planning_weather_pending",
+      "value": "待获取"
+    },
+    {
+      "name": "planning_astronomy_only",
+      "value": "仅天文"
+    },
+    {
+      "name": "planning_no_window",
+      "value": "本夜无可用窗口"
+    },
+    {
+      "name": "planning_night_start_visible",
+      "value": "夜初已升"
+    },
+    {
+      "name": "planning_night_end_visible",
+      "value": "夜末仍在"
+    },
+    {
+      "name": "planning_all_night_visible",
+      "value": "整夜可见"
+    },
+    {
+      "name": "planning_never_rises",
+      "value": "本夜不升"
+    },
+    {
+      "name": "planning_weather_loading",
+      "value": "正在更新预报，天文结果仍可查看"
+    },
+    {
+      "name": "planning_weather_unavailable",
+      "value": "天气不可用，仅按天文条件规划"
     }
   ]
 }

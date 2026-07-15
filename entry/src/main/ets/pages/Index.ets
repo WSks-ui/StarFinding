@@ -7,6 +7,7 @@ import { NormalSkyControls } from '../components/NormalSkyControls';
 import { NormalSkyMap } from '../components/NormalSkyMap';
 import { NormalSkyOrientationOverlay } from '../components/NormalSkyOrientationOverlay';
 import { NormalSkyTimeControls } from '../components/NormalSkyTimeControls';
+import { PlanningDrawer } from '../components/PlanningDrawer';
 import { PostWorkspace } from '../components/PostWorkspace';
 import { SkyWorkspace } from '../components/SkyWorkspace';
 import { TaskWorkspace } from '../components/TaskWorkspace';
@@ -41,9 +42,10 @@ import {
   ObservationNightPeriod,
   ObservationPlanningConstraints,
   ObservationPlanningResult,
-  ObservationWindow,
   ObserverState,
   OutingRecommendation,
+  PlanningPageState,
+  PlanningTargetSummary,
   ProjectedSkyObject,
   RefractionMode,
   SkyLayerVisibility,
@@ -116,22 +118,6 @@ const FEATURED_TARGET_IDS: string[] = [
   'star-vega', 'star-altair', 'star-deneb', 'messier-31', 'messier-8', 'solar-moon'
 ];
 const MAX_PLANNED_TARGETS: number = 8;
-
-interface PlannedTargetSummary {
-  targetId: string;
-  targetName: string;
-  designation: string;
-  windowText: string;
-  scoreText: string;
-  color: ResourceColor;
-}
-
-interface PlanningHeightBar {
-  id: string;
-  label: string;
-  height: number;
-  color: ResourceColor;
-}
 
 function emptyNormalSkyScene(): NormalSkyScene {
   return {
@@ -241,7 +227,7 @@ struct Index {
   @State private planningDayOffset: number = 0;
   @State private plannedTargetIds: string[] = [];
   @State private activePlanningTargetId: string = '';
-  @State private plannedTargetSummaries: PlannedTargetSummary[] = [];
+  @State private plannedTargetSummaries: PlanningTargetSummary[] = [];
   @State private planningResult: ObservationPlanningResult | undefined = undefined;
   @State private activePlanningResult: ObservationPlanningResult | undefined = undefined;
   @State private planningBusy: boolean = false;
@@ -1029,186 +1015,42 @@ struct Index {
 
   @Builder
   private SkyPlanningDrawer() {
-    Column({ space: 0 }) {
-      if (this.useSkyBottomSheet()) {
-        Rect().width(44).height(4).fill($r('app.color.sky_text_tertiary'))
-          .borderRadius(2).margin({ top: 10, bottom: 8 })
-      }
-      Row() {
-        Column({ space: 2 }) {
-          Text(this.planningDayOffset === 0 ? '今晚规划' : '明晚规划')
-            .fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary'))
-          Text(`${this.plannedTargetIds.length} 个目标 · ${this.planningDayOffset === 0 ? '今晚' : '明晚'}`)
-            .fontSize(12).fontColor($r('app.color.sky_text_secondary'))
-        }.layoutWeight(1).alignItems(HorizontalAlign.Start)
-        Button() {
-          SymbolGlyph($r('sys.symbol.xmark'))
-            .fontSize(20).fontColor([$r('app.color.sky_text_secondary')])
-        }
-          .width(48).height(48)
-          .backgroundColor($r('app.color.app_surface_primary')).borderRadius(24)
-          .onClick(() => { this.openSkyPanel(2); })
-      }.width('100%').padding({ left: 20, right: 14, top: 10, bottom: 12 })
-
-      Row({ space: 6 }) {
-        this.PlanningDayButton('今晚', 0)
-        this.PlanningDayButton('明晚', 1)
-        Blank()
-        Button('地点')
-          .height(40).padding({ left: 14, right: 14 }).fontSize(12)
-          .fontColor($r('app.color.sky_text_primary'))
-          .backgroundColor($r('app.color.app_surface_primary')).borderRadius(20)
-          .onClick(() => {
-            this.getUIContext().animateTo(MotionTokens.standard(), () => {
-              this.planningLocationEditorOpen = !this.planningLocationEditorOpen;
-            });
-          })
-        Button(this.planningBusy ? '更新中' : '更新')
-          .height(40).padding({ left: 14, right: 14 }).fontSize(12)
-          .enabled(!this.planningBusy && this.observer !== undefined)
-          .fontColor($r('app.color.sky_text_primary'))
-          .backgroundColor($r('app.color.app_surface_primary')).borderRadius(20)
-          .onClick(() => { this.refreshWeatherForecast(); })
-      }
-      .width('100%').padding({ left: 12, right: 12, bottom: 8 })
-
-      if (this.planningLocationEditorOpen) {
-        Column({ space: 7 }) {
-          Row({ space: 7 }) {
-            TextInput({ placeholder: '纬度', text: this.manualLatitudeText })
-              .layoutWeight(1).height(44).fontSize(13).fontColor($r('app.color.sky_text_primary'))
-              .backgroundColor($r('app.color.sky_background')).borderRadius($r('app.float.corner_card'))
-              .onChange((value: string) => { this.manualLatitudeText = value; })
-            TextInput({ placeholder: '经度', text: this.manualLongitudeText })
-              .layoutWeight(1).height(44).fontSize(13).fontColor($r('app.color.sky_text_primary'))
-              .backgroundColor($r('app.color.sky_background')).borderRadius($r('app.float.corner_card'))
-              .onChange((value: string) => { this.manualLongitudeText = value; })
-          }.width('100%')
-          Row({ space: 7 }) {
-            Button('应用坐标').layoutWeight(1).height(44).fontSize(13)
-              .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(22)
-              .onClick(() => {
-                this.applyManualPlanningLocation();
-                if (this.observer !== undefined) {
-                  this.getUIContext().animateTo(MotionTokens.standard(), () => {
-                    this.planningLocationEditorOpen = false;
-                  });
-                }
-              })
-            Button('系统定位').layoutWeight(1).height(44).fontSize(13)
-              .fontColor($r('app.color.sky_text_primary'))
-              .backgroundColor($r('app.color.app_surface_primary')).borderRadius(22)
-              .onClick(() => { this.refreshLocation(); })
-          }.width('100%')
-        }
-        .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 10 })
-        .backgroundColor($r('app.color.sky_surface_soft'))
-        .transition(MotionTokens.drawer(true))
-      }
-
-      Scroll() {
-        Column({ space: 10 }) {
-          Row() {
-            Column({ space: 3 }) {
-              Text(this.planningRecommendationTitle()).fontSize(10).fontWeight(FontWeight.Bold)
-                .fontColor(this.planningRecommendationColor())
-              Text(this.planningResult?.targetName ?? this.selectedTarget().nameZh)
-                .fontSize(22).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary'))
-              Text(this.planningResult?.summary ?? '设置观测地点后生成本地天文窗口')
-                .fontSize(12).lineHeight(18).fontColor($r('app.color.sky_text_secondary')).maxLines(2)
-            }.layoutWeight(1)
-            Column({ space: 1 }) {
-              Text(this.planningScoreText()).fontSize(25).fontWeight(FontWeight.Bold)
-                .fontColor(this.planningRecommendationColor())
-              Text(this.planningResult?.overallScore === undefined ? '参考天文分' : '参考综合分')
-                .fontSize(12).fontColor($r('app.color.sky_text_tertiary'))
-            }.width(70).alignItems(HorizontalAlign.Center)
-          }
-          .width('100%').padding(14).backgroundColor($r('app.color.sky_surface_soft'))
-          .borderRadius($r('app.float.corner_card'))
-
-          Row({ space: 6 }) {
-            this.SkyPlanningMetric('升起', this.planningEventText('rise'))
-            this.SkyPlanningMetric('中天', this.planningEventText('transit'))
-            this.SkyPlanningMetric('落下', this.planningEventText('set'))
-          }.width('100%')
-
-          if (this.planningResult !== undefined && this.planningResult.samples.length > 0) {
-            Column({ space: 6 }) {
-              Row() {
-                Text('高度趋势').fontSize(10).fontWeight(FontWeight.Bold).fontColor('#DCE4EE')
-                Blank()
-                Text('24h').fontSize(8).fontColor('#748195')
-              }.width('100%')
-              Row({ space: 3 }) {
-                ForEach(this.planningHeightBars(), (bar: PlanningHeightBar) => {
-                  Column({ space: 2 }) {
-                    Blank()
-                    Rect().width('100%').height(Math.max(3, bar.height * 0.62)).fill(bar.color).borderRadius(1)
-                    Text(bar.label).fontSize(7).fontColor('#687689').height(10)
-                  }.layoutWeight(1).height(70)
-                }, (bar: PlanningHeightBar) => bar.id)
-              }.width('100%').height(70)
-            }
-            .width('100%').height(98).padding(10).backgroundColor('#0B1016').borderRadius(6)
-          }
-
-          Column({ space: 5 }) {
-            this.InfoLine('最佳窗口', this.planningBestWindowText())
-            this.InfoLine('月光', this.planningMoonText())
-            this.InfoLine('天气', this.weatherMessage)
-            this.InfoLine('云 / 雨 / 风', `${this.planningWeatherMetric('cloud')} · ` +
-              `${this.planningWeatherMetric('rain')} · ${this.planningWeatherMetric('wind')}`)
-          }.width('100%').padding(10).backgroundColor('#0B1016').borderRadius(6)
-
-          Row() {
-            Text('计划目标').fontSize(11).fontWeight(FontWeight.Bold).fontColor('#DCE4EE')
-            Blank()
-            Text('+').width(28).height(28).fontSize(17).textAlign(TextAlign.Center)
-              .fontColor('#071017').backgroundColor('#72D3F5').borderRadius(5)
-              .onClick(() => { this.addActivePlanningTargetToPlan(); })
-          }.width('100%')
-
-          ForEach(this.plannedTargetSummaries, (summary: PlannedTargetSummary) => {
-            Row({ space: 7 }) {
-              Circle().width(7).height(7).fill(summary.color)
-              Column({ space: 2 }) {
-                Text(`${summary.targetName} · ${summary.designation}`)
-                  .fontSize(10).fontWeight(FontWeight.Bold).fontColor('#E4EAF1').width('100%')
-                Text(summary.windowText).fontSize(8).fontColor('#748195').width('100%')
-              }.layoutWeight(1)
-              Text(summary.scoreText).fontSize(9).fontColor(summary.color)
-              Text('X').width(25).height(25).fontSize(11).textAlign(TextAlign.Center)
-                .fontColor('#AAB4C2').backgroundColor('#242A34').borderRadius(4)
-                .onClick(() => { this.removePlannedTarget(summary.targetId); })
-            }
-            .width('100%').height(44).padding({ left: 9, right: 6 })
-            .backgroundColor(summary.targetId === this.selectedTargetId ? '#17222B' : '#0D1218')
-            .borderRadius(5).onClick(() => { this.selectPlanningTarget(summary.targetId); })
-          }, (summary: PlannedTargetSummary) => summary.targetId)
-        }
-        .width('100%').padding({ left: 12, right: 12, bottom: 12 })
-      }
-      .layoutWeight(1).width('100%')
-    }
-    .width(this.skyDrawerWidth()).height(this.skyDrawerHeight())
-    .backgroundColor($r('app.color.sky_surface_strong'))
-    .backgroundBlurStyle(BlurStyle.Thick)
-    .border({ width: 1, color: $r('app.color.sky_border') })
-    .borderRadius($r('app.float.corner_modal'))
-    .position({ x: this.skyDrawerX(), y: this.skyDrawerY() })
-    .transition(MotionTokens.drawer(this.useSkyBottomSheet()))
-  }
-
-  @Builder
-  private SkyPlanningMetric(label: string, value: string) {
-    Column({ space: 3 }) {
-      Text(label).fontSize(12).fontColor($r('app.color.sky_text_tertiary'))
-      Text(value).fontSize(13).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary'))
-        .maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
-    }
-    .layoutWeight(1).height(58).justifyContent(FlexAlign.Center).alignItems(HorizontalAlign.Center)
-    .backgroundColor($r('app.color.sky_background')).borderRadius($r('app.float.corner_card'))
+    PlanningDrawer({
+      drawerWidth: this.skyDrawerWidth(),
+      drawerHeight: this.skyDrawerHeight(),
+      drawerX: this.skyDrawerX(),
+      drawerY: this.skyDrawerY(),
+      bottomSheet: this.useSkyBottomSheet(),
+      pageState: this.planningPageState(),
+      period: this.planningPeriod(),
+      dayOffset: this.planningDayOffset,
+      activeTargetId: this.activePlanningTarget().id,
+      activeTargetName: this.activePlanningTarget().nameZh,
+      activeDesignation: this.activePlanningTarget().designation,
+      activeTargetIncluded: this.plannedTargetIds.includes(this.activePlanningTarget().id),
+      targetCount: this.plannedTargetIds.length,
+      result: this.activePlanningResult,
+      targetSummaries: this.plannedTargetSummaries,
+      weatherSample: this.planningWeatherSample(this.activePlanningResult),
+      weatherMessage: this.weatherMessage,
+      locationText: this.locationText,
+      locationSource: this.planningLocationSource,
+      locationEditorOpen: this.planningLocationEditorOpen,
+      manualLatitudeText: this.manualLatitudeText,
+      manualLongitudeText: this.manualLongitudeText,
+      busy: this.planningBusy,
+      onClose: (): void => { this.openSkyPanel(2); },
+      onDayChange: (dayOffset: number): void => { this.selectPlanningDay(dayOffset); },
+      onToggleLocationEditor: (): void => { this.togglePlanningLocationEditor(); },
+      onLatitudeChange: (value: string): void => { this.manualLatitudeText = value; },
+      onLongitudeChange: (value: string): void => { this.manualLongitudeText = value; },
+      onApplyManualLocation: (): void => { this.applyManualPlanningLocation(); },
+      onUseCurrentLocation: (): void => { this.refreshLocation(); },
+      onRefreshWeather: (): void => { this.refreshWeatherForecast(); },
+      onAddActiveTarget: (): void => { this.addActivePlanningTargetToPlan(); },
+      onSelectTarget: (targetId: string): void => { this.selectPlanningTarget(targetId); },
+      onRemoveTarget: (targetId: string): void => { this.removePlannedTarget(targetId); }
+    })
   }
 
   @Builder
@@ -1226,22 +1068,6 @@ struct Index {
       Blank()
       Text(value).fontSize(12).fontColor($r('app.color.sky_text_secondary')).textAlign(TextAlign.End)
     }.width('100%')
-  }
-
-  @Builder
-  private PlanningDayButton(label: string, offset: number) {
-    Button(label)
-      .height(40).padding({ left: 16, right: 16 }).fontSize(13)
-      .fontWeight(this.planningDayOffset === offset ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(this.planningDayOffset === offset ?
-        $r('app.color.app_on_brand') : $r('app.color.app_text_secondary'))
-      .backgroundColor(this.planningDayOffset === offset ?
-        $r('app.color.app_brand') : $r('app.color.app_surface_primary'))
-      .borderRadius(20)
-      .onClick(() => {
-        this.getUIContext().animateTo(MotionTokens.quick(), () => { this.planningDayOffset = offset; });
-        this.refreshPlanning();
-      })
   }
 
   @Builder
@@ -1468,7 +1294,7 @@ struct Index {
       this.skyChromeVisible = true;
       this.skyOverlayPanel = panel;
     });
-    if (panel === 2) this.refreshPlanning();
+    if (panel === 2) this.refreshPlanningAndWeather();
     if (this.skyMode === 0) this.updateProjectedTargets(true);
     if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
@@ -1491,7 +1317,7 @@ struct Index {
       this.skyChromeVisible = true;
       this.skyOverlayPanel = this.skyOverlayPanel === panel ? 0 : panel;
     });
-    if (this.skyOverlayPanel === 2) this.refreshPlanning();
+    if (this.skyOverlayPanel === 2) this.refreshPlanningAndWeather();
     if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
 
@@ -1502,7 +1328,7 @@ struct Index {
       this.skyChromeVisible = true;
       this.skyOverlayPanel = panel;
     });
-    if (panel === 2) this.refreshPlanning();
+    if (panel === 2) this.refreshPlanningAndWeather();
     if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
 
@@ -1744,7 +1570,7 @@ struct Index {
     const target: CelestialObject = this.selectedTarget();
     this.activePlanningTargetId = target.id;
     this.rememberPlanningTarget(target);
-    this.refreshPlanning();
+    this.refreshPlanningAndWeather();
     this.workspaceDirection = -1;
     this.getUIContext().animateTo(MotionTokens.spring(), () => {
       this.activeSection = 0;
@@ -1774,6 +1600,7 @@ struct Index {
   }
 
   private removePlannedTarget(targetId: string): void {
+    const removedTarget: CelestialObject | undefined = this.planningTargetById(targetId);
     const remaining: string[] = [];
     for (let index: number = 0; index < this.plannedTargetIds.length; index++) {
       if (this.plannedTargetIds[index] !== targetId) remaining.push(this.plannedTargetIds[index]);
@@ -1788,6 +1615,9 @@ struct Index {
     this.customPlanningTargets = customRemaining;
     if (this.activePlanningTargetId === targetId) {
       this.activePlanningTargetId = remaining.length > 0 ? remaining[0] : this.selectedTargetId;
+    }
+    if (removedTarget !== undefined) {
+      this.operationMessage = `已从观测计划移除 ${removedTarget.nameZh}`;
     }
     this.refreshPlanning();
   }
@@ -1808,7 +1638,6 @@ struct Index {
   }
 
   private activePlanningTarget(): CelestialObject {
-    this.ensureActivePlanningTarget();
     const target: CelestialObject | undefined = this.planningTargetById(this.activePlanningTargetId);
     return target === undefined ? this.selectedTarget() : target;
   }
@@ -1833,19 +1662,6 @@ struct Index {
     return undefined;
   }
 
-  private planningRecommendations(): CelestialObject[] {
-    const recommended: CelestialObject[] = CelestialCatalog.recommendedFor18mm();
-    const result: CelestialObject[] = [];
-    for (let index: number = 0; index < recommended.length && result.length < 5; index++) {
-      const target: CelestialObject = recommended[index];
-      if (target.type !== CelestialType.SUN && target.precision !== CatalogPrecision.INDEX_ONLY &&
-        !this.plannedTargetIds.includes(target.id)) {
-        result.push(target);
-      }
-    }
-    return result;
-  }
-
   private planningStartAtMs(): number {
     return this.planningPeriod().startAtMs;
   }
@@ -1854,11 +1670,42 @@ struct Index {
     return PlanningPeriodService.resolve(Date.now(), this.planningDayOffset);
   }
 
+  private planningPageState(): PlanningPageState {
+    if (this.observer === undefined) return PlanningPageState.NEEDS_LOCATION;
+    if (this.planningBusy || this.weatherStatus === WeatherDataStatus.LOADING) {
+      return PlanningPageState.WEATHER_LOADING;
+    }
+    if (this.weatherStatus === WeatherDataStatus.LIVE || this.weatherStatus === WeatherDataStatus.CACHED) {
+      return PlanningPageState.READY;
+    }
+    if (this.weatherStatus === WeatherDataStatus.UNAVAILABLE) return PlanningPageState.WEATHER_UNAVAILABLE;
+    return PlanningPageState.ASTRONOMY_ONLY;
+  }
+
+  private refreshPlanningAndWeather(): void {
+    this.refreshPlanning();
+    if (this.observer !== undefined && this.weatherStatus === WeatherDataStatus.NOT_REQUESTED) {
+      this.refreshWeatherForecast();
+    }
+  }
+
+  private selectPlanningDay(dayOffset: number): void {
+    if (dayOffset === this.planningDayOffset || dayOffset < 0 || dayOffset > 1) return;
+    this.getUIContext().animateTo(MotionTokens.quick(), () => { this.planningDayOffset = dayOffset; });
+    this.refreshPlanning();
+  }
+
+  private togglePlanningLocationEditor(): void {
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.planningLocationEditorOpen = !this.planningLocationEditorOpen;
+    });
+  }
+
   private refreshPlanning(): void {
     if (this.observer === undefined) {
       this.planningResult = undefined;
       this.activePlanningResult = undefined;
-      this.plannedTargetSummaries = [];
+      this.refreshPlannedTargetSummaries();
       return;
     }
     const constraints: ObservationPlanningConstraints = ObservationPlanningService.defaultConstraints();
@@ -1879,39 +1726,38 @@ struct Index {
     }
   }
 
-  private refreshPlannedTargetSummaries(startAtMs: number,
-    constraints: ObservationPlanningConstraints): void {
-    if (this.observer === undefined) {
-      this.plannedTargetSummaries = [];
-      return;
-    }
-    const summaries: PlannedTargetSummary[] = [];
+  private refreshPlannedTargetSummaries(startAtMs?: number,
+    constraints?: ObservationPlanningConstraints): void {
+    const summaries: PlanningTargetSummary[] = [];
     for (let index: number = 0; index < this.plannedTargetIds.length; index++) {
       const target: CelestialObject | undefined = this.planningTargetById(this.plannedTargetIds[index]);
       if (target === undefined) continue;
-      const result: ObservationPlanningResult = ObservationPlanningService.plan(
-        target, this.observer, startAtMs, this.weatherForecast, constraints);
-      let windowText: string = '暂无暗夜窗口';
-      let scoreText: string = '--';
-      let color: ResourceColor = $r('app.color.app_text_tertiary');
-      if (result.bestWindow !== undefined) {
-        windowText = `${this.formatPlanningTime(result.bestWindow.startAtMs)} - ` +
-          `${this.formatPlanningTime(result.bestWindow.endAtMs)}`;
-        const score: number = result.overallScore === undefined ?
-          result.bestWindow.astronomyScore : result.overallScore;
-        scoreText = `${score.toFixed(0)} 分`;
-        color = this.recommendationColor(result.recommendation);
-      } else if (result.riseTransitSet.status === VisibilityStatus.COORDINATE_UNAVAILABLE) {
-        windowText = '目录坐标待补充';
-      }
-      summaries.push({
+      const summary: PlanningTargetSummary = {
         targetId: target.id,
         targetName: target.nameZh,
         designation: target.designation,
-        windowText: windowText,
-        scoreText: scoreText,
-        color: color
-      });
+        included: true,
+        recommendation: OutingRecommendation.UNAVAILABLE,
+        unavailableReason: '设置地点后计算'
+      };
+      if (this.observer === undefined || startAtMs === undefined || constraints === undefined) {
+        summaries.push(summary);
+        continue;
+      }
+      const result: ObservationPlanningResult = ObservationPlanningService.plan(
+        target, this.observer, startAtMs, this.weatherForecast, constraints);
+      summary.recommendation = result.recommendation;
+      summary.unavailableReason = '本夜无可用窗口';
+      if (result.bestWindow !== undefined) {
+        summary.bestWindowStartAtMs = result.bestWindow.startAtMs;
+        summary.bestWindowEndAtMs = result.bestWindow.endAtMs;
+        summary.astronomyScore = result.bestWindow.astronomyScore;
+        if (result.overallScore !== undefined) summary.overallScore = result.overallScore;
+        summary.unavailableReason = '';
+      } else if (result.riseTransitSet.status === VisibilityStatus.COORDINATE_UNAVAILABLE) {
+        summary.unavailableReason = '目录坐标待补充';
+      }
+      summaries.push(summary);
     }
     this.plannedTargetSummaries = summaries;
   }
@@ -1942,6 +1788,10 @@ struct Index {
     this.updateNormalScene();
     this.updateProjectedTargets(true);
     this.refreshPlanning();
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.planningLocationEditorOpen = false;
+    });
+    this.refreshWeatherForecast();
   }
 
   private async refreshWeatherForecast(): Promise<void> {
@@ -2004,11 +1854,16 @@ struct Index {
     return $r('app.color.app_text_secondary');
   }
 
-  private planningWeatherSample(): WeatherHourlySample | undefined {
+  private planningWeatherSample(result?: ObservationPlanningResult): WeatherHourlySample | undefined {
     if (this.weatherForecast === undefined || this.weatherForecast.hourly.length === 0) return undefined;
     let timestampMs: number = this.planningStartAtMs();
-    if (this.planningResult !== undefined && this.planningResult.bestWindow !== undefined) {
-      timestampMs = this.planningResult.bestWindow.peakAtMs;
+    if (result !== undefined && result.bestWindow !== undefined) {
+      timestampMs = result.bestWindow.peakAtMs;
+      const nowMs: number = Date.now();
+      // 正在进行的最佳窗口优先展示当前小时天气，避免峰值已经过去时出现“待获取”。
+      if (nowMs >= result.bestWindow.startAtMs && nowMs <= result.bestWindow.endAtMs) {
+        timestampMs = nowMs;
+      }
     }
     let nearest: WeatherHourlySample = this.weatherForecast.hourly[0];
     let distance: number = Math.abs(nearest.timestampMs - timestampMs);
@@ -2021,20 +1876,6 @@ struct Index {
       }
     }
     return distance <= 5400000 ? nearest : undefined;
-  }
-
-  private planningWeatherMetric(kind: string): string {
-    const sample: WeatherHourlySample | undefined = this.planningWeatherSample();
-    if (sample === undefined) {
-      if (kind === 'cloud') return '云量 --';
-      if (kind === 'rain') return '降水 --';
-      return '风速 --';
-    }
-    if (kind === 'cloud') return sample.cloudCoverPercent === undefined ? '云量 --' :
-      `云量 ${sample.cloudCoverPercent.toFixed(0)}%`;
-    if (kind === 'rain') return sample.precipitationProbabilityPercent === undefined ? '降水 --' :
-      `降水 ${sample.precipitationProbabilityPercent.toFixed(0)}%`;
-    return sample.windSpeedKph === undefined ? '风速 --' : `风速 ${sample.windSpeedKph.toFixed(0)} km/h`;
   }
 
   private planningRecommendationTitle(): string {
@@ -2098,13 +1939,6 @@ struct Index {
     return $r('app.color.app_text_tertiary');
   }
 
-  private planningScoreText(): string {
-    if (this.planningResult === undefined) return '--';
-    const score: number | undefined = this.planningResult.overallScore === undefined ?
-      this.planningResult.astronomyScore : this.planningResult.overallScore;
-    return score === undefined ? '--' : score.toFixed(0);
-  }
-
   private planningEventText(kind: string): string {
     if (this.planningResult === undefined) return '--';
     if (kind === 'rise') {
@@ -2113,65 +1947,6 @@ struct Index {
     }
     if (kind === 'set') return this.formatPlanningTime(this.planningResult.riseTransitSet.setAtMs);
     return this.formatPlanningTime(this.planningResult.riseTransitSet.transitAtMs);
-  }
-
-  private planningMaximumAltitudeText(): string {
-    if (this.planningResult === undefined || this.planningResult.riseTransitSet.maxAltitudeDegrees < -89) {
-      return '--';
-    }
-    return `${this.planningResult.riseTransitSet.maxAltitudeDegrees.toFixed(1)}°`;
-  }
-
-  private planningHeightBars(): PlanningHeightBar[] {
-    if (this.planningResult === undefined || this.planningResult.samples.length === 0) return [];
-    const bars: PlanningHeightBar[] = [];
-    const count: number = 12;
-    for (let index: number = 0; index < count; index++) {
-      const sampleIndex: number = Math.round(index * (this.planningResult.samples.length - 1) / (count - 1));
-      const sample = this.planningResult.samples[sampleIndex];
-      const height: number = this.clamp((sample.altitudeDegrees + 10) / 90 * 80, 4, 80);
-      let color: ResourceColor = $r('app.color.app_text_tertiary');
-      if (sample.altitudeDegrees >= 20 && sample.sunAltitudeDegrees <= -12) {
-        color = $r('app.color.app_success');
-      } else if (sample.altitudeDegrees >= 0) {
-        color = $r('app.color.app_warning');
-      }
-      bars.push({
-        id: sample.timestampMs.toString(),
-        label: this.pad2(new Date(sample.timestampMs).getHours()),
-        height: height,
-        color: color
-      });
-    }
-    return bars;
-  }
-
-  private planningBestWindowText(): string {
-    if (this.planningResult === undefined || this.planningResult.bestWindow === undefined) return '暂无可用窗口';
-    return `${this.formatPlanningTime(this.planningResult.bestWindow.startAtMs)} - ` +
-      `${this.formatPlanningTime(this.planningResult.bestWindow.endAtMs)}`;
-  }
-
-  private planningBestWindowDetail(): string {
-    if (this.planningResult === undefined || this.planningResult.bestWindow === undefined) {
-      return '尝试更换日期、地点或目标';
-    }
-    const window: ObservationWindow = this.planningResult.bestWindow;
-    const durationMinutes: number = Math.max(0, Math.round((window.endAtMs - window.startAtMs) / 60000));
-    const weather: string = window.weatherScore === undefined ? '天气待确认' : `天气 ${window.weatherScore.toFixed(0)} 分`;
-    return `${durationMinutes} 分钟 · 峰值 ${window.peakAltitudeDegrees.toFixed(1)}° · ${weather}`;
-  }
-
-  private planningMoonText(): string {
-    if (this.planningResult === undefined) return '--';
-    return `${this.planningResult.moonPhaseName} ${this.planningResult.moonIlluminationPercent.toFixed(0)}%`;
-  }
-
-  private planningMoonDetail(): string {
-    if (this.planningResult === undefined || this.planningResult.moonSeparationDegrees === undefined) {
-      return '目标月距 --';
-    }
-    return `目标月距 ${this.planningResult.moonSeparationDegrees.toFixed(0)}°`;
   }
 
   private formatPlanningTime(timestampMs?: number): string {
@@ -2725,6 +2500,9 @@ struct Index {
       this.manualLongitudeText = result.observer.longitudeDegrees.toFixed(5);
       this.planningLocationSource = '系统定位';
       this.operationMessage = `定位精度约 ±${result.accuracyMeters.toFixed(0)} 米`;
+      this.getUIContext().animateTo(MotionTokens.standard(), () => {
+        this.planningLocationEditorOpen = false;
+      });
       this.updateNormalScene();
       this.updateProjectedTargets(true);
       this.refreshPlanning();
