@@ -94,6 +94,7 @@ import {
   ObserverLocationResult,
   ObserverLocationService,
   OnStepLX200Client,
+  ObservationExecutionPolicy,
   ObservationPlanningService,
   RaspberryPiClient,
   VisibleStar,
@@ -387,6 +388,7 @@ struct Index {
         tracking: this.tracking,
         locationSynced: this.locationSynced,
         observerAvailable: this.observer !== undefined,
+        simulatedTimeActive: this.simulatedDeviceTimeBlocked(),
         locationText: this.locationText,
         mountRaHours: this.mountRaHours,
         mountDecDegrees: this.mountDecDegrees,
@@ -2174,6 +2176,11 @@ struct Index {
     return this.skyMode === 1 ? this.normalTimeState.timestampMs : Date.now();
   }
 
+  private simulatedDeviceTimeBlocked(): boolean {
+    return ObservationExecutionPolicy.blocksDeviceTime(
+      this.skyMode === 1, this.normalTimeState.mode);
+  }
+
   private pad2(value: number): string {
     return value < 10 ? '0' + value.toString() : value.toString();
   }
@@ -2182,7 +2189,7 @@ struct Index {
     if (this.operationBusy || this.mountConnection !== ConnectionState.CONNECTED ||
       !this.mountHomed || !this.mountCoordinatesTopocentric || !this.selectedTarget().gotoAllowed ||
       this.selectedTarget().id === 'solar-sun' ||
-      (this.skyMode === 1 && this.normalTimeState.mode === NormalSkyTimeMode.SIMULATED)) {
+      this.simulatedDeviceTimeBlocked()) {
       return false;
     }
     const horizontal: HorizontalCoordinate | undefined = this.selectedHorizontal();
@@ -2195,7 +2202,7 @@ struct Index {
   private captureReadinessText(): string {
     if (this.operationBusy) return '正在执行设备操作，请稍候';
     if (this.mountConnection !== ConnectionState.CONNECTED) return '请先连接 OnStepX 赤道仪';
-    if (this.skyMode === 1 && this.normalTimeState.mode === NormalSkyTimeMode.SIMULATED) {
+    if (this.simulatedDeviceTimeBlocked()) {
       return '模拟时间只用于浏览和规划，立即观测/拍摄已禁用';
     }
     if (!this.mountCoordinatesTopocentric) return '固件坐标模式不是 TOPOCENTRIC(1)，自动运动已锁定';
@@ -2996,6 +3003,10 @@ struct Index {
 
   private async syncObserverToMount(): Promise<void> {
     if (this.operationBusy || this.observer === undefined) return;
+    if (this.simulatedDeviceTimeBlocked()) {
+      this.operationMessage = '模拟时间只用于浏览和规划，已阻止同步设备时间';
+      return;
+    }
     this.operationBusy = true;
     try {
       const current: ObserverState = {
@@ -3083,6 +3094,10 @@ struct Index {
   }
 
   private async startCaptureTask(): Promise<void> {
+    if (this.simulatedDeviceTimeBlocked()) {
+      this.operationMessage = '模拟时间只用于浏览和规划，未发送任何设备指令';
+      return;
+    }
     if (!this.canStartCapture()) return;
     const target: CelestialObject = this.selectedTarget();
     if (target.id === 'solar-sun' || this.observer === undefined) return;
@@ -3109,10 +3124,10 @@ struct Index {
       const utcFromLocalOffsetHours: number = new Date().getTimezoneOffset() / 60.0;
       await this.mountClient.setObserver(currentObserver, utcFromLocalOffsetHours);
       this.locationSynced = true;
-      const mountCoordinate: MountTargetCoordinate | undefined = EphemerisService.topocentricCoordinate(
+      const mountCoordinate: MountTargetCoordinate = ObservationExecutionPolicy.buildMountTarget(
         target, currentObserver, motionTimeMs);
       const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, motionTimeMs);
-      if (mountCoordinate === undefined || coordinate === undefined) {
+      if (coordinate === undefined) {
         throw new Error('无法生成带坐标帧的目标方向');
       }
       this.taskStage = `正在 GOTO ${targetDesignation}`;

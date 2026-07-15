@@ -20,6 +20,7 @@ export struct DeviceWorkspace {
   @Prop tracking: boolean = false;
   @Prop locationSynced: boolean = false;
   @Prop observerAvailable: boolean = false;
+  @Prop simulatedTimeActive: boolean = false;
   @Prop locationText: string = '等待定位';
   @Prop mountRaHours: number = 0;
   @Prop mountDecDegrees: number = 0;
@@ -45,12 +46,14 @@ export struct DeviceWorkspace {
         Flex({ direction: this.compact ? FlexDirection.Column : FlexDirection.Row,
           wrap: FlexWrap.NoWrap }) {
           Column({ space: 14 }) {
-            this.PanelTitle('赤道仪操作', '自动运动前必须完成两轴回零和位置时间同步')
+            this.PanelTitle('赤道仪操作', this.simulatedTimeActive ?
+              '模拟时间仅用于浏览和规划，设备时间同步已锁定' : '自动运动前必须完成两轴回零和位置时间同步')
             Row({ space: 10 }) {
               this.ActionButton($r('sys.symbol.house'), '两轴回零',
                 this.mountConnection === ConnectionState.CONNECTED, this.onHomeMount)
               this.ActionButton($r('sys.symbol.scope'), '同步位置',
-                this.mountConnection === ConnectionState.CONNECTED && this.observerAvailable, this.onSyncObserver)
+                this.mountConnection === ConnectionState.CONNECTED && this.observerAvailable &&
+                  !this.simulatedTimeActive, this.onSyncObserver)
               this.ActionButton($r('sys.symbol.play_circle'), this.tracking ? '停止跟踪' : '恒星跟踪',
                 this.mountHomed && this.locationSynced, this.onToggleTracking)
               this.ActionButton($r('sys.symbol.pause_circle'), '停放设备', this.mountHomed, this.onParkMount)

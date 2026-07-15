@@ -24,3 +24,4 @@ export * from './NormalSkySceneService';
 export * from './NormalSkyGestureController';
 export * from './NormalSkyOrientationService';
 export * from './NormalSkyLayoutService';
+export * from './ObservationExecutionPolicy';
