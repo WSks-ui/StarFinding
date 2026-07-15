@@ -61,6 +61,24 @@ export default function starFindingCoreTest(): void {
       expect(closeTo(restored.decDegrees, source.decDegrees, 0.001)).assertTrue();
     });
 
+    it('2026 年行星角距与 JPL Horizons 基线一致', 0, () => {
+      const timestampMs: number = Date.UTC(2026, 6, 15, 0, 0, 0);
+      const mars: EquatorialCoordinate | undefined = AstronomyService.planetCoordinate(
+        'planet-mars', timestampMs);
+      const saturn: EquatorialCoordinate | undefined = AstronomyService.planetCoordinate(
+        'planet-saturn', timestampMs);
+      const neptune: EquatorialCoordinate | undefined = AstronomyService.planetCoordinate(
+        'planet-neptune', timestampMs);
+      expect(mars !== undefined && saturn !== undefined && neptune !== undefined).assertTrue();
+      if (mars === undefined || saturn === undefined || neptune === undefined) {
+        return;
+      }
+      // 固定值来自 JPL Horizons。低精度根数阶段允许 0.35 度，后续离线星历接入后收紧到 0.1 度。
+      expect(closeTo(AstronomyService.angularSeparation(saturn, neptune), 10.28, 0.35)).assertTrue();
+      expect(closeTo(AstronomyService.angularSeparation(mars, saturn), 56.81, 0.35)).assertTrue();
+      expect(closeTo(AstronomyService.angularSeparation(mars, neptune), 67.01, 0.35)).assertTrue();
+    });
+
     it('镜头中心方向投影到视口中心', 0, () => {
       const viewport: CameraViewport = {
         widthPixels: 600,

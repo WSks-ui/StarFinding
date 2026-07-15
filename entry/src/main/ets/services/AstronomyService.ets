@@ -199,8 +199,8 @@ export class AstronomyService {
 
   static sunCoordinate(timestampMs: number): EquatorialCoordinate {
     const days: number = AstronomyService.daysSinceEpoch(timestampMs);
-    const earth: Vector3 = AstronomyService.orbitalPosition(AstronomyService.earthElements(days));
-    return AstronomyService.eclipticVectorToEquatorial({ x: -earth.x, y: -earth.y, z: -earth.z }, days);
+    const sunGeocentric: Vector3 = AstronomyService.orbitalPosition(AstronomyService.sunGeocentricElements(days));
+    return AstronomyService.eclipticVectorToEquatorial(sunGeocentric, days);
   }
 
   static moonCoordinate(timestampMs: number): EquatorialCoordinate {
@@ -224,11 +224,14 @@ export class AstronomyService {
       return undefined;
     }
     const planet: Vector3 = AstronomyService.orbitalPosition(planetElements);
-    const earth: Vector3 = AstronomyService.orbitalPosition(AstronomyService.earthElements(days));
+    const sunGeocentric: Vector3 = AstronomyService.orbitalPosition(
+      AstronomyService.sunGeocentricElements(days));
+    // Schlyter 这组“地球”根数实际直接生成地心太阳向量。日心行星向量必须与它相加，
+    // 若按日心地球向量相减，会把太阳和行星方向整体用反，并制造虚假的行星聚集。
     return AstronomyService.eclipticVectorToEquatorial({
-      x: planet.x - earth.x,
-      y: planet.y - earth.y,
-      z: planet.z - earth.z
+      x: planet.x + sunGeocentric.x,
+      y: planet.y + sunGeocentric.y,
+      z: planet.z + sunGeocentric.z
     }, days);
   }
 
@@ -237,7 +240,7 @@ export class AstronomyService {
     return AstronomyService.julianDay(timestampMs) - 2451543.5;
   }
 
-  private static earthElements(days: number): OrbitalElements {
+  private static sunGeocentricElements(days: number): OrbitalElements {
     return {
       ascendingNodeDegrees: 0.0,
       inclinationDegrees: 0.0,
