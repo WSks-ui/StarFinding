@@ -13,6 +13,7 @@ import ephemerisServiceTest from './EphemerisService.test';
 import normalSkyViewStateServiceTest from './NormalSkyViewStateService.test';
 import normalSkyTimeServiceTest from './NormalSkyTimeService.test';
 import observationExecutionPolicyTest from './ObservationExecutionPolicy.test';
+import planningPeriodServiceTest from './PlanningPeriodService.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -30,4 +31,5 @@ export default function testsuite() {
   normalSkyViewStateServiceTest();
   normalSkyTimeServiceTest();
   observationExecutionPolicyTest();
+  planningPeriodServiceTest();
 }

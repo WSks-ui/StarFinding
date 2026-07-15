@@ -64,6 +64,41 @@ function clearForecast(startAtMs: number): WeatherForecast {
   };
 }
 
+function unavailableForecast(startAtMs: number): WeatherForecast {
+  return {
+    status: WeatherDataStatus.UNAVAILABLE,
+    sourceName: '测试离线预报',
+    sourceUrl: '',
+    fetchedAtMs: startAtMs,
+    latitudeDegrees: 34.75,
+    longitudeDegrees: 113.62,
+    timezone: 'Asia/Shanghai',
+    utcOffsetSeconds: 28800,
+    forecastDays: 0,
+    hourly: [],
+    errorMessage: '模拟断网'
+  };
+}
+
+function assertTargetPlanning(targetId: string, startAtMs: number): void {
+  const result: ObservationPlanningResult = ObservationPlanningService.plan(
+    requireTarget(targetId), zhengzhouObserver(startAtMs), startAtMs, undefined, {
+      horizonHours: 24,
+      sampleMinutes: 30,
+      minAltitudeDegrees: 20,
+      maxSunAltitudeDegrees: -12
+    });
+  expect(result.samples.length).assertEqual(49);
+  expect(result.riseTransitSet.status !== VisibilityStatus.COORDINATE_UNAVAILABLE).assertTrue();
+  expect(result.riseTransitSet.riseAtMs !== undefined).assertTrue();
+  expect(result.riseTransitSet.transitAtMs !== undefined).assertTrue();
+  expect(result.riseTransitSet.setAtMs !== undefined).assertTrue();
+  expect(result.windows.length > 0).assertTrue();
+  expect(result.bestWindow !== undefined).assertTrue();
+  expect(result.moonIlluminationPercent >= 0 && result.moonIlluminationPercent <= 100).assertTrue();
+  expect(result.recommendation).assertEqual(OutingRecommendation.ASTRONOMY_ONLY);
+}
+
 export default function observationPlanningServiceTest(): void {
   describe('无硬件观测规划', () => {
     it('离线精确星表可生成未来窗口', 0, () => {
@@ -130,6 +165,27 @@ export default function observationPlanningServiceTest(): void {
       expect(result.weatherStatus).assertEqual(WeatherDataStatus.LIVE);
       expect(result.weatherScore !== undefined).assertTrue();
       expect(result.overallScore !== undefined).assertTrue();
+    });
+
+    it('亮星月球和行星均可生成完整离线规划', 0, () => {
+      // 分别选择目标适合夜间观测的季节，避免把天体本夜不可见误判成规划器故障。
+      assertTargetPlanning('star-capella', Date.UTC(2026, 11, 15, 4, 0, 0));
+      assertTargetPlanning('star-vega', Date.UTC(2026, 6, 15, 4, 0, 0));
+      assertTargetPlanning('solar-moon', Date.UTC(2026, 6, 29, 4, 0, 0));
+      assertTargetPlanning('planet-mars', Date.UTC(2027, 0, 15, 4, 0, 0));
+    });
+
+    it('天气不可用时仍保留离线天文窗口', 0, () => {
+      const startAtMs: number = Date.UTC(2026, 6, 15, 4, 0, 0);
+      const result: ObservationPlanningResult = ObservationPlanningService.plan(
+        requireTarget('star-vega'), zhengzhouObserver(startAtMs), startAtMs,
+        unavailableForecast(startAtMs));
+      expect(result.weatherStatus).assertEqual(WeatherDataStatus.UNAVAILABLE);
+      expect(result.windows.length > 0).assertTrue();
+      expect(result.bestWindow !== undefined).assertTrue();
+      expect(result.weatherScore === undefined).assertTrue();
+      expect(result.overallScore === undefined).assertTrue();
+      expect(result.recommendation).assertEqual(OutingRecommendation.ASTRONOMY_ONLY);
     });
 
     it('动态月球坐标随规划时间变化', 0, () => {
