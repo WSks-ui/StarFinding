@@ -1,6 +1,8 @@
 import { http } from '@kit.NetworkKit';
 import {
   CameraCapabilities,
+  CameraPreflightCheck,
+  CameraPreflightResult,
   CameraState,
   CaptureMode,
   CapturePlan,
@@ -34,6 +36,28 @@ interface GatewayCameraCapabilitiesDto {
   iso_values: string[];
   aperture_values: string[];
   shutter_values: string[];
+}
+
+interface GatewayCameraPreflightCheckDto {
+  code: string;
+  label: string;
+  actual: string;
+  expected: string;
+  passed: boolean;
+  blocking: boolean;
+  adjustment: string;
+}
+
+interface GatewayCameraPreflightDto {
+  ready: boolean;
+  connected: boolean;
+  backend: string;
+  simulated: boolean;
+  camera_model: string | null;
+  checks: GatewayCameraPreflightCheckDto[];
+  blockers: string[];
+  warnings: string[];
+  checked_at: string;
 }
 
 interface GatewayPlateSolverHealthDto {
@@ -264,6 +288,41 @@ export class RaspberryPiClient {
       maxExposureSeconds: dto.max_exposure_seconds,
       rawSupported: dto.raw_jpeg,
       liveViewSupported: dto.liveview
+    };
+  }
+
+  async cameraPreflight(plan: CapturePlan): Promise<CameraPreflightResult> {
+    this.validateCapturePlan(plan);
+    const query: string = `iso=${encodeURIComponent(`${plan.iso}`)}` +
+      `&aperture=${encodeURIComponent(`${plan.aperture}`)}` +
+      `&exposure_seconds=${encodeURIComponent(`${plan.exposureSeconds}`)}`;
+    const response: HttpServiceResult = await this.request(`/api/v1/camera/preflight?${query}`,
+      http.RequestMethod.GET);
+    const dto: GatewayCameraPreflightDto =
+      this.parseJson<GatewayCameraPreflightDto>(response.body, '相机拍摄前自检');
+    const checks: CameraPreflightCheck[] = [];
+    for (let index: number = 0; index < dto.checks.length; index++) {
+      const item: GatewayCameraPreflightCheckDto = dto.checks[index];
+      checks.push({
+        code: item.code,
+        label: item.label,
+        actual: item.actual,
+        expected: item.expected,
+        passed: item.passed,
+        blocking: item.blocking,
+        adjustment: item.adjustment
+      });
+    }
+    return {
+      ready: dto.ready,
+      connected: dto.connected,
+      backend: dto.backend,
+      simulated: dto.simulated,
+      cameraModel: dto.camera_model === null ? '' : dto.camera_model,
+      checks: checks,
+      blockers: dto.blockers.slice(),
+      warnings: dto.warnings.slice(),
+      checkedAtMs: this.parseTimestamp(dto.checked_at)
     };
   }
 

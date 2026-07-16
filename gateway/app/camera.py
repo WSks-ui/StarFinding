@@ -4,6 +4,7 @@ import re
 import threading
 import time
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -12,7 +13,13 @@ from PIL import Image, ImageDraw, ImageFilter
 
 from .commands import CommandError, CommandRunner
 from .config import Settings
-from .models import CameraCapabilities, CameraStatus, CaptureRequest
+from .models import CameraCapabilities, CameraPreflightCheck, CameraPreflightResult, CameraStatus, CaptureRequest
+
+
+@dataclass(frozen=True, slots=True)
+class CameraConfigReading:
+    current: str | None
+    choices: list[str]
 
 
 class CameraAdapter(ABC):
@@ -24,6 +31,10 @@ class CameraAdapter(ABC):
 
     @abstractmethod
     def capabilities(self) -> CameraCapabilities:
+        raise NotImplementedError
+
+    @abstractmethod
+    def preflight(self, iso: str, aperture: str, exposure_seconds: float) -> CameraPreflightResult:
         raise NotImplementedError
 
     @abstractmethod
@@ -73,7 +84,7 @@ class GPhotoCamera(CameraAdapter):
         model = re.split(r"\s{2,}", lines[0], maxsplit=1)[0].strip()
         return CameraStatus(connected=True, backend="gphoto2", simulated=False, model=model, detail="USB 相机已连接")
 
-    def _config_choices(self, names: list[str]) -> list[str]:
+    def _read_config(self, names: list[str]) -> CameraConfigReading:
         for name in names:
             result = self.runner.run(
                 [self.settings.gphoto2_binary, "--get-config", name],
@@ -82,14 +93,22 @@ class GPhotoCamera(CameraAdapter):
             )
             if result.returncode != 0:
                 continue
+            current: str | None = None
             choices: list[str] = []
             for line in result.stdout.splitlines():
-                match = re.match(r"Choice:\s+\d+\s+(.+)$", line.strip())
+                stripped = line.strip()
+                current_match = re.match(r"Current:\s*(.*)$", stripped)
+                if current_match:
+                    current = current_match.group(1).strip()
+                match = re.match(r"Choice:\s+\d+\s+(.+)$", stripped)
                 if match:
                     choices.append(match.group(1).strip())
-            if choices:
-                return choices
-        return []
+            if current is not None or choices:
+                return CameraConfigReading(current=current, choices=choices)
+        return CameraConfigReading(current=None, choices=[])
+
+    def _config_choices(self, names: list[str]) -> list[str]:
+        return self._read_config(names).choices
 
     def capabilities(self) -> CameraCapabilities:
         with self._lock:
@@ -108,6 +127,147 @@ class GPhotoCamera(CameraAdapter):
             shutter_values=shutter,
         )
 
+    @staticmethod
+    def _normalized(value: str | None) -> str:
+        return "" if value is None else re.sub(r"\s+", " ", value.strip().lower())
+
+    @staticmethod
+    def _numeric_setting_matches(actual: str | None, expected: str) -> bool:
+        if actual is None:
+            return False
+        normalized_actual = actual.lower().replace("f/", "").strip()
+        normalized_expected = expected.lower().replace("f/", "").strip()
+        try:
+            return abs(float(normalized_actual) - float(normalized_expected)) < 0.0001
+        except ValueError:
+            return normalized_actual == normalized_expected
+
+    @staticmethod
+    def _shutter_seconds(value: str | None) -> float | None:
+        if value is None:
+            return None
+        normalized = value.strip().lower().replace("seconds", "").replace("second", "").replace("sec", "")
+        normalized = normalized.replace('"', "").replace("s", "").strip()
+        if normalized in {"bulb", "b"}:
+            return None
+        try:
+            if "/" in normalized:
+                numerator, denominator = normalized.split("/", maxsplit=1)
+                return float(numerator) / float(denominator)
+            return float(normalized)
+        except (ValueError, ZeroDivisionError):
+            return None
+
+    @classmethod
+    def _shutter_matches(cls, value: str | None, expected_seconds: float) -> bool:
+        seconds = cls._shutter_seconds(value)
+        if seconds is None:
+            return False
+        return abs(seconds - expected_seconds) <= max(0.00001, expected_seconds * 0.001)
+
+    @staticmethod
+    def _expected_shutter(exposure_seconds: float) -> str:
+        if exposure_seconds >= 1:
+            return f"{exposure_seconds:g} s"
+        denominator = round(1 / exposure_seconds)
+        return f"1/{denominator} s"
+
+    @staticmethod
+    def _check(code: str, label: str, actual: str | None, expected: str, passed: bool,
+               blocking: bool, adjustment: str) -> CameraPreflightCheck:
+        return CameraPreflightCheck(
+            code=code,
+            label=label,
+            actual=actual if actual else "无法读取",
+            expected=expected,
+            passed=passed,
+            blocking=blocking,
+            adjustment=adjustment,
+        )
+
+    def preflight(self, iso: str, aperture: str, exposure_seconds: float) -> CameraPreflightResult:
+        with self._lock:
+            status = self.status()
+            if not status.connected:
+                check = self._check(
+                    "camera_connected", "相机连接", status.detail, "EOS R7 USB 已连接", False, True,
+                    "检查 USB-C 数据线、关闭相机 Wi-Fi/蓝牙，并重新打开相机电源",
+                )
+                return CameraPreflightResult(
+                    ready=False,
+                    connected=False,
+                    backend="gphoto2",
+                    simulated=False,
+                    camera_model=status.model,
+                    checks=[check],
+                    blockers=[check.label],
+                )
+
+            exposure_mode = self._read_config(["expprogram", "/main/capturesettings/expprogram"])
+            image_format = self._read_config(["imageformat", "/main/imgsettings/imageformat"])
+            iso_reading = self._read_config(["iso", "/main/imgsettings/iso"])
+            aperture_reading = self._read_config(["aperture", "/main/capturesettings/aperture"])
+            shutter_reading = self._read_config(["shutterspeed", "/main/capturesettings/shutterspeed"])
+            focus_reading = self._read_config(["focusmode", "/main/capturesettings/focusmode"])
+
+        model_ok = status.model is not None and "eos r7" in status.model.lower()
+        mode_value = self._normalized(exposure_mode.current)
+        manual_mode = mode_value in {"m", "manual"} or "manual" in mode_value
+        format_value = self._normalized(image_format.current)
+        raw_jpeg = "raw" in format_value and (
+            "jpeg" in format_value or "jpg" in format_value or "large fine" in format_value
+        )
+        iso_supported = any(self._numeric_setting_matches(choice, iso) for choice in iso_reading.choices)
+        iso_current = self._numeric_setting_matches(iso_reading.current, iso)
+        aperture_supported = any(
+            self._numeric_setting_matches(choice, aperture) for choice in aperture_reading.choices
+        )
+        aperture_current = self._numeric_setting_matches(aperture_reading.current, aperture)
+        shutter_supported = any(
+            self._shutter_matches(choice, exposure_seconds) for choice in shutter_reading.choices
+        )
+        shutter_current = self._shutter_matches(shutter_reading.current, exposure_seconds)
+        focus_value = self._normalized(focus_reading.current)
+        focus_readable = focus_reading.current is not None
+        manual_focus = focus_readable and (
+            focus_value in {"mf", "manual"} or "manual" in focus_value
+        )
+
+        checks = [
+            self._check("camera_connected", "相机连接", status.detail, "EOS R7 USB 已连接", True, True,
+                        "检查 USB-C 数据线并重新打开相机电源"),
+            self._check("camera_model", "相机型号", status.model, "Canon EOS R7", model_ok, True,
+                        "连接 Canon EOS R7；当前链路未对其他机型完成验收"),
+            self._check("exposure_mode", "曝光模式", exposure_mode.current, "M 手动曝光", manual_mode, True,
+                        "将 R7 模式拨盘切换到 M"),
+            self._check("image_format", "图像格式", image_format.current, "RAW + JPEG", raw_jpeg, True,
+                        "在 R7 图像画质菜单中同时启用 CR3 RAW 与 JPEG"),
+            self._check("iso", "ISO", iso_reading.current, iso, iso_supported and iso_current, True,
+                        f"在 R7 快速控制中将 ISO 调整为 {iso}"),
+            self._check("aperture", "光圈", aperture_reading.current, f"f/{aperture}",
+                        aperture_supported and aperture_current, True,
+                        f"在 M 模式下将光圈调整为 f/{aperture}"),
+            self._check("shutter", "快门", shutter_reading.current, self._expected_shutter(exposure_seconds),
+                        shutter_supported and shutter_current, True,
+                        f"在 M 模式下将快门调整为 {self._expected_shutter(exposure_seconds)}"),
+            self._check("focus", "对焦模式", focus_reading.current, "MF 手动对焦", manual_focus,
+                        focus_readable, "将镜头 AF/MF 开关切换到 MF，并在星点上完成放大对焦"),
+        ]
+        blockers = [check.label for check in checks if check.blocking and not check.passed]
+        warnings = [
+            "gphoto2 无法读取镜头对焦模式，请人工确认镜头已切到 MF"
+        ] if not focus_readable else []
+        return CameraPreflightResult(
+            ready=not blockers,
+            connected=True,
+            backend="gphoto2",
+            simulated=False,
+            camera_model=status.model,
+            checks=checks,
+            blockers=blockers,
+            warnings=warnings,
+        )
+
     def capture(self, request: CaptureRequest, output_dir: Path, sequence: int) -> list[Path]:
         if request.exposure_seconds > 30:
             # EOS 的 Bulb 菜单与固件版本有关。首版先拒绝不可靠的超 30 秒调用，
@@ -121,12 +281,6 @@ class GPhotoCamera(CameraAdapter):
         filename_pattern = f"{prefix}.%C"
         args = [
             self.settings.gphoto2_binary,
-            "--set-config",
-            f"iso={request.iso}",
-            "--set-config",
-            f"aperture={request.aperture}",
-            "--set-config",
-            f"shutterspeed={request.exposure_seconds:g}",
             "--capture-image-and-download",
             "--keep",
             "--force-overwrite",
@@ -188,6 +342,27 @@ class MockCamera(CameraAdapter):
             iso_values=["100", "400", "800", "1600", "3200"],
             aperture_values=["2.8", "3.5", "4", "5.6", "8"],
             shutter_values=["1", "2", "5", "10", "15", "20", "30", "Bulb"],
+        )
+
+    def preflight(self, iso: str, aperture: str, exposure_seconds: float) -> CameraPreflightResult:
+        check = CameraPreflightCheck(
+            code="real_camera",
+            label="真实相机",
+            actual="模拟相机后端",
+            expected="Canon EOS R7 / gphoto2",
+            passed=False,
+            blocking=True,
+            adjustment="将 STARFINDING_CAMERA_BACKEND 设为 gphoto2，并通过 USB 连接 EOS R7",
+        )
+        return CameraPreflightResult(
+            ready=False,
+            connected=True,
+            backend="mock",
+            simulated=True,
+            camera_model="StarFinding Simulated EOS R7",
+            checks=[check],
+            blockers=[check.label],
+            warnings=[f"模拟后端未触发快门：ISO {iso}、f/{aperture}、{exposure_seconds:g} s"],
         )
 
     def _render_sky(self, sequence: int, *, preview: bool = False) -> Image.Image:

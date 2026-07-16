@@ -49,6 +49,28 @@ class CameraCapabilities(BaseModel):
     shutter_values: list[str] = Field(default_factory=list)
 
 
+class CameraPreflightCheck(BaseModel):
+    code: str
+    label: str
+    actual: str
+    expected: str
+    passed: bool
+    blocking: bool
+    adjustment: str
+
+
+class CameraPreflightResult(BaseModel):
+    ready: bool
+    connected: bool
+    backend: Literal["gphoto2", "mock"]
+    simulated: bool
+    camera_model: str | None = None
+    checks: list[CameraPreflightCheck] = Field(default_factory=list)
+    blockers: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    checked_at: str = Field(default_factory=utc_now_iso)
+
+
 class CaptureRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

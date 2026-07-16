@@ -204,6 +204,28 @@ export interface CameraState {
   updatedAtMs: number;
 }
 
+export interface CameraPreflightCheck {
+  code: string;
+  label: string;
+  actual: string;
+  expected: string;
+  passed: boolean;
+  blocking: boolean;
+  adjustment: string;
+}
+
+export interface CameraPreflightResult {
+  ready: boolean;
+  connected: boolean;
+  backend: string;
+  simulated: boolean;
+  cameraModel: string;
+  checks: CameraPreflightCheck[];
+  blockers: string[];
+  warnings: string[];
+  checkedAtMs: number;
+}
+
 export enum CaptureMode {
   OBSERVE_ONLY = 'observe_only',
   SMART_LONG_EXPOSURE = 'smart_long_exposure',

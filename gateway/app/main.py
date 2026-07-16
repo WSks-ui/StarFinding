@@ -17,6 +17,7 @@ from .database import Database
 from .models import (
     CaptureRequest,
     CameraCapabilities,
+    CameraPreflightResult,
     CameraStatus,
     FileRecord,
     PlateSolveRequest,
@@ -94,6 +95,14 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     @app.get("/api/v1/camera/capabilities")
     async def camera_capabilities() -> CameraCapabilities:
         return await asyncio.to_thread(app.state.camera.capabilities)
+
+    @app.get("/api/v1/camera/preflight", response_model=CameraPreflightResult)
+    async def camera_preflight(
+        iso: str = Query(pattern=r"^[A-Za-z0-9 .+/-]{1,24}$"),
+        aperture: str = Query(pattern=r"^[A-Za-z0-9 .+/-]{1,24}$"),
+        exposure_seconds: float = Query(gt=0, le=300),
+    ) -> CameraPreflightResult:
+        return await asyncio.to_thread(app.state.camera.preflight, iso, aperture, exposure_seconds)
 
     @app.get("/liveview", response_class=FileResponse, include_in_schema=False)
     @app.get("/api/v1/camera/liveview", response_class=FileResponse)
