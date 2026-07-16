@@ -183,12 +183,12 @@ export class CaptureWorkflowCoordinator {
       }
 
       const completed: number = frameIndex + 1;
-      await this.completeOperation(WorkflowStage.CAPTURE,
-        `已完成第 ${completed}/${plan.frameCount} 帧`, checkpointListener);
       this.emitProgress(listener, Math.max(1, Math.floor(completed / plan.frameCount * 72)), completed,
         WorkflowStage.CAPTURE, this.cancelled ? '当前曝光已完成，后续帧已停止' :
           `已完成第 ${completed}/${plan.frameCount} 帧`, jpegFileIds, rawFileIds,
         plateSolveCount, correctionCount);
+      await this.completeOperation(WorkflowStage.CAPTURE,
+        `已完成第 ${completed}/${plan.frameCount} 帧`, checkpointListener);
       this.throwIfCancelled('当前曝光已完成，后续帧已停止');
 
       if (plan.enablePlateSolve && plateFile !== undefined) {
@@ -220,6 +220,9 @@ export class CaptureWorkflowCoordinator {
                 '帧间漂移检查完成', checkpointListener);
             }
           }
+          this.emitProgress(listener, Math.max(1, Math.floor(completed / plan.frameCount * 72)), completed,
+            WorkflowStage.PLATE_SOLVE, `第 ${completed} 帧板解析完成`, jpegFileIds, rawFileIds,
+            plateSolveCount, correctionCount);
           await this.completeOperation(WorkflowStage.PLATE_SOLVE, `第 ${completed} 帧板解析完成`,
             checkpointListener);
         } catch (error) {
@@ -256,6 +259,8 @@ export class CaptureWorkflowCoordinator {
           plateSolveCount, correctionCount);
         const completedStack: GatewayTask = await this.waitForTask(stackTask.id, 900000, false);
         stackFile = this.findStackProduct(completedStack.files);
+        this.emitProgress(listener, 92, plan.frameCount, WorkflowStage.STACK,
+          '本地堆栈完成', jpegFileIds, rawFileIds, plateSolveCount, correctionCount);
         await this.completeOperation(WorkflowStage.STACK, '本地堆栈完成', checkpointListener);
       } catch (error) {
         this.rethrowCancellation(error);
@@ -283,6 +288,8 @@ export class CaptureWorkflowCoordinator {
           plateSolveCount, correctionCount);
         const completedVideo: GatewayTask = await this.waitForTask(timelapseTask.id, 900000, false);
         timelapseFile = this.findTimelapseProduct(completedVideo.files);
+        this.emitProgress(listener, 96, plan.frameCount, WorkflowStage.TIMELAPSE,
+          '延时视频生成完成', jpegFileIds, rawFileIds, plateSolveCount, correctionCount);
         await this.completeOperation(WorkflowStage.TIMELAPSE, '延时视频生成完成', checkpointListener);
       } catch (error) {
         this.rethrowCancellation(error);

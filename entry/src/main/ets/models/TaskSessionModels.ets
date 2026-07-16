@@ -1,4 +1,10 @@
-import { CapturePlan, CaptureProduct, CelestialType } from './DomainModels';
+import {
+  CapturePlan,
+  CaptureProduct,
+  CatalogPrecision,
+  CelestialType,
+  EquatorialCoordinate
+} from './DomainModels';
 
 /** 会话类型与拍摄模式分离，避免“仅观测”被误画成相机任务。 */
 export enum SessionKind {
@@ -54,6 +60,9 @@ export interface TaskTargetSnapshot {
   name: string;
   designation: string;
   type: CelestialType;
+  coordinate?: EquatorialCoordinate;
+  precision: CatalogPrecision;
+  gotoAllowed: boolean;
 }
 
 /**
@@ -104,4 +113,3 @@ export interface TaskSessionStoreSnapshot {
   corruptedRecords: number;
   warning: string;
 }
-

@@ -543,6 +543,282 @@
     {
       "name": "device_value_waiting_home",
       "value": "等待回零"
+    },
+    {
+      "name": "task_empty_title",
+      "value": "暂无进行中的会话"
+    },
+    {
+      "name": "task_empty_detail",
+      "value": "从星图选择目标并开始观测或拍摄，任务参数会在创建时冻结。"
+    },
+    {
+      "name": "task_loading_title",
+      "value": "正在读取任务会话"
+    },
+    {
+      "name": "task_loading_detail",
+      "value": "只恢复记录并对账，不会自动移动赤道仪或触发快门。"
+    },
+    {
+      "name": "task_go_to_sky",
+      "value": "前往星图选择目标"
+    },
+    {
+      "name": "task_device_time",
+      "value": "开始时间 · 设备时间"
+    },
+    {
+      "name": "task_real_device_time",
+      "value": "当前设备时间"
+    },
+    {
+      "name": "task_completed_frames",
+      "value": "完成帧数"
+    },
+    {
+      "name": "task_not_applicable",
+      "value": "不适用"
+    },
+    {
+      "name": "task_mount_short",
+      "value": "赤道仪"
+    },
+    {
+      "name": "task_camera_short",
+      "value": "R7"
+    },
+    {
+      "name": "task_pipeline_title",
+      "value": "会话流水线"
+    },
+    {
+      "name": "task_pipeline_observation",
+      "value": "仅记录安全检查、GOTO、跟踪和结束"
+    },
+    {
+      "name": "task_pipeline_camera",
+      "value": "RAW 原片始终保留在相机存储卡"
+    },
+    {
+      "name": "task_safety_title",
+      "value": "设备安全条件"
+    },
+    {
+      "name": "task_stage_detail_title",
+      "value": "当前阶段"
+    },
+    {
+      "name": "task_preflight_title",
+      "value": "EOS R7 拍摄前自检"
+    },
+    {
+      "name": "task_warnings_title",
+      "value": "会话警告"
+    },
+    {
+      "name": "task_products_title",
+      "value": "真实成品"
+    },
+    {
+      "name": "task_refresh",
+      "value": "刷新子任务"
+    },
+    {
+      "name": "task_continue",
+      "value": "重新检查并继续"
+    },
+    {
+      "name": "task_end_observation",
+      "value": "结束并归档"
+    },
+    {
+      "name": "task_stop_later_frames",
+      "value": "停止后续曝光"
+    },
+    {
+      "name": "task_continue_safety_note",
+      "value": "继续前会重新检查真实时间、地点、回零、坐标模式、R7 和目标高度。"
+    },
+    {
+      "name": "task_ready_mount",
+      "value": "OnStepX 连接"
+    },
+    {
+      "name": "task_ready_home",
+      "value": "两轴回零"
+    },
+    {
+      "name": "task_ready_coordinate",
+      "value": "站心坐标"
+    },
+    {
+      "name": "task_ready_location",
+      "value": "地点时间"
+    },
+    {
+      "name": "task_ready_camera",
+      "value": "EOS R7"
+    },
+    {
+      "name": "task_stage",
+      "value": "阶段"
+    },
+    {
+      "name": "task_child_task",
+      "value": "网关子任务"
+    },
+    {
+      "name": "task_no_child_task",
+      "value": "当前无请求"
+    },
+    {
+      "name": "task_preflight_passed",
+      "value": "相机设置符合计划"
+    },
+    {
+      "name": "task_preflight_blocked",
+      "value": "需要在 R7 上手动调整"
+    },
+    {
+      "name": "task_history_title",
+      "value": "最近会话"
+    },
+    {
+      "name": "task_history_subtitle",
+      "value": "最多保留 10 条终态记录"
+    },
+    {
+      "name": "task_history_empty",
+      "value": "还没有已完成、失败或取消的会话。"
+    },
+    {
+      "name": "task_open_post",
+      "value": "前往后期查看"
+    },
+    {
+      "name": "task_kind_observation",
+      "value": "仅观测"
+    },
+    {
+      "name": "task_kind_smart",
+      "value": "智能长曝光"
+    },
+    {
+      "name": "task_kind_timelapse",
+      "value": "延时摄影"
+    },
+    {
+      "name": "task_status_preparing",
+      "value": "准备中"
+    },
+    {
+      "name": "task_status_running",
+      "value": "进行中"
+    },
+    {
+      "name": "task_status_waiting_user",
+      "value": "等待人工继续"
+    },
+    {
+      "name": "task_status_interrupted",
+      "value": "已中断"
+    },
+    {
+      "name": "task_status_succeeded",
+      "value": "已完成"
+    },
+    {
+      "name": "task_status_failed",
+      "value": "失败"
+    },
+    {
+      "name": "task_status_cancelled",
+      "value": "已取消"
+    },
+    {
+      "name": "task_step_safety",
+      "value": "安全检查与地点时间同步"
+    },
+    {
+      "name": "task_step_goto",
+      "value": "目标 GOTO"
+    },
+    {
+      "name": "task_step_tracking",
+      "value": "恒星时跟踪"
+    },
+    {
+      "name": "task_step_capture",
+      "value": "拍摄与 RAW+JPEG 下载"
+    },
+    {
+      "name": "task_step_plate",
+      "value": "板解析与漂移检查"
+    },
+    {
+      "name": "task_step_correction",
+      "value": "帧间漂移修正"
+    },
+    {
+      "name": "task_step_stack",
+      "value": "星点配准与本地堆栈"
+    },
+    {
+      "name": "task_step_timelapse",
+      "value": "1080p 延时视频"
+    },
+    {
+      "name": "task_step_cloud",
+      "value": "受约束云增强"
+    },
+    {
+      "name": "task_step_observation_end",
+      "value": "结束观测会话"
+    },
+    {
+      "name": "task_step_complete",
+      "value": "会话完成"
+    },
+    {
+      "name": "task_step_waiting",
+      "value": "等待"
+    },
+    {
+      "name": "task_step_active",
+      "value": "进行中"
+    },
+    {
+      "name": "task_step_succeeded",
+      "value": "完成"
+    },
+    {
+      "name": "task_step_skipped",
+      "value": "跳过"
+    },
+    {
+      "name": "task_step_failed",
+      "value": "失败"
+    },
+    {
+      "name": "task_step_cancelled",
+      "value": "取消"
+    },
+    {
+      "name": "task_product_count_unit",
+      "value": "项成品"
+    },
+    {
+      "name": "task_observation_history",
+      "value": "观测会话"
+    },
+    {
+      "name": "task_soft_cancel_pending",
+      "value": "正在完成当前曝光，后续帧已停止。"
+    },
+    {
+      "name": "task_archive_failed",
+      "value": "结束并归档"
     }
   ]
 }

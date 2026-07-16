@@ -3,6 +3,7 @@ import { preferences } from '@kit.ArkData';
 import {
   CapturePlan,
   CaptureProduct,
+  EquatorialCoordinate,
   ImageFormat
 } from '../models/DomainModels';
 import {
@@ -270,11 +271,20 @@ export class TaskSessionStore {
   }
 
   private static copyTarget(target: TaskTargetSnapshot): TaskTargetSnapshot {
+    const coordinate: EquatorialCoordinate | undefined = target.coordinate === undefined ? undefined : {
+      raHours: target.coordinate.raHours,
+      decDegrees: target.coordinate.decDegrees,
+      frame: target.coordinate.frame,
+      validAtMs: target.coordinate.validAtMs
+    };
     return {
       id: target.id,
       name: target.name,
       designation: target.designation,
-      type: target.type
+      type: target.type,
+      coordinate: coordinate,
+      precision: target.precision,
+      gotoAllowed: target.gotoAllowed
     };
   }
 
@@ -354,4 +364,3 @@ export class TaskSessionStore {
     await storage.flush();
   }
 }
-

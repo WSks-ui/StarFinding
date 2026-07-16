@@ -17,6 +17,7 @@ import { CelestialCatalog } from '../data';
 import {
   ArCalibration,
   CameraCapabilities,
+  CameraPreflightResult,
   CameraState,
   CatalogPrecision,
   CelestialObject,
@@ -24,7 +25,7 @@ import {
   ConnectionState,
   CaptureMode,
   CapturePlan,
-  CaptureTask,
+  CaptureProduct,
   DevicePose,
   EnhancementTask,
   EquatorialCoordinate,
@@ -33,6 +34,7 @@ import {
   HandGesture,
   HorizontalCoordinate,
   ImageFormat,
+  GatewaySubtaskKind,
   MountState,
   MountTargetCoordinate,
   NormalSkyScene,
@@ -55,12 +57,20 @@ import {
   SkyMapOrientation,
   SkyMapSize,
   SolarSystemAppearance,
+  SessionKind,
+  SessionStatus,
+  TaskSession,
+  TaskSessionStoreSnapshot,
+  TaskTargetSnapshot,
   TrackingMode,
   TaskStatus,
   VisibilityStatus,
   WeatherDataStatus,
   WeatherForecast,
-  WeatherHourlySample
+  WeatherHourlySample,
+  WorkflowCheckpoint,
+  WorkflowStage,
+  WorkflowStepState
 } from '../models';
 import { DEFAULT_SKY_LAYERS } from '../models/NormalSkyModels';
 import {
@@ -79,11 +89,14 @@ import {
   AIEnhancementClient,
   CameraHandFrameSource,
   CaptureWorkflowCoordinator,
+  CaptureWorkflowCancelledError,
   CaptureWorkflowProgress,
+  CaptureWorkflowReconciliation,
+  CaptureWorkflowResumeState,
   CaptureWorkflowResult,
   DevicePoseService,
   EphemerisService,
-  GatewayTask,
+  GatewayFile,
   GestureInterpreter,
   HandFrameSourceStatus,
   HandLandmarkAnalysisResult,
@@ -103,6 +116,7 @@ import {
   ObservationPlanningService,
   PlanningPeriodService,
   RaspberryPiClient,
+  TaskSessionStore,
   VisibleStar,
   VisibleStarCatalogMetadata,
   VisibleStarCatalogService,
@@ -120,6 +134,11 @@ const FEATURED_TARGET_IDS: string[] = [
   'star-vega', 'star-altair', 'star-deneb', 'messier-31', 'messier-8', 'solar-moon'
 ];
 const MAX_PLANNED_TARGETS: number = 8;
+
+interface PreparedSessionTarget {
+  target: CelestialObject;
+  coordinate: EquatorialCoordinate;
+}
 
 function emptyNormalSkyScene(): NormalSkyScene {
   return {
@@ -188,6 +207,12 @@ struct Index {
   @State private taskStatus: TaskStatus = TaskStatus.PENDING;
   @State private taskProgress: number = 0;
   @State private completedFrames: number = 0;
+  @State private activeTaskSession: TaskSession | undefined = undefined;
+  @State private taskHistory: TaskSession[] = [];
+  @State private taskStoreReady: boolean = false;
+  @State private taskStoreWarning: string = '';
+  @State private taskStopRequested: boolean = false;
+  @State private cameraPreflightResult: CameraPreflightResult | undefined = undefined;
   @State private emergencyMessage: string = '';
   @State private operationMessage: string = '';
   @State private operationBusy: boolean = false;
@@ -256,6 +281,7 @@ struct Index {
   private mountPollTimer: number = -1;
   private gatewayPollTimer: number = -1;
   private taskPollTimer: number = -1;
+  private taskSessionStore: TaskSessionStore | undefined = undefined;
   private readonly mountClient: OnStepLX200Client = new OnStepLX200Client();
   private readonly gatewayClient: RaspberryPiClient = new RaspberryPiClient();
   private readonly aiClient: AIEnhancementClient = new AIEnhancementClient();
@@ -295,6 +321,7 @@ struct Index {
   private lastPanOffsetX: number = 0.0;
   private lastPanOffsetY: number = 0.0;
   aboutToAppear(): void {
+    this.initializeTaskSessions();
     const arCapability = ArEngineCapabilityService.inspect();
     this.huaweiArViewEnabled = arCapability.available;
     this.arTrackingText = arCapability.available ? 'AR Engine 初始化' : '传感器天穹';
@@ -412,23 +439,24 @@ struct Index {
       TaskWorkspace({
         compact: this.isCompactWorkspace(),
         pageMargin: this.workspacePageMargin(),
-        taskStage: this.taskStage,
-        targetName: this.selectedTarget().nameZh,
-        captureMode: this.captureMode,
-        exposureSeconds: this.exposureSeconds,
-        frameCount: this.frameCount,
-        iso: this.iso,
-        taskStatus: this.taskStatus,
-        taskProgress: this.taskProgress,
-        completedFrames: this.completedFrames,
-        workflowWarningText: this.workflowWarningText,
-        plateSolveCount: this.plateSolveCount,
-        correctionCount: this.correctionCount,
-        stackFileUrl: this.stackFileUrl,
-        timelapseFileUrl: this.timelapseFileUrl,
-        aiFileUrl: this.aiFileUrl,
-        onRefresh: (): void => { this.pollActiveTask(); },
-        onCancel: (): void => { this.cancelActiveTask(); }
+        activeSession: this.activeTaskSession,
+        history: this.taskHistory,
+        storeReady: this.taskStoreReady,
+        storeWarning: this.taskStoreWarning,
+        stopRequested: this.taskStopRequested,
+        mountConnection: this.mountConnection,
+        cameraConnection: this.gatewayConnection,
+        mountHomed: this.mountHomed,
+        coordinateModeCompatible: this.mountCoordinatesTopocentric,
+        locationSynced: this.locationSynced,
+        preflight: this.cameraPreflightResult,
+        onGoToSky: (): void => { this.navigateToImmersiveSky(); },
+        onRefresh: (): void => { this.refreshActiveTaskSession(); },
+        onStop: (): void => { this.cancelActiveTask(); },
+        onContinue: (): void => { this.continueActiveTaskSession(); },
+        onArchive: (): void => { this.archiveInterruptedTaskSession(); },
+        onEndObservation: (): void => { this.endObservationSession(); },
+        onOpenProducts: (): void => { this.navigateToSection(3); }
       })
         .transition(MotionTokens.page(this.workspaceDirection))
     } else {
@@ -2010,7 +2038,9 @@ struct Index {
   }
 
   private currentTimeText(): string {
-    const date: Date = new Date(this.activeSkyTimestampMs());
+    // 只有普通星图允许显示模拟时间；设备、任务和后期页始终使用真实设备时钟。
+    const timestampMs: number = this.activeSection === 0 ? this.activeSkyTimestampMs() : Date.now();
+    const date: Date = new Date(timestampMs);
     return this.pad2(date.getHours()) + ':' + this.pad2(date.getMinutes());
   }
 
@@ -2028,7 +2058,8 @@ struct Index {
   }
 
   private canStartCapture(): boolean {
-    if (this.operationBusy || this.mountConnection !== ConnectionState.CONNECTED ||
+    if (!this.taskStoreReady || this.activeTaskSession !== undefined || this.operationBusy ||
+      this.mountConnection !== ConnectionState.CONNECTED ||
       !this.mountHomed || !this.mountCoordinatesTopocentric || !this.selectedTarget().gotoAllowed ||
       this.selectedTarget().id === 'solar-sun' ||
       this.simulatedDeviceTimeBlocked()) {
@@ -2042,6 +2073,8 @@ struct Index {
   }
 
   private captureReadinessText(): string {
+    if (!this.taskStoreReady) return '正在读取任务会话，请稍候';
+    if (this.activeTaskSession !== undefined) return '已有进行中的会话，请先在任务中心结束或继续';
     if (this.operationBusy) return '正在执行设备操作，请稍候';
     if (this.mountConnection !== ConnectionState.CONNECTED) return '请先连接 OnStepX 赤道仪';
     if (this.simulatedDeviceTimeBlocked()) {
@@ -3051,6 +3084,201 @@ struct Index {
     };
   }
 
+  private async initializeTaskSessions(): Promise<void> {
+    if (this.taskStoreReady || this.taskSessionStore !== undefined) return;
+    try {
+      const context: common.Context | undefined = this.getUIContext().getHostContext();
+      if (context === undefined) throw new Error('无法取得任务会话存储上下文');
+      const store: TaskSessionStore = new TaskSessionStore(context);
+      this.taskSessionStore = store;
+      const snapshot: TaskSessionStoreSnapshot = await store.initialize();
+      this.applyTaskStoreSnapshot(snapshot);
+      this.taskStoreReady = true;
+      if (this.activeTaskSession !== undefined) {
+        const interrupted: TaskSession = TaskSessionStore.copySession(this.activeTaskSession);
+        interrupted.status = SessionStatus.INTERRUPTED;
+        interrupted.statusDetail = '应用重新启动，仅恢复记录并对账；未发送设备指令';
+        interrupted.updatedAtMs = Date.now();
+        await store.saveActive(interrupted);
+        this.activeTaskSession = interrupted;
+        await this.refreshActiveTaskSession();
+      }
+    } catch (error) {
+      this.taskStoreReady = false;
+      this.taskStoreWarning = `任务会话存储不可用：${error}`;
+    }
+  }
+
+  private applyTaskStoreSnapshot(snapshot: TaskSessionStoreSnapshot): void {
+    this.activeTaskSession = snapshot.activeSession === undefined ? undefined :
+      TaskSessionStore.copySession(snapshot.activeSession);
+    const history: TaskSession[] = [];
+    for (let index: number = 0; index < snapshot.history.length; index++) {
+      history.push(TaskSessionStore.copySession(snapshot.history[index]));
+    }
+    this.taskHistory = history;
+    this.taskStoreWarning = snapshot.warning;
+    if (this.activeTaskSession !== undefined) this.applyLegacyTaskState(this.activeTaskSession);
+  }
+
+  private createTaskSession(plan: CapturePlan, target: CelestialObject): TaskSession {
+    const now: number = Date.now();
+    const targetSnapshot: TaskTargetSnapshot = {
+      id: target.id,
+      name: target.nameZh,
+      designation: target.designation,
+      type: target.type,
+      coordinate: target.coordinate,
+      precision: target.precision,
+      gotoAllowed: target.gotoAllowed
+    };
+    const kind: SessionKind = plan.mode === CaptureMode.OBSERVE_ONLY ? SessionKind.OBSERVATION :
+      (plan.mode === CaptureMode.SMART_LONG_EXPOSURE ? SessionKind.SMART_LONG_EXPOSURE :
+        SessionKind.TIMELAPSE);
+    return {
+      id: `session-${now}-${target.id}`,
+      kind: kind,
+      status: SessionStatus.PREPARING,
+      stage: WorkflowStage.SAFETY_CHECK,
+      progressPercent: 1,
+      completedFrames: 0,
+      plan: plan,
+      target: targetSnapshot,
+      checkpoint: {
+        stage: WorkflowStage.SAFETY_CHECK,
+        stepState: WorkflowStepState.ACTIVE,
+        childKind: GatewaySubtaskKind.NONE,
+        operationKey: '',
+        childTaskId: '',
+        requestStartedAtMs: now,
+        responseReceivedAtMs: 0,
+        requiresManualContinue: false,
+        detail: '正在重新检查真实设备安全条件'
+      },
+      gatewayTaskIds: [],
+      jpegFileIds: [],
+      rawFileIds: [],
+      plateSolveCount: 0,
+      correctionCount: 0,
+      products: [],
+      warnings: plan.warnings.slice(),
+      statusDetail: '正在重新检查真实设备安全条件',
+      errorMessage: '',
+      createdAtMs: now,
+      startedAtMs: now,
+      updatedAtMs: now,
+      completedAtMs: 0
+    };
+  }
+
+  private async saveActiveTaskSession(session: TaskSession): Promise<void> {
+    const store: TaskSessionStore | undefined = this.taskSessionStore;
+    if (store === undefined) throw new Error('任务会话存储尚未初始化');
+    await store.saveActive(session);
+    this.activeTaskSession = TaskSessionStore.copySession(session);
+    this.applyLegacyTaskState(session);
+  }
+
+  private async archiveTaskSession(session: TaskSession): Promise<void> {
+    const store: TaskSessionStore | undefined = this.taskSessionStore;
+    if (store === undefined) throw new Error('任务会话存储尚未初始化');
+    await store.archive(session);
+    const snapshot: TaskSessionStoreSnapshot = store.getSnapshot();
+    this.applyTaskStoreSnapshot(snapshot);
+    this.applyLegacyTaskState(session);
+    this.taskStopRequested = false;
+    this.clearTaskPolling();
+  }
+
+  private applyLegacyTaskState(session: TaskSession): void {
+    if (session.status === SessionStatus.SUCCEEDED) this.taskStatus = TaskStatus.SUCCEEDED;
+    else if (session.status === SessionStatus.FAILED) this.taskStatus = TaskStatus.FAILED;
+    else if (session.status === SessionStatus.CANCELLED) this.taskStatus = TaskStatus.CANCELLED;
+    else if (session.status === SessionStatus.PREPARING || session.status === SessionStatus.RUNNING) {
+      this.taskStatus = TaskStatus.RUNNING;
+    } else {
+      this.taskStatus = TaskStatus.PENDING;
+    }
+    this.taskProgress = session.progressPercent;
+    this.completedFrames = session.completedFrames;
+    this.taskStage = session.statusDetail;
+    this.activeTaskId = session.checkpoint.childTaskId;
+    this.plateSolveCount = session.plateSolveCount;
+    this.correctionCount = session.correctionCount;
+    this.workflowWarningText = session.warnings.join('；');
+    this.applySessionProducts(session.products);
+  }
+
+  private applySessionProducts(products: CaptureProduct[]): void {
+    for (let index: number = 0; index < products.length; index++) {
+      const product: CaptureProduct = products[index];
+      if (product.kind === 'stack') this.stackFileUrl = product.downloadUrl;
+      if (product.kind === 'timelapse') this.timelapseFileUrl = product.downloadUrl;
+      if (product.kind === 'ai') this.aiFileUrl = product.downloadUrl;
+    }
+  }
+
+  private async updateSessionStage(sessionId: string, stage: WorkflowStage, state: WorkflowStepState,
+    detail: string, status: SessionStatus, progressPercent: number): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || active.id !== sessionId) throw new Error('活动会话已变化');
+    const updated: TaskSession = TaskSessionStore.copySession(active);
+    updated.stage = stage;
+    updated.status = status;
+    updated.progressPercent = progressPercent;
+    updated.statusDetail = detail;
+    updated.updatedAtMs = Date.now();
+    updated.checkpoint = {
+      stage: stage,
+      stepState: state,
+      childKind: GatewaySubtaskKind.NONE,
+      operationKey: '',
+      childTaskId: '',
+      requestStartedAtMs: updated.updatedAtMs,
+      responseReceivedAtMs: updated.updatedAtMs,
+      requiresManualContinue: false,
+      detail: detail
+    };
+    await this.saveActiveTaskSession(updated);
+  }
+
+  private async persistWorkflowCheckpoint(sessionId: string, checkpoint: WorkflowCheckpoint): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || active.id !== sessionId) throw new Error('活动会话已结束，拒绝继续网关请求');
+    const updated: TaskSession = TaskSessionStore.copySession(active);
+    updated.stage = checkpoint.stage;
+    updated.checkpoint = checkpoint;
+    updated.status = SessionStatus.RUNNING;
+    updated.statusDetail = checkpoint.detail;
+    updated.updatedAtMs = Date.now();
+    if (checkpoint.childTaskId.length > 0 && !updated.gatewayTaskIds.includes(checkpoint.childTaskId)) {
+      updated.gatewayTaskIds.push(checkpoint.childTaskId);
+    }
+    await this.saveActiveTaskSession(updated);
+  }
+
+  private applyWorkflowProgress(sessionId: string, progress: CaptureWorkflowProgress): void {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || active.id !== sessionId) return;
+    const updated: TaskSession = TaskSessionStore.copySession(active);
+    updated.stage = progress.stage;
+    updated.progressPercent = progress.progressPercent;
+    updated.completedFrames = progress.completedFrames;
+    updated.status = SessionStatus.RUNNING;
+    updated.statusDetail = progress.stageText;
+    updated.checkpoint = progress.checkpoint;
+    updated.jpegFileIds = progress.jpegFileIds.slice();
+    updated.rawFileIds = progress.rawFileIds.slice();
+    updated.plateSolveCount = progress.plateSolveCount;
+    updated.correctionCount = progress.correctionCount;
+    updated.updatedAtMs = Date.now();
+    if (progress.activeTaskId.length > 0 && !updated.gatewayTaskIds.includes(progress.activeTaskId)) {
+      updated.gatewayTaskIds.push(progress.activeTaskId);
+    }
+    this.activeTaskSession = updated;
+    this.applyLegacyTaskState(updated);
+  }
+
   private async startCaptureTask(): Promise<void> {
     if (this.simulatedDeviceTimeBlocked()) {
       this.operationMessage = '模拟时间只用于浏览和规划，未发送任何设备指令';
@@ -3059,109 +3287,185 @@ struct Index {
     if (!this.canStartCapture()) return;
     const target: CelestialObject = this.selectedTarget();
     if (target.id === 'solar-sun' || this.observer === undefined) return;
-    // GOTO 之前冻结目标和相机参数；坐标必须在地点时间同步完成后按同一真实时刻重新计算。
     const capturePlan: CapturePlan = this.buildCapturePlan();
-    const targetDesignation: string = target.designation;
     const runGeneration: number = ++this.captureRunGeneration;
     this.operationBusy = true;
     this.emergencyMessage = '';
+    this.taskStopRequested = false;
+    let sessionId: string = '';
     try {
-      this.setCapturePanelVisible(false);
-      const motionTimeMs: number = Date.now();
-      const currentObserver: ObserverState = {
-        latitudeDegrees: this.observer.latitudeDegrees,
-        longitudeDegrees: this.observer.longitudeDegrees,
-        elevationMeters: this.observer.elevationMeters,
-        timestampMs: motionTimeMs
-      };
-      const geometricHorizontal: HorizontalCoordinate | undefined = EphemerisService.horizontalCoordinate(
-        target, currentObserver, motionTimeMs, RefractionMode.NONE);
-      if (geometricHorizontal === undefined || geometricHorizontal.altitudeDegrees < 10.0) {
-        throw new Error('目标无折射几何高度低于 10°，禁止自动运动');
+      // 相机设置必须先读取并通过，失败时不创建会话，更不会同步或移动赤道仪。
+      if (capturePlan.mode !== CaptureMode.OBSERVE_ONLY) {
+        this.cameraPreflightResult = await this.gatewayClient.cameraPreflight(capturePlan);
+        if (!this.cameraPreflightResult.ready) {
+          this.setCapturePanelVisible(false);
+          this.changeActiveSection(2);
+          this.operationMessage = `EOS R7 预检未通过：${this.cameraPreflightResult.blockers.join('、')}`;
+          return;
+        }
+      } else {
+        this.cameraPreflightResult = undefined;
       }
-      const utcFromLocalOffsetHours: number = new Date().getTimezoneOffset() / 60.0;
-      await this.mountClient.setObserver(currentObserver, utcFromLocalOffsetHours);
-      this.locationSynced = true;
-      const mountCoordinate: MountTargetCoordinate = ObservationExecutionPolicy.buildMountTarget(
-        target, currentObserver, motionTimeMs);
-      const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, motionTimeMs);
-      if (coordinate === undefined) {
-        throw new Error('无法生成带坐标帧的目标方向');
-      }
-      this.taskStage = `正在 GOTO ${targetDesignation}`;
-      this.operationMessage = this.taskStage;
-      await this.mountClient.gotoRaDec(mountCoordinate);
-      this.throwIfCaptureRunCancelled(runGeneration);
-      await this.waitForMountMotion(runGeneration);
-      this.throwIfCaptureRunCancelled(runGeneration);
-      await this.mountClient.startTracking(TrackingMode.SIDEREAL);
-      this.throwIfCaptureRunCancelled(runGeneration);
-      this.tracking = true;
 
+      const session: TaskSession = this.createTaskSession(capturePlan, target);
+      sessionId = session.id;
+      await this.saveActiveTaskSession(session);
+      this.setCapturePanelVisible(false);
+      this.changeActiveSection(2);
+      const prepared: PreparedSessionTarget = await this.prepareMountForSession(sessionId, target, runGeneration);
       if (capturePlan.mode === CaptureMode.OBSERVE_ONLY) {
-        this.changeActiveSection(1);
-        this.taskStage = '仅观测模式未触发相机快门';
+        await this.updateSessionStage(sessionId, WorkflowStage.TRACKING, WorkflowStepState.ACTIVE,
+          `${capturePlan.targetName} 已到位，恒星时跟踪已启动`, SessionStatus.RUNNING, 75);
         this.operationMessage = `${capturePlan.targetName} 已到位，恒星时跟踪已启动`;
         return;
       }
-
-      this.changeActiveSection(2);
-      this.taskStatus = TaskStatus.RUNNING;
-      this.taskProgress = 1;
-      this.completedFrames = 0;
-      this.plateSolveCount = 0;
-      this.correctionCount = 0;
-      this.stackFileUrl = '';
-      this.timelapseFileUrl = '';
-      this.aiFileUrl = '';
-      this.aiModelVersion = '';
-      this.workflowWarningText = '';
-      const result: CaptureWorkflowResult = await this.captureWorkflow.run(
-        capturePlan, coordinate, (progress: CaptureWorkflowProgress) => {
-          if (runGeneration !== this.captureRunGeneration) {
-            return;
-          }
-          this.taskProgress = progress.progressPercent;
-          this.completedFrames = progress.completedFrames;
-          this.taskStage = progress.stageText;
-          this.activeTaskId = progress.activeTaskId;
-        });
-      this.plateSolveCount = result.plateSolveCount;
-      this.correctionCount = result.correctionCount;
-      this.stackFileUrl = result.stackFile === undefined ? '' : result.stackFile.downloadUrl;
-      this.timelapseFileUrl = result.timelapseFile === undefined ? '' : result.timelapseFile.downloadUrl;
-      const warnings: string[] = result.warnings.slice();
-      if (capturePlan.enableCloudEnhancement && this.stackFileUrl.length > 0) {
-        if (this.aiClient.isConfigured()) {
-          try {
-            const enhancement: EnhancementTask = await this.enhanceStack(this.stackFileUrl, runGeneration);
-            this.aiFileUrl = enhancement.resultFileUrl;
-            this.aiModelVersion = enhancement.modelVersion;
-          } catch (error) {
-            warnings.push(`云增强跳过，本地堆栈仍可用：${error}`);
-          }
-        } else {
-          this.aiStatus = '未配置 · 已保留本地结果';
-        }
-      }
-      this.throwIfCaptureRunCancelled(runGeneration);
-      this.taskStatus = TaskStatus.SUCCEEDED;
-      this.taskProgress = 100;
-      this.workflowWarningText = warnings.join('；');
-      this.taskStage = warnings.length === 0 ? '拍摄、本地处理与可选增强流程完成' : '拍摄完成，部分后处理已降级';
-      this.operationMessage = this.taskStage;
+      await this.runCameraSession(sessionId, prepared.coordinate, runGeneration, undefined);
     } catch (error) {
-      const cancelled: boolean = runGeneration !== this.captureRunGeneration ||
-        this.taskStatus === TaskStatus.CANCELLED;
-      if (cancelled) {
-        this.taskStatus = TaskStatus.CANCELLED;
-      } else {
-        this.taskStatus = TaskStatus.FAILED;
-      }
-      this.taskStage = `${cancelled ? '任务已取消' : '任务失败'}：${error}`;
-      this.operationMessage = this.taskStage;
+      await this.finishActiveSessionFromError(sessionId, runGeneration, error);
     } finally {
       this.operationBusy = false;
+    }
+  }
+
+  private async prepareMountForSession(sessionId: string, target: CelestialObject,
+    runGeneration: number): Promise<PreparedSessionTarget> {
+    if (this.observer === undefined) throw new Error('缺少真实观测地点');
+    if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountHomed ||
+      !this.mountCoordinatesTopocentric) {
+      throw new Error('赤道仪连接、回零或站心坐标模式不满足安全条件');
+    }
+    await this.updateSessionStage(sessionId, WorkflowStage.SAFETY_CHECK, WorkflowStepState.ACTIVE,
+      '正在同步真实地点和设备时间', SessionStatus.PREPARING, 4);
+    const motionTimeMs: number = Date.now();
+    const currentObserver: ObserverState = {
+      latitudeDegrees: this.observer.latitudeDegrees,
+      longitudeDegrees: this.observer.longitudeDegrees,
+      elevationMeters: this.observer.elevationMeters,
+      timestampMs: motionTimeMs
+    };
+    const geometricHorizontal: HorizontalCoordinate | undefined = EphemerisService.horizontalCoordinate(
+      target, currentObserver, motionTimeMs, RefractionMode.NONE);
+    if (geometricHorizontal === undefined || geometricHorizontal.altitudeDegrees < 10.0) {
+      throw new Error('目标无折射几何高度低于 10°，禁止自动运动');
+    }
+    await this.mountClient.setObserver(currentObserver, new Date().getTimezoneOffset() / 60.0);
+    this.throwIfCaptureRunCancelled(runGeneration);
+    this.locationSynced = true;
+    const mountCoordinate: MountTargetCoordinate = ObservationExecutionPolicy.buildMountTarget(
+      target, currentObserver, motionTimeMs);
+    const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, motionTimeMs);
+    if (coordinate === undefined) throw new Error('无法生成带坐标帧的目标方向');
+    await this.updateSessionStage(sessionId, WorkflowStage.GOTO, WorkflowStepState.ACTIVE,
+      `正在 GOTO ${target.designation}`, SessionStatus.PREPARING, 10);
+    this.operationMessage = `正在 GOTO ${target.designation}`;
+    await this.mountClient.gotoRaDec(mountCoordinate);
+    this.throwIfCaptureRunCancelled(runGeneration);
+    await this.waitForMountMotion(runGeneration);
+    this.throwIfCaptureRunCancelled(runGeneration);
+    await this.mountClient.startTracking(TrackingMode.SIDEREAL);
+    this.throwIfCaptureRunCancelled(runGeneration);
+    this.tracking = true;
+    await this.updateSessionStage(sessionId, WorkflowStage.TRACKING, WorkflowStepState.SUCCEEDED,
+      '目标已到位，恒星时跟踪已启动', SessionStatus.RUNNING, 14);
+    return { target: target, coordinate: coordinate };
+  }
+
+  private async runCameraSession(sessionId: string, coordinate: EquatorialCoordinate,
+    runGeneration: number, resumeState: CaptureWorkflowResumeState | undefined): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || active.id !== sessionId) throw new Error('活动会话不存在');
+    const plan: CapturePlan = active.plan;
+    this.taskStatus = TaskStatus.RUNNING;
+    this.stackFileUrl = '';
+    this.timelapseFileUrl = '';
+    this.aiFileUrl = '';
+    this.aiModelVersion = '';
+    const result: CaptureWorkflowResult = await this.captureWorkflow.run(
+      plan, coordinate, (progress: CaptureWorkflowProgress) => {
+        if (runGeneration === this.captureRunGeneration || this.taskStopRequested) {
+          this.applyWorkflowProgress(sessionId, progress);
+        }
+      }, async (checkpoint: WorkflowCheckpoint): Promise<void> => {
+        await this.persistWorkflowCheckpoint(sessionId, checkpoint);
+      }, resumeState);
+
+    let completed: TaskSession | undefined = this.activeTaskSession;
+    if (completed === undefined || completed.id !== sessionId) throw new Error('活动会话已结束');
+    completed = TaskSessionStore.copySession(completed);
+    completed.plateSolveCount = result.plateSolveCount;
+    completed.correctionCount = result.correctionCount;
+    completed.warnings = this.mergeStrings(completed.warnings, result.warnings);
+    this.appendGatewayProducts(completed, result.captureFiles);
+    if (result.stackFile !== undefined) this.appendGatewayProduct(completed, result.stackFile);
+    if (result.timelapseFile !== undefined) this.appendGatewayProduct(completed, result.timelapseFile);
+    this.stackFileUrl = result.stackFile === undefined ? '' : result.stackFile.downloadUrl;
+    this.timelapseFileUrl = result.timelapseFile === undefined ? '' : result.timelapseFile.downloadUrl;
+
+    if (plan.enableCloudEnhancement && this.stackFileUrl.length > 0) {
+      if (this.aiClient.isConfigured()) {
+        try {
+          await this.saveActiveTaskSession(completed);
+          await this.updateSessionStage(sessionId, WorkflowStage.CLOUD_ENHANCEMENT, WorkflowStepState.ACTIVE,
+            '正在提交受约束云增强', SessionStatus.RUNNING, 94);
+          const enhancement: EnhancementTask = await this.enhanceStack(this.stackFileUrl, runGeneration);
+          this.aiFileUrl = enhancement.resultFileUrl;
+          this.aiModelVersion = enhancement.modelVersion;
+          completed = this.activeTaskSession === undefined ? completed :
+            TaskSessionStore.copySession(this.activeTaskSession);
+          completed.products.push({
+            kind: 'ai',
+            fileName: 'AI 增强结果',
+            downloadUrl: enhancement.resultFileUrl,
+            createdAtMs: enhancement.updatedAtMs
+          });
+        } catch (error) {
+          completed.warnings.push(`云增强跳过，本地堆栈仍可用：${error}`);
+        }
+      } else {
+        this.aiStatus = '未配置 · 已保留本地结果';
+      }
+    }
+    this.throwIfCaptureRunCancelled(runGeneration);
+    completed.status = SessionStatus.SUCCEEDED;
+    completed.stage = WorkflowStage.COMPLETE;
+    completed.progressPercent = 100;
+    completed.statusDetail = completed.warnings.length === 0 ? '拍摄、本地处理与可选增强流程完成' :
+      '拍摄完成，部分后处理已降级';
+    completed.errorMessage = '';
+    completed.updatedAtMs = Date.now();
+    completed.completedAtMs = completed.updatedAtMs;
+    completed.checkpoint.stage = WorkflowStage.COMPLETE;
+    completed.checkpoint.stepState = WorkflowStepState.SUCCEEDED;
+    completed.checkpoint.detail = completed.statusDetail;
+    this.operationMessage = completed.statusDetail;
+    await this.archiveTaskSession(completed);
+  }
+
+  private async finishActiveSessionFromError(sessionId: string, runGeneration: number,
+    error: Object): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (sessionId.length === 0 || active === undefined || active.id !== sessionId) {
+      this.operationMessage = `任务未创建：${error}`;
+      return;
+    }
+    const failed: TaskSession = TaskSessionStore.copySession(active);
+    const cancelled: boolean = runGeneration !== this.captureRunGeneration || this.taskStopRequested ||
+      error instanceof CaptureWorkflowCancelledError;
+    failed.status = cancelled ? SessionStatus.CANCELLED : SessionStatus.INTERRUPTED;
+    failed.checkpoint.stepState = cancelled ? WorkflowStepState.CANCELLED : WorkflowStepState.FAILED;
+    failed.errorMessage = `${error}`;
+    failed.statusDetail = cancelled ? `会话已取消：${error}` : `会话已中断，等待人工重试：${error}`;
+    failed.updatedAtMs = Date.now();
+    this.operationMessage = failed.statusDetail;
+    try {
+      if (cancelled) {
+        failed.completedAtMs = failed.updatedAtMs;
+        await this.archiveTaskSession(failed);
+      } else {
+        await this.saveActiveTaskSession(failed);
+      }
+    } catch (storageError) {
+      this.taskStoreWarning = `终态会话保存失败：${storageError}`;
     }
   }
 
@@ -3240,8 +3544,8 @@ struct Index {
   private startTaskPolling(): void {
     this.clearTaskPolling();
     this.taskPollTimer = setInterval(() => {
-      this.pollActiveTask();
-    }, 1000);
+      this.refreshActiveTaskSession();
+    }, 2000);
   }
 
   private clearTaskPolling(): void {
@@ -3251,34 +3555,255 @@ struct Index {
     }
   }
 
-  private async pollActiveTask(): Promise<void> {
-    if (this.activeTaskId.length === 0) return;
+  private async refreshActiveTaskSession(): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined) return;
     try {
-      const task: GatewayTask = await this.gatewayClient.getTask(this.activeTaskId);
-      this.taskStage = task.errorMessage.length > 0 ? task.errorMessage : task.message;
+      const reconciliation: CaptureWorkflowReconciliation =
+        await this.captureWorkflow.reconcile(active.checkpoint);
+      const updated: TaskSession = TaskSessionStore.copySession(active);
+      const previousJpegCount: number = updated.jpegFileIds.length;
+      updated.checkpoint = reconciliation.checkpoint;
+      updated.stage = reconciliation.checkpoint.stage;
+      updated.status = reconciliation.sessionStatus === SessionStatus.FAILED ? SessionStatus.INTERRUPTED :
+        reconciliation.sessionStatus;
+      updated.statusDetail = reconciliation.detail;
+      updated.updatedAtMs = Date.now();
+      if (reconciliation.childTask !== undefined) {
+        updated.progressPercent = Math.max(updated.progressPercent,
+          reconciliation.childTask.progressPercent);
+        if (!updated.gatewayTaskIds.includes(reconciliation.childTask.taskId)) {
+          updated.gatewayTaskIds.push(reconciliation.childTask.taskId);
+        }
+      }
+      this.appendGatewayProducts(updated, reconciliation.files);
+      const addedJpegCount: number = Math.max(0, updated.jpegFileIds.length - previousJpegCount);
+      if (reconciliation.checkpoint.childKind === GatewaySubtaskKind.CAPTURE &&
+        reconciliation.sessionStatus === SessionStatus.WAITING_FOR_USER && addedJpegCount > 0) {
+        updated.completedFrames = Math.min(updated.plan.frameCount, updated.completedFrames + 1);
+      }
+      if (reconciliation.sessionStatus === SessionStatus.CANCELLED) {
+        updated.status = SessionStatus.CANCELLED;
+        updated.completedAtMs = updated.updatedAtMs;
+        await this.archiveTaskSession(updated);
+        return;
+      }
+      await this.saveActiveTaskSession(updated);
+      if (reconciliation.monitoring) this.startTaskPolling();
+      else this.clearTaskPolling();
     } catch (error) {
-      this.taskStage = `任务状态读取失败：${error}`;
+      const current: TaskSession | undefined = this.activeTaskSession;
+      if (current === undefined) return;
+      const interrupted: TaskSession = TaskSessionStore.copySession(current);
+      interrupted.status = SessionStatus.INTERRUPTED;
+      interrupted.statusDetail = `网关状态读取失败：${error}`;
+      interrupted.updatedAtMs = Date.now();
+      try {
+        await this.saveActiveTaskSession(interrupted);
+      } catch (storageError) {
+        this.taskStoreWarning = `恢复状态保存失败：${storageError}`;
+      }
     }
   }
 
-  private applyCaptureTask(task: CaptureTask): void {
-    this.taskStatus = task.status;
-    this.taskProgress = task.progressPercent;
-    this.completedFrames = task.completedFrames;
-    this.taskStage = task.errorMessage.length > 0 ? task.errorMessage : task.currentStage;
+  private async continueActiveTaskSession(): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || this.operationBusy) return;
+    const target: CelestialObject = this.sessionTarget(active);
+    if (target.id === 'solar-sun') {
+      this.operationMessage = '太阳永久禁止普通 GOTO';
+      return;
+    }
+    const runGeneration: number = ++this.captureRunGeneration;
+    this.operationBusy = true;
+    this.taskStopRequested = false;
+    try {
+      const remainingCapture: boolean = active.kind !== SessionKind.OBSERVATION &&
+        active.completedFrames < active.plan.frameCount;
+      if (remainingCapture) {
+        this.cameraPreflightResult = await this.gatewayClient.cameraPreflight(active.plan);
+        if (!this.cameraPreflightResult.ready) {
+          const blocked: TaskSession = TaskSessionStore.copySession(active);
+          blocked.status = SessionStatus.INTERRUPTED;
+          blocked.statusDetail = `EOS R7 预检未通过：${this.cameraPreflightResult.blockers.join('、')}`;
+          blocked.updatedAtMs = Date.now();
+          await this.saveActiveTaskSession(blocked);
+          return;
+        }
+      }
+      let coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(target, Date.now());
+      if (remainingCapture || active.kind === SessionKind.OBSERVATION) {
+        const prepared: PreparedSessionTarget = await this.prepareMountForSession(active.id, target, runGeneration);
+        coordinate = prepared.coordinate;
+      }
+      if (active.kind === SessionKind.OBSERVATION) {
+        await this.updateSessionStage(active.id, WorkflowStage.TRACKING, WorkflowStepState.ACTIVE,
+          `${active.target.name} 已恢复观测，恒星时跟踪已启动`, SessionStatus.RUNNING, 75);
+        return;
+      }
+      if (coordinate === undefined) throw new Error('无法恢复目标坐标');
+      const resumeState: CaptureWorkflowResumeState = await this.buildResumeState(active);
+      await this.runCameraSession(active.id, coordinate, runGeneration, resumeState);
+    } catch (error) {
+      await this.finishActiveSessionFromError(active.id, runGeneration, error);
+    } finally {
+      this.operationBusy = false;
+    }
+  }
+
+  private async buildResumeState(session: TaskSession): Promise<CaptureWorkflowResumeState> {
+    const files: GatewayFile[] = [];
+    const seen: Set<string> = new Set<string>();
+    for (let taskIndex: number = 0; taskIndex < session.gatewayTaskIds.length; taskIndex++) {
+      const taskFiles: GatewayFile[] = await this.gatewayClient.listFiles(session.gatewayTaskIds[taskIndex], 20);
+      for (let fileIndex: number = 0; fileIndex < taskFiles.length; fileIndex++) {
+        const file: GatewayFile = taskFiles[fileIndex];
+        if (!seen.has(file.id)) {
+          files.push(file);
+          seen.add(file.id);
+        }
+      }
+    }
+    return {
+      completedFrames: session.completedFrames,
+      captureFiles: files,
+      jpegFileIds: session.jpegFileIds.slice(),
+      rawFileIds: session.rawFileIds.slice(),
+      plateSolveCount: session.plateSolveCount,
+      correctionCount: session.correctionCount,
+      warnings: session.warnings.slice()
+    };
+  }
+
+  private sessionTarget(session: TaskSession): CelestialObject {
+    const catalogTarget: CelestialObject | undefined = CelestialCatalog.getById(session.target.id);
+    if (catalogTarget !== undefined) return catalogTarget;
+    return {
+      id: session.target.id,
+      type: session.target.type,
+      nameZh: session.target.name,
+      nameEn: session.target.designation,
+      designation: session.target.designation,
+      constellation: '',
+      coordinate: session.target.coordinate,
+      description: '从冻结任务会话恢复的目标',
+      tags: [session.target.name, session.target.designation],
+      precision: session.target.precision,
+      gotoAllowed: session.target.gotoAllowed,
+      recommendedFor18mm: true
+    };
+  }
+
+  private appendGatewayProducts(session: TaskSession, files: GatewayFile[]): void {
+    for (let index: number = 0; index < files.length; index++) {
+      this.appendGatewayProduct(session, files[index]);
+    }
+  }
+
+  private appendGatewayProduct(session: TaskSession, file: GatewayFile): void {
+    let exists: boolean = false;
+    for (let index: number = 0; index < session.products.length; index++) {
+      if (session.products[index].downloadUrl === file.downloadUrl) {
+        exists = true;
+        break;
+      }
+    }
+    if (!exists) {
+      session.products.push({
+        kind: file.kind,
+        fileName: file.name,
+        downloadUrl: file.downloadUrl,
+        createdAtMs: file.createdAtMs
+      });
+    }
+    const lowerName: string = file.name.toLowerCase();
+    if ((file.mimeType.toLowerCase() === 'image/jpeg' || lowerName.endsWith('.jpg') ||
+      lowerName.endsWith('.jpeg')) && !session.jpegFileIds.includes(file.id)) {
+      session.jpegFileIds.push(file.id);
+    }
+    if ((file.kind === 'raw' || lowerName.endsWith('.cr3')) && !session.rawFileIds.includes(file.id)) {
+      session.rawFileIds.push(file.id);
+    }
+  }
+
+  private mergeStrings(left: string[], right: string[]): string[] {
+    const result: string[] = left.slice();
+    for (let index: number = 0; index < right.length; index++) {
+      if (!result.includes(right[index])) result.push(right[index]);
+    }
+    return result;
+  }
+
+  private async endObservationSession(): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || active.kind !== SessionKind.OBSERVATION ||
+      active.status !== SessionStatus.RUNNING || this.operationBusy) return;
+    this.operationBusy = true;
+    const completed: TaskSession = TaskSessionStore.copySession(active);
+    try {
+      if (this.mountConnection === ConnectionState.CONNECTED) {
+        await this.mountClient.stopTracking();
+        this.tracking = false;
+      }
+      completed.status = SessionStatus.SUCCEEDED;
+      completed.stage = WorkflowStage.COMPLETE;
+      completed.progressPercent = 100;
+      completed.statusDetail = '观测会话已结束并归档';
+      completed.errorMessage = '';
+      completed.checkpoint.stage = WorkflowStage.COMPLETE;
+      completed.checkpoint.stepState = WorkflowStepState.SUCCEEDED;
+      completed.checkpoint.detail = completed.statusDetail;
+    } catch (error) {
+      completed.status = SessionStatus.FAILED;
+      completed.statusDetail = `观测会话结束时停止跟踪失败：${error}`;
+      completed.errorMessage = `${error}`;
+      completed.checkpoint.stepState = WorkflowStepState.FAILED;
+    }
+    completed.updatedAtMs = Date.now();
+    completed.completedAtMs = completed.updatedAtMs;
+    await this.archiveTaskSession(completed);
+    this.operationBusy = false;
+  }
+
+  private async archiveInterruptedTaskSession(): Promise<void> {
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || (active.status !== SessionStatus.INTERRUPTED &&
+      active.status !== SessionStatus.WAITING_FOR_USER) || this.operationBusy) return;
+    const archived: TaskSession = TaskSessionStore.copySession(active);
+    archived.status = SessionStatus.FAILED;
+    archived.checkpoint.stepState = WorkflowStepState.FAILED;
+    archived.statusDetail = archived.errorMessage.length > 0 ? archived.statusDetail :
+      '用户结束了未完成会话';
+    archived.errorMessage = archived.errorMessage.length > 0 ? archived.errorMessage : '会话由用户结束并归档';
+    archived.updatedAtMs = Date.now();
+    archived.completedAtMs = archived.updatedAtMs;
+    await this.archiveTaskSession(archived);
   }
 
   private async cancelActiveTask(): Promise<void> {
-    if (this.taskStatus !== TaskStatus.RUNNING) return;
-    this.captureRunGeneration++;
-    this.taskStatus = TaskStatus.CANCELLED;
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active === undefined || active.kind === SessionKind.OBSERVATION ||
+      (active.status !== SessionStatus.PREPARING && active.status !== SessionStatus.RUNNING) ||
+      this.taskStopRequested) return;
+    this.taskStopRequested = true;
     try {
-      await this.captureWorkflow.cancel();
-      this.clearTaskPolling();
-      this.taskStage = '工作流已停止提交后续快门，当前网关任务正在取消';
-      this.operationMessage = this.taskStage;
+      if (active.stage === WorkflowStage.SAFETY_CHECK || active.stage === WorkflowStage.GOTO ||
+        active.stage === WorkflowStage.TRACKING) {
+        this.captureRunGeneration++;
+        await this.mountClient.abort();
+      } else {
+        await this.captureWorkflow.cancel();
+      }
+      const current: TaskSession | undefined = this.activeTaskSession;
+      if (current !== undefined) {
+        const stopping: TaskSession = TaskSessionStore.copySession(current);
+        stopping.statusDetail = '正在完成当前曝光，后续帧已停止';
+        stopping.updatedAtMs = Date.now();
+        await this.saveActiveTaskSession(stopping);
+      }
+      this.operationMessage = '正在完成当前曝光，后续帧已停止';
     } catch (error) {
-      this.operationMessage = `取消任务失败：${error}`;
+      this.operationMessage = `停止后续曝光未获完整确认：${error}`;
     }
   }
 
@@ -3290,6 +3815,7 @@ struct Index {
     const captureWasRunning: boolean = this.taskStatus === TaskStatus.RUNNING;
     if (captureWasRunning) {
       this.taskStatus = TaskStatus.CANCELLED;
+      this.taskStopRequested = true;
       this.clearTaskPolling();
     }
     const workflowStop: Promise<void> = this.captureWorkflow.cancel();
@@ -3309,6 +3835,21 @@ struct Index {
       this.emergencyMessage = '软件急停已发送；请确认独立物理急停和电机状态';
     } else {
       this.emergencyMessage = `软件急停未获完整确认：${errors.join('；')}；立即使用物理急停`;
+    }
+    const active: TaskSession | undefined = this.activeTaskSession;
+    if (active !== undefined && active.kind === SessionKind.OBSERVATION) {
+      const cancelled: TaskSession = TaskSessionStore.copySession(active);
+      cancelled.status = SessionStatus.CANCELLED;
+      cancelled.checkpoint.stepState = WorkflowStepState.CANCELLED;
+      cancelled.statusDetail = '观测会话已由软件急停结束；请确认物理急停';
+      cancelled.errorMessage = errors.join('；');
+      cancelled.updatedAtMs = Date.now();
+      cancelled.completedAtMs = cancelled.updatedAtMs;
+      try {
+        await this.archiveTaskSession(cancelled);
+      } catch (storageError) {
+        this.taskStoreWarning = `急停会话保存失败：${storageError}`;
+      }
     }
   }
 
