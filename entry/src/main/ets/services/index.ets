@@ -28,3 +28,4 @@ export * from './ObservationExecutionPolicy';
 export * from './PlanningPeriodService';
 export * from './DeviceReadinessService';
 export * from './TaskSessionStore';
+export * from './TaskSessionPresentationService';

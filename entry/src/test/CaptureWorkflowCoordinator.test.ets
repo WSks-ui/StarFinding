@@ -15,9 +15,17 @@ import {
   TrackingMode
 } from '../main/ets/models/DomainModels';
 import {
+  GatewaySubtaskKind,
+  SessionStatus,
+  WorkflowCheckpoint,
+  WorkflowStage,
+  WorkflowStepState
+} from '../main/ets/models/TaskSessionModels';
+import {
   CaptureWorkflowCancelledError,
   CaptureWorkflowCoordinator,
-  CaptureWorkflowProgress
+  CaptureWorkflowProgress,
+  CaptureWorkflowReconciliation
 } from '../main/ets/services/CaptureWorkflowCoordinator';
 import { OnStepLX200Client } from '../main/ets/services/OnStepLX200Client';
 import {
@@ -95,10 +103,18 @@ class WorkflowFakeGateway extends RaspberryPiClient {
   emitStackProduct: boolean = true;
   emitTimelapseProduct: boolean = true;
   cancelledTaskIds: string[] = [];
+  idempotencyKeys: string[] = [];
+  getTaskCalls: number = 0;
+  forcedTaskStatus: TaskStatus | undefined = undefined;
   private captureSequence: number = 0;
 
-  async createCaptureTask(plan: CapturePlan, _idempotencyKey?: string): Promise<CaptureTask> {
+  getCaptureSequence(): number {
+    return this.captureSequence;
+  }
+
+  async createCaptureTask(plan: CapturePlan, idempotencyKey?: string): Promise<CaptureTask> {
     this.captureSequence++;
+    if (idempotencyKey !== undefined) this.idempotencyKeys.push(idempotencyKey);
     const id: string = `capture-${this.captureSequence}`;
     if (this.cancelDuringCaptureCreate && this.coordinator !== undefined) {
       await this.coordinator.cancel();
@@ -118,6 +134,10 @@ class WorkflowFakeGateway extends RaspberryPiClient {
   }
 
   async getTask(taskId: string): Promise<GatewayTask> {
+    this.getTaskCalls++;
+    if (this.forcedTaskStatus !== undefined) {
+      return createGatewayTask(taskId, 'capture', this.forcedTaskStatus);
+    }
     if (taskId.startsWith('stack-')) {
       const files: GatewayFile[] = this.emitStackProduct ?
         [createGatewayFile(taskId, 'stack-file', 'stack', 'stack.jpg', 'image/jpeg')] : [];
@@ -247,7 +267,7 @@ async function runAndCaptureError(coordinator: CaptureWorkflowCoordinator, plan:
 
 export default function captureWorkflowCoordinatorTest(): void {
   describe('拍摄闭环安全状态', () => {
-    it('创建拍摄请求期间取消会撤销刚创建的任务', 0, async () => {
+    it('软取消允许当前曝光完成且不会提交后续帧', 0, async () => {
       const mount = new WorkflowFakeMount();
       const gateway = new WorkflowFakeGateway();
       const coordinator = new CaptureWorkflowCoordinator(mount, gateway);
@@ -259,8 +279,93 @@ export default function captureWorkflowCoordinatorTest(): void {
         coordinator, createPlan(CaptureMode.TIMELAPSE), progress);
 
       expect(error instanceof CaptureWorkflowCancelledError).assertTrue();
-      expect(gateway.cancelledTaskIds.includes('capture-1')).assertTrue();
+      expect(gateway.cancelledTaskIds.includes('capture-1')).assertFalse();
+      expect(gateway.getCaptureSequence()).assertEqual(1);
+      expect(gateway.idempotencyKeys.length).assertEqual(1);
+      expect(gateway.idempotencyKeys[0]).assertEqual('workflow-test-timelapse-frame-1');
+      expect(progress[0] > 0).assertTrue();
       expect(progress[0] < 100).assertTrue();
+    });
+
+    it('网关 POST 前后按顺序保存幂等键和子任务 ID', 0, async () => {
+      const mount = new WorkflowFakeMount();
+      const gateway = new WorkflowFakeGateway();
+      const coordinator = new CaptureWorkflowCoordinator(mount, gateway);
+      const checkpoints: WorkflowCheckpoint[] = [];
+
+      await coordinator.run(createPlan(CaptureMode.TIMELAPSE), TEST_TARGET,
+        (_progress: CaptureWorkflowProgress): void => {},
+        async (checkpoint: WorkflowCheckpoint): Promise<void> => {
+          checkpoints.push(checkpoint);
+        });
+
+      let requestCheckpoint: WorkflowCheckpoint | undefined = undefined;
+      let responseCheckpoint: WorkflowCheckpoint | undefined = undefined;
+      for (let index: number = 0; index < checkpoints.length; index++) {
+        const item: WorkflowCheckpoint = checkpoints[index];
+        if (item.operationKey === 'workflow-test-timelapse-frame-1') {
+          if (item.childTaskId.length === 0 && requestCheckpoint === undefined) requestCheckpoint = item;
+          if (item.childTaskId === 'capture-1' && responseCheckpoint === undefined) responseCheckpoint = item;
+        }
+      }
+      expect(requestCheckpoint !== undefined).assertTrue();
+      expect(responseCheckpoint !== undefined).assertTrue();
+      if (requestCheckpoint !== undefined && responseCheckpoint !== undefined) {
+        expect(requestCheckpoint.requiresManualContinue).assertTrue();
+        expect(responseCheckpoint.requiresManualContinue).assertFalse();
+        expect(responseCheckpoint.responseReceivedAtMs >= requestCheckpoint.requestStartedAtMs).assertTrue();
+      }
+    });
+
+    it('请求结果未知时恢复不会访问网关或移动赤道仪', 0, async () => {
+      const mount = new WorkflowFakeMount();
+      const gateway = new WorkflowFakeGateway();
+      const coordinator = new CaptureWorkflowCoordinator(mount, gateway);
+      const checkpoint: WorkflowCheckpoint = {
+        stage: WorkflowStage.CAPTURE,
+        stepState: WorkflowStepState.ACTIVE,
+        childKind: GatewaySubtaskKind.CAPTURE,
+        operationKey: 'capture-unknown',
+        childTaskId: '',
+        requestStartedAtMs: 1,
+        responseReceivedAtMs: 0,
+        requiresManualContinue: true,
+        detail: '等待响应'
+      };
+
+      const result: CaptureWorkflowReconciliation = await coordinator.reconcile(checkpoint);
+
+      expect(result.sessionStatus).assertEqual(SessionStatus.INTERRUPTED);
+      expect(result.unknownOutcome).assertTrue();
+      expect(gateway.getTaskCalls).assertEqual(0);
+      expect(mount.gotoCalls).assertEqual(0);
+      expect(mount.abortCalls).assertEqual(0);
+    });
+
+    it('已知运行中子任务只读对账且不发送设备命令', 0, async () => {
+      const mount = new WorkflowFakeMount();
+      const gateway = new WorkflowFakeGateway();
+      gateway.forcedTaskStatus = TaskStatus.RUNNING;
+      const coordinator = new CaptureWorkflowCoordinator(mount, gateway);
+      const checkpoint: WorkflowCheckpoint = {
+        stage: WorkflowStage.CAPTURE,
+        stepState: WorkflowStepState.ACTIVE,
+        childKind: GatewaySubtaskKind.CAPTURE,
+        operationKey: 'capture-known',
+        childTaskId: 'capture-existing',
+        requestStartedAtMs: 1,
+        responseReceivedAtMs: 2,
+        requiresManualContinue: false,
+        detail: '运行中'
+      };
+
+      const result: CaptureWorkflowReconciliation = await coordinator.reconcile(checkpoint);
+
+      expect(result.monitoring).assertTrue();
+      expect(result.sessionStatus).assertEqual(SessionStatus.INTERRUPTED);
+      expect(gateway.getTaskCalls).assertEqual(1);
+      expect(mount.gotoCalls).assertEqual(0);
+      expect(mount.abortCalls).assertEqual(0);
     });
 
     it('堆栈阶段取消不会被降级成成功', 0, async () => {

@@ -22,6 +22,15 @@ def test_health_camera_and_liveview(client: TestClient) -> None:
     assert capabilities["raw_jpeg"] is True
     assert capabilities["max_exposure_seconds"] == 300
 
+    preflight = client.get(
+        "/api/v1/camera/preflight",
+        params={"iso": "800", "aperture": "4", "exposure_seconds": 10},
+    )
+    assert preflight.status_code == 200
+    assert preflight.json()["ready"] is False
+    assert preflight.json()["simulated"] is True
+    assert "真实相机" in preflight.json()["blockers"]
+
     preview = client.get("/api/v1/camera/liveview")
     assert preview.status_code == 200
     assert preview.headers["content-type"].startswith("image/jpeg")

@@ -117,6 +117,7 @@ import {
   PlanningPeriodService,
   RaspberryPiClient,
   TaskSessionStore,
+  TaskSessionPresentationService,
   VisibleStar,
   VisibleStarCatalogMetadata,
   VisibleStarCatalogService,
@@ -437,8 +438,8 @@ struct Index {
         .transition(MotionTokens.page(this.workspaceDirection))
     } else if (this.activeSection === 2) {
       TaskWorkspace({
-        compact: this.isCompactWorkspace(),
-        pageMargin: this.workspacePageMargin(),
+        compact: TaskSessionPresentationService.resolveLayout(this.contentViewportWidth).compact,
+        pageMargin: TaskSessionPresentationService.resolveLayout(this.contentViewportWidth).pageMargin,
         activeSession: this.activeTaskSession,
         history: this.taskHistory,
         storeReady: this.taskStoreReady,

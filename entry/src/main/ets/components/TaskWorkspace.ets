@@ -11,6 +11,7 @@ import {
   WorkflowStepState
 } from '../models/TaskSessionModels';
 import { MotionTokens } from '../utils/MotionTokens';
+import { TaskSessionPresentationService } from '../services/TaskSessionPresentationService';
 
 interface TaskPipelineStep {
   stage: WorkflowStage;
@@ -628,66 +629,18 @@ export struct TaskWorkspace {
   }
 
   private pipeline(session: TaskSession): TaskPipelineStep[] {
-    const stages: WorkflowStage[] = [];
-    const titles: ResourceStr[] = [];
-    stages.push(WorkflowStage.SAFETY_CHECK);
-    titles.push($r('app.string.task_step_safety'));
-    stages.push(WorkflowStage.GOTO);
-    titles.push($r('app.string.task_step_goto'));
-    if (session.kind === SessionKind.OBSERVATION) {
-      stages.push(WorkflowStage.TRACKING);
-      titles.push($r('app.string.task_step_tracking'));
-      stages.push(WorkflowStage.COMPLETE);
-      titles.push($r('app.string.task_step_observation_end'));
-    } else {
-      stages.push(WorkflowStage.CAPTURE);
-      titles.push($r('app.string.task_step_capture'));
-      if (session.kind === SessionKind.SMART_LONG_EXPOSURE) {
-        stages.push(WorkflowStage.PLATE_SOLVE);
-        titles.push($r('app.string.task_step_plate'));
-        stages.push(WorkflowStage.STACK);
-        titles.push($r('app.string.task_step_stack'));
-        stages.push(WorkflowStage.CLOUD_ENHANCEMENT);
-        titles.push($r('app.string.task_step_cloud'));
-      } else {
-        stages.push(WorkflowStage.TIMELAPSE);
-        titles.push($r('app.string.task_step_timelapse'));
-      }
-    }
+    const stages: WorkflowStage[] = TaskSessionPresentationService.pipelineStages(session);
     const result: TaskPipelineStep[] = [];
     for (let index: number = 0; index < stages.length; index++) {
       const stage: WorkflowStage = stages[index];
       result.push({
         stage: stage,
-        title: titles[index],
-        state: this.deriveStepState(session, stage)
+        title: stage === WorkflowStage.COMPLETE && session.kind === SessionKind.OBSERVATION ?
+          $r('app.string.task_step_observation_end') : this.stageTitle(stage),
+        state: TaskSessionPresentationService.stepState(session, stage)
       });
     }
     return result;
-  }
-
-  private deriveStepState(session: TaskSession, stage: WorkflowStage): WorkflowStepState {
-    if (stage === WorkflowStage.CLOUD_ENHANCEMENT && !session.plan.enableCloudEnhancement) {
-      return WorkflowStepState.SKIPPED;
-    }
-    const currentRank: number = this.stageRank(session.stage);
-    const stepRank: number = this.stageRank(stage);
-    if (stepRank < currentRank) return WorkflowStepState.SUCCEEDED;
-    if (stepRank > currentRank) return WorkflowStepState.WAITING;
-    if (session.status === SessionStatus.FAILED) return WorkflowStepState.FAILED;
-    if (session.status === SessionStatus.CANCELLED) return WorkflowStepState.CANCELLED;
-    return session.checkpoint.stage === stage ? session.checkpoint.stepState : WorkflowStepState.ACTIVE;
-  }
-
-  private stageRank(stage: WorkflowStage): number {
-    if (stage === WorkflowStage.SAFETY_CHECK || stage === WorkflowStage.CAMERA_PREFLIGHT) return 0;
-    if (stage === WorkflowStage.GOTO) return 1;
-    if (stage === WorkflowStage.TRACKING) return 2;
-    if (stage === WorkflowStage.CAPTURE) return 3;
-    if (stage === WorkflowStage.PLATE_SOLVE || stage === WorkflowStage.DRIFT_CORRECTION) return 4;
-    if (stage === WorkflowStage.STACK || stage === WorkflowStage.TIMELAPSE) return 5;
-    if (stage === WorkflowStage.CLOUD_ENHANCEMENT) return 6;
-    return 7;
   }
 
   private stageTitle(stage: WorkflowStage): ResourceStr {

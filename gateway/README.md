@@ -9,6 +9,7 @@
 - FFmpeg 不做伪降级：未安装时健康检查会显示不可用，延时任务会明确失败；原始 JPEG 和其他处理不受影响。
 - 网关本地处理不生成、删除或移动星体。光污染校正只减去大尺度低频背景，原片与结果分别登记和下载。
 - 当前真实 R7 的单帧限制为 30 秒。只有本机验证 Bulb 菜单和释放流程后才应开放 31–300 秒；比赛主流程使用 10–30 秒子曝光堆栈。
+- 网关只读取相机设置，不自动修改 R7。Pad 必须先调用拍摄前自检；模式、RAW+JPEG、ISO、光圈或快门不符时先在相机上人工调整。
 
 ## 本机开发与模拟联调
 
@@ -85,6 +86,7 @@ sudo ufw enable
 | `GET /health` | 相机、板解析、FFmpeg 与模拟状态 |
 | `GET /api/v1/camera/status` | R7 连接状态 |
 | `GET /api/v1/camera/capabilities` | ISO、光圈、快门和 Bulb 能力 |
+| `GET /api/v1/camera/preflight` | 读取 R7 实际设置并返回阻断项与调整方法 |
 | `GET /api/v1/camera/liveview` | 单帧实时取景 JPEG |
 | `POST /api/v1/capture/tasks` | 创建一帧或多子曝光拍摄任务 |
 | `POST /api/v1/plate-solve` | 创建板解析任务 |
