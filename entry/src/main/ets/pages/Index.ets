@@ -3123,7 +3123,7 @@ struct Index {
           }
           this.taskProgress = progress.progressPercent;
           this.completedFrames = progress.completedFrames;
-          this.taskStage = progress.stage;
+          this.taskStage = progress.stageText;
           this.activeTaskId = progress.activeTaskId;
         });
       this.plateSolveCount = result.plateSolveCount;
