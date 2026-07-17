@@ -53,6 +53,15 @@ export interface VisibleStar {
   constellation: string;
   spectralType: string;
   distanceParsec: number;
+  /** 以下字段只服务于普通星图高频球面查询，不参与目录展示和业务序列化。 */
+  sourceDirectionX: number;
+  sourceDirectionY: number;
+  sourceDirectionZ: number;
+  motionCacheDay: number;
+  motionCacheCoordinate: EquatorialCoordinate;
+  motionCacheDirectionX: number;
+  motionCacheDirectionY: number;
+  motionCacheDirectionZ: number;
 }
 
 export interface VisibleStarCatalogMetadata {
@@ -108,6 +117,18 @@ export interface SphericalSkyQuery {
 }
 
 /**
+ * 普通星图球面查询的已计算结果。坐标和单位向量在目录筛选阶段只计算一次，
+ * 后续投影、精选亮星去重不得再次执行自行运动和完整球面角距计算。
+ */
+export interface SphericalVisibleStar {
+  star: VisibleStar;
+  coordinate: EquatorialCoordinate;
+  directionX: number;
+  directionY: number;
+  directionZ: number;
+}
+
+/**
  * 加载并查询 resources/rawfile/visible_stars.json。
  *
  * 服务只缓存解析后的紧凑恒星记录，不把 8921 条记录复制进 CelestialCatalog 的静态业务目录。
@@ -118,6 +139,8 @@ export class VisibleStarCatalogService {
   private static readonly DEFAULT_MAX_MAGNITUDE: number = 6.5;
   private static readonly DEFAULT_MAX_RESULTS: number = 1200;
   private static readonly MAX_CATALOG_RESULTS: number = 10000;
+  private static readonly PROPER_MOTION_BUCKET_MS: number = 86400000.0;
+  private static readonly EMPTY_CACHE_DAY: number = -2147483648;
 
   private stars: VisibleStar[] = [];
   private metadata: VisibleStarCatalogMetadata | undefined = undefined;
@@ -237,27 +260,75 @@ export class VisibleStarCatalogService {
   }
 
   filterSphericalViewport(query: SphericalSkyQuery): VisibleStar[] {
+    const candidates: SphericalVisibleStar[] =
+      this.filterSphericalViewportCoordinates(query);
+    const result: VisibleStar[] = [];
+    for (let index: number = 0; index < candidates.length; index++) {
+      result.push(candidates[index].star);
+    }
+    return result;
+  }
+
+  filterSphericalViewportCoordinates(query: SphericalSkyQuery): SphericalVisibleStar[] {
     this.ensureLoaded();
     const radius: number = this.clamp(Math.abs(query.radiusDegrees), 0.0, 180.0);
     const maxMagnitude: number = this.normalizeMagnitude(query.maxMagnitude === undefined ?
       VisibleStarCatalogService.DEFAULT_MAX_MAGNITUDE : query.maxMagnitude);
     const maxResults: number = this.normalizeLimit(query.maxResults === undefined ?
       VisibleStarCatalogService.DEFAULT_MAX_RESULTS : query.maxResults);
-    const center: EquatorialCoordinate = {
-      raHours: AstronomyService.normalizeHours(query.center.raHours),
-      decDegrees: this.clamp(query.center.decDegrees, -90.0, 90.0),
-      frame: query.center.frame
-    };
     const timestampMs: number = query.timestampMs === undefined ? Date.now() : query.timestampMs;
-    const result: VisibleStar[] = [];
+    const centerRaHours: number = AstronomyService.normalizeHours(query.center.raHours);
+    const centerDecDegrees: number = this.clamp(query.center.decDegrees, -90.0, 90.0);
+    const centerRaRadians: number = centerRaHours * Math.PI / 12.0;
+    const centerDecRadians: number = centerDecDegrees * Math.PI / 180.0;
+    const centerCosine: number = Math.cos(centerDecRadians);
+    const centerX: number = centerCosine * Math.cos(centerRaRadians);
+    const centerY: number = centerCosine * Math.sin(centerRaRadians);
+    const centerZ: number = Math.sin(centerDecRadians);
+    const minimumDot: number = Math.cos(radius * Math.PI / 180.0);
+    const sourceMinimumDot: number =
+      Math.cos(Math.min(180.0, radius + 0.25) * Math.PI / 180.0);
+    const cacheDay: number = Math.floor(timestampMs /
+      VisibleStarCatalogService.PROPER_MOTION_BUCKET_MS);
+    // 自行变化以年为尺度。按 UTC 日中点缓存可把同一拖动事务内的重复三角计算降为数组读取，
+    // 同时保持远高于当前星图像素尺度的精度。
+    const cacheTimestampMs: number = (cacheDay + 0.5) *
+      VisibleStarCatalogService.PROPER_MOTION_BUCKET_MS;
+    const result: SphericalVisibleStar[] = [];
     for (let index: number = 0; index < this.stars.length && result.length < maxResults; index++) {
       const star: VisibleStar = this.stars[index];
-      const coordinate: EquatorialCoordinate = this.coordinateAt(star, timestampMs);
-      if (star.magnitude > maxMagnitude || !this.passesEquatorialPrefilter(coordinate, center, radius)) {
+      // stars 已按星等升序排列；暗星之后可直接结束扫描。
+      if (star.magnitude > maxMagnitude) {
+        break;
+      }
+      if (star.sourceDirectionX * centerX + star.sourceDirectionY * centerY +
+        star.sourceDirectionZ * centerZ < sourceMinimumDot) {
         continue;
       }
-      if (AstronomyService.angularSeparation(coordinate, center) <= radius) {
-        result.push(star);
+
+      if (star.motionCacheDay !== cacheDay) {
+        const coordinate: EquatorialCoordinate = this.coordinateAt(star, cacheTimestampMs);
+        const raRadians: number = coordinate.raHours * Math.PI / 12.0;
+        const decRadians: number = coordinate.decDegrees * Math.PI / 180.0;
+        const declinationCosine: number = Math.cos(decRadians);
+        star.motionCacheDay = cacheDay;
+        star.motionCacheCoordinate.raHours = coordinate.raHours;
+        star.motionCacheCoordinate.decDegrees = coordinate.decDegrees;
+        star.motionCacheCoordinate.validAtMs = cacheTimestampMs;
+        star.motionCacheDirectionX = declinationCosine * Math.cos(raRadians);
+        star.motionCacheDirectionY = declinationCosine * Math.sin(raRadians);
+        star.motionCacheDirectionZ = Math.sin(decRadians);
+      }
+      // 单位向量点积与球面角距判断严格等价，但省去每颗星的 acos 和中心方向重复三角计算。
+      if (star.motionCacheDirectionX * centerX + star.motionCacheDirectionY * centerY +
+        star.motionCacheDirectionZ * centerZ >= minimumDot) {
+        result.push({
+          star: star,
+          coordinate: star.motionCacheCoordinate,
+          directionX: star.motionCacheDirectionX,
+          directionY: star.motionCacheDirectionY,
+          directionZ: star.motionCacheDirectionZ
+        });
       }
     }
     return result;
@@ -400,10 +471,17 @@ export class VisibleStarCatalogService {
         rejectedCount++;
         continue;
       }
+      const normalizedRaHours: number = AstronomyService.normalizeHours(record.raHours);
+      const rightAscensionRadians: number = normalizedRaHours * Math.PI / 12.0;
+      const declinationRadians: number = record.decDegrees * Math.PI / 180.0;
+      const declinationCosine: number = Math.cos(declinationRadians);
+      const sourceDirectionX: number = declinationCosine * Math.cos(rightAscensionRadians);
+      const sourceDirectionY: number = declinationCosine * Math.sin(rightAscensionRadians);
+      const sourceDirectionZ: number = Math.sin(declinationRadians);
       parsedStars.push({
         id: record.id,
         name: record.name,
-        raHours: AstronomyService.normalizeHours(record.raHours),
+        raHours: normalizedRaHours,
         decDegrees: record.decDegrees,
         pmRaMasPerYear: record.pmra,
         pmDecMasPerYear: record.pmdec,
@@ -411,7 +489,19 @@ export class VisibleStarCatalogService {
         magnitude: record.magnitude,
         constellation: record.constellation,
         spectralType: record.spectralType,
-        distanceParsec: record.distanceParsec
+        distanceParsec: record.distanceParsec,
+        sourceDirectionX: sourceDirectionX,
+        sourceDirectionY: sourceDirectionY,
+        sourceDirectionZ: sourceDirectionZ,
+        motionCacheDay: VisibleStarCatalogService.EMPTY_CACHE_DAY,
+        motionCacheCoordinate: {
+          raHours: normalizedRaHours,
+          decDegrees: record.decDegrees,
+          frame: EquatorialFrame.ICRS_J2000
+        },
+        motionCacheDirectionX: sourceDirectionX,
+        motionCacheDirectionY: sourceDirectionY,
+        motionCacheDirectionZ: sourceDirectionZ
       });
     }
 

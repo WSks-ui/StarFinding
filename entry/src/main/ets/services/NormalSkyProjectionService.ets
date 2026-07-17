@@ -20,6 +20,35 @@ interface SkyVector3 {
   z: number;
 }
 
+/**
+ * 同一帧内所有天体共享的投影参数。普通星图一次可能投影上千个点，若每个点都重复
+ * 归一化视口并计算三角函数，会直接占满 ArkUI 主线程的帧预算。
+ */
+export interface NormalSkyPreparedProjection {
+  viewport: NormalSkyViewport;
+  widthPixels: number;
+  heightPixels: number;
+  pixelScale: number;
+  rotationCosine: number;
+  rotationSine: number;
+  centerX: number;
+  centerY: number;
+  centerZ: number;
+  eastX: number;
+  eastY: number;
+  eastZ: number;
+  northX: number;
+  northY: number;
+  northZ: number;
+}
+
+/** 场景批量投影只需要屏幕位置和可见性，不计算昂贵但未使用的角距。 */
+export interface NormalSkyScreenProjection {
+  xPixels: number;
+  yPixels: number;
+  inViewport: boolean;
+}
+
 /** 普通星图的无 UI 球面投影核心，可在本地单元测试中独立验证。 */
 export class NormalSkyProjectionService {
   static readonly MIN_FIELD_OF_VIEW_DEGREES: number = 8.0;
@@ -71,10 +100,38 @@ export class NormalSkyProjectionService {
   /** 立体投影：北方默认向上、赤经增加方向（东方）默认向左。 */
   static project(coordinate: EquatorialCoordinate, viewport: NormalSkyViewport,
     size: SkyMapSize): NormalSkyProjection {
+    return NormalSkyProjectionService.projectPrepared(
+      coordinate, NormalSkyProjectionService.prepare(viewport, size));
+  }
+
+  static prepare(viewport: NormalSkyViewport, size: SkyMapSize): NormalSkyPreparedProjection {
     const normalized: NormalSkyViewport = NormalSkyProjectionService.normalizeViewport(viewport);
     const basis: SkyVector3[] = NormalSkyProjectionService.viewBasis(normalized);
+    const rotationRadians: number = normalized.rotationDegrees * Math.PI / 180.0;
+    return {
+      viewport: normalized,
+      widthPixels: Math.max(1.0, size.widthPixels),
+      heightPixels: Math.max(1.0, size.heightPixels),
+      pixelScale: NormalSkyProjectionService.pixelScale(normalized, size),
+      rotationCosine: Math.cos(rotationRadians),
+      rotationSine: Math.sin(rotationRadians),
+      centerX: basis[0].x,
+      centerY: basis[0].y,
+      centerZ: basis[0].z,
+      eastX: basis[1].x,
+      eastY: basis[1].y,
+      eastZ: basis[1].z,
+      northX: basis[2].x,
+      northY: basis[2].y,
+      northZ: basis[2].z
+    };
+  }
+
+  static projectPrepared(coordinate: EquatorialCoordinate,
+    prepared: NormalSkyPreparedProjection): NormalSkyProjection {
     const target: SkyVector3 = NormalSkyProjectionService.equatorialVector(coordinate);
-    const centerDot: number = NormalSkyProjectionService.dot(target, basis[0]);
+    const centerDot: number = target.x * prepared.centerX +
+      target.y * prepared.centerY + target.z * prepared.centerZ;
     const denominator: number = 1.0 + centerDot;
     const angularDistance: number = Math.acos(NormalSkyProjectionService.clamp(centerDot, -1.0, 1.0)) *
       180.0 / Math.PI;
@@ -86,47 +143,97 @@ export class NormalSkyProjectionService {
         angularDistanceDegrees: angularDistance
       };
     }
-    const planeEast: number = 2.0 * NormalSkyProjectionService.dot(target, basis[1]) / denominator;
-    const planeNorth: number = 2.0 * NormalSkyProjectionService.dot(target, basis[2]) / denominator;
-    const scale: number = NormalSkyProjectionService.pixelScale(normalized, size);
-    const rawX: number = -planeEast * scale;
-    const rawY: number = -planeNorth * scale;
-    const rotated: SkyVector3 = NormalSkyProjectionService.rotateScreen(rawX, rawY,
-      normalized.rotationDegrees);
-    const width: number = Math.max(1.0, size.widthPixels);
-    const height: number = Math.max(1.0, size.heightPixels);
-    const x: number = width / 2.0 + rotated.x;
-    const y: number = height / 2.0 + rotated.y;
+    const planeEast: number = 2.0 * (target.x * prepared.eastX +
+      target.y * prepared.eastY + target.z * prepared.eastZ) / denominator;
+    const planeNorth: number = 2.0 * (target.x * prepared.northX +
+      target.y * prepared.northY + target.z * prepared.northZ) / denominator;
+    const rawX: number = -planeEast * prepared.pixelScale;
+    const rawY: number = -planeNorth * prepared.pixelScale;
+    const rotatedX: number = rawX * prepared.rotationCosine - rawY * prepared.rotationSine;
+    const rotatedY: number = rawX * prepared.rotationSine + rawY * prepared.rotationCosine;
+    const x: number = prepared.widthPixels / 2.0 + rotatedX;
+    const y: number = prepared.heightPixels / 2.0 + rotatedY;
     return {
       xPixels: x,
       yPixels: y,
-      inViewport: x >= 0.0 && x <= width && y >= 0.0 && y <= height,
+      inViewport: x >= 0.0 && x <= prepared.widthPixels &&
+        y >= 0.0 && y <= prepared.heightPixels,
       angularDistanceDegrees: angularDistance
+    };
+  }
+
+  /**
+   * 星点、星座线和地平线的批量渲染路径。与 projectPrepared 使用完全相同的立体投影，
+   * 但跳过场景构建并不消费的 acos 角距，避免每帧为上千个点浪费主线程预算。
+   */
+  static projectScreenPrepared(coordinate: EquatorialCoordinate,
+    prepared: NormalSkyPreparedProjection): NormalSkyScreenProjection {
+    const target: SkyVector3 = NormalSkyProjectionService.equatorialVector(coordinate);
+    return NormalSkyProjectionService.projectDirectionScreenPrepared(
+      target.x, target.y, target.z, prepared);
+  }
+
+  /**
+   * 已持有单位方向向量时直接投影，避免普通星图在每个交互帧内把数百颗恒星
+   * 从赤经赤纬重复转换为 sin/cos。调用方必须传入归一化的赤道三维方向。
+   */
+  static projectDirectionScreenPrepared(directionX: number, directionY: number,
+    directionZ: number, prepared: NormalSkyPreparedProjection): NormalSkyScreenProjection {
+    const centerDot: number = directionX * prepared.centerX +
+      directionY * prepared.centerY + directionZ * prepared.centerZ;
+    const denominator: number = 1.0 + centerDot;
+    if (denominator <= 0.00000001) {
+      return {
+        xPixels: Number.POSITIVE_INFINITY,
+        yPixels: Number.POSITIVE_INFINITY,
+        inViewport: false
+      };
+    }
+    const planeEast: number = 2.0 * (directionX * prepared.eastX +
+      directionY * prepared.eastY + directionZ * prepared.eastZ) / denominator;
+    const planeNorth: number = 2.0 * (directionX * prepared.northX +
+      directionY * prepared.northY + directionZ * prepared.northZ) / denominator;
+    const rawX: number = -planeEast * prepared.pixelScale;
+    const rawY: number = -planeNorth * prepared.pixelScale;
+    const rotatedX: number = rawX * prepared.rotationCosine - rawY * prepared.rotationSine;
+    const rotatedY: number = rawX * prepared.rotationSine + rawY * prepared.rotationCosine;
+    const x: number = prepared.widthPixels / 2.0 + rotatedX;
+    const y: number = prepared.heightPixels / 2.0 + rotatedY;
+    return {
+      xPixels: x,
+      yPixels: y,
+      inViewport: x >= 0.0 && x <= prepared.widthPixels &&
+        y >= 0.0 && y <= prepared.heightPixels
     };
   }
 
   static unproject(xPixels: number, yPixels: number, viewport: NormalSkyViewport,
     size: SkyMapSize): EquatorialCoordinate {
-    const normalized: NormalSkyViewport = NormalSkyProjectionService.normalizeViewport(viewport);
-    const width: number = Math.max(1.0, size.widthPixels);
-    const height: number = Math.max(1.0, size.heightPixels);
-    const unrotated: SkyVector3 = NormalSkyProjectionService.rotateScreen(
-      xPixels - width / 2.0, yPixels - height / 2.0, -normalized.rotationDegrees);
-    const scale: number = NormalSkyProjectionService.pixelScale(normalized, size);
-    const planeEast: number = -unrotated.x / scale;
-    const planeNorth: number = -unrotated.y / scale;
+    return NormalSkyProjectionService.unprojectPrepared(
+      xPixels, yPixels, NormalSkyProjectionService.prepare(viewport, size));
+  }
+
+  static unprojectPrepared(xPixels: number, yPixels: number,
+    prepared: NormalSkyPreparedProjection): EquatorialCoordinate {
+    const screenX: number = xPixels - prepared.widthPixels / 2.0;
+    const screenY: number = yPixels - prepared.heightPixels / 2.0;
+    const unrotatedX: number = screenX * prepared.rotationCosine +
+      screenY * prepared.rotationSine;
+    const unrotatedY: number = -screenX * prepared.rotationSine +
+      screenY * prepared.rotationCosine;
+    const planeEast: number = -unrotatedX / prepared.pixelScale;
+    const planeNorth: number = -unrotatedY / prepared.pixelScale;
     const radiusSquared: number = planeEast * planeEast + planeNorth * planeNorth;
     const denominator: number = 1.0 + radiusSquared / 4.0;
     const centerFactor: number = (1.0 - radiusSquared / 4.0) / denominator;
     const tangentFactor: number = 1.0 / denominator;
-    const basis: SkyVector3[] = NormalSkyProjectionService.viewBasis(normalized);
     const result: SkyVector3 = NormalSkyProjectionService.normalizeVector({
-      x: centerFactor * basis[0].x + tangentFactor *
-        (planeEast * basis[1].x + planeNorth * basis[2].x),
-      y: centerFactor * basis[0].y + tangentFactor *
-        (planeEast * basis[1].y + planeNorth * basis[2].y),
-      z: centerFactor * basis[0].z + tangentFactor *
-        (planeEast * basis[1].z + planeNorth * basis[2].z)
+      x: centerFactor * prepared.centerX + tangentFactor *
+        (planeEast * prepared.eastX + planeNorth * prepared.northX),
+      y: centerFactor * prepared.centerY + tangentFactor *
+        (planeEast * prepared.eastY + planeNorth * prepared.northY),
+      z: centerFactor * prepared.centerZ + tangentFactor *
+        (planeEast * prepared.eastZ + planeNorth * prepared.northZ)
     });
     return NormalSkyProjectionService.vectorCoordinate(result);
   }
