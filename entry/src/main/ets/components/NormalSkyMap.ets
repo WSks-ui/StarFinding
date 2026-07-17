@@ -19,6 +19,12 @@ interface SkyLabelBox {
 }
 
 const TAP_MOVE_TOLERANCE_PIXELS: number = 14.0;
+const STAR_DISC_COLORS: string[] = [
+  '#B9D8FF', '#E1ECFF', '#FFF7E1', '#FFE6A8',
+  '#FFC887', '#FF9C7A', '#E8F1FF', '#FFFFFF'
+];
+const STAR_DISC_BUCKET_COUNT: number = 16;
+const LABEL_BUCKET_COUNT: number = 6;
 
 /** 普通星图单 Canvas 渲染器；绘制对象与命中对象来自同一 NormalSkyScene。 */
 @Component
@@ -40,6 +46,15 @@ export struct NormalSkyMap {
   private touchTracking: boolean = false;
   private touchStartX: number = 0.0;
   private touchStartY: number = 0.0;
+  /**
+   * Canvas 高频绘制复用桶数组，避免拖动期间为每帧创建 22 组临时数组。
+   * 前 8 桶为地平线上恒星，后 8 桶为地平线下恒星。
+   */
+  private starDiscBuckets: ProjectedSkyObject[][] = [
+    [], [], [], [], [], [], [], [],
+    [], [], [], [], [], [], [], []
+  ];
+  private labelBuckets: ProjectedSkyObject[][] = [[], [], [], [], [], []];
 
   aboutToDisappear(): void {
     this.staticCanvasReady = false;
@@ -128,18 +143,20 @@ export struct NormalSkyMap {
     this.context.lineWidth = lineWidth;
     this.context.lineCap = 'round';
     this.context.lineJoin = 'round';
+    this.context.beginPath();
+    let hasPath: boolean = false;
     for (let index: number = 0; index < lines.length; index++) {
       const points: SkyScreenPoint[] = lines[index].points;
       if (points.length < 2) {
         continue;
       }
-      this.context.beginPath();
       this.context.moveTo(points[0].xPixels, points[0].yPixels);
       for (let pointIndex: number = 1; pointIndex < points.length; pointIndex++) {
         this.context.lineTo(points[pointIndex].xPixels, points[pointIndex].yPixels);
       }
-      this.context.stroke();
+      hasPath = true;
     }
+    if (hasPath) this.context.stroke();
     this.context.restore();
   }
 
@@ -152,16 +169,18 @@ export struct NormalSkyMap {
     this.context.lineCap = 'round';
     this.context.lineJoin = 'round';
     this.context.setLineDash([6.0, 4.0]);
+    this.context.beginPath();
+    let hasPath: boolean = false;
     for (let index: number = 0; index < lines.length; index++) {
       const points: SkyScreenPoint[] = lines[index].points;
       if (points.length < 2) continue;
-      this.context.beginPath();
       this.context.moveTo(points[0].xPixels, points[0].yPixels);
       for (let pointIndex: number = 1; pointIndex < points.length; pointIndex++) {
         this.context.lineTo(points[pointIndex].xPixels, points[pointIndex].yPixels);
       }
-      this.context.stroke();
+      hasPath = true;
     }
+    if (hasPath) this.context.stroke();
     this.context.setLineDash([]);
     this.context.restore();
   }
@@ -180,38 +199,113 @@ export struct NormalSkyMap {
 
   private drawObjects(objects: ProjectedSkyObject[], width: number, height: number): void {
     const occupied: SkyLabelBox[] = [];
+    let selectedObject: ProjectedSkyObject | undefined = undefined;
     this.context.save();
+    this.prepareObjectBuckets(objects, width, height);
+    this.drawStarDiscBuckets();
     for (let index: number = 0; index < objects.length; index++) {
       const object: ProjectedSkyObject = objects[index];
-      if (!this.inDrawingBounds(object, width, height) || object.type === CelestialType.CONSTELLATION) {
+      if (!this.inDrawingBounds(object, width, height)) {
         continue;
       }
-      const opacity: number = object.aboveHorizon === false ? 0.42 : 1.0;
-      if (object.glyphKind === SkyObjectGlyphKind.STAR) {
-        this.drawStarGlyph(object, opacity);
-      } else if (this.isSolarSystemGlyph(object.glyphKind)) {
-        this.drawSolarSystemGlyph(object, opacity);
-      } else {
-        this.drawDeepSkyGlyph(object, opacity);
-      }
-    }
-
-    // 标签按业务优先级分批绘制，避免普通暗星占据行星和已选目标的位置。
-    for (let priority: number = 100; priority >= 10; priority -= 10) {
-      for (let index: number = 0; index < objects.length; index++) {
-        const object: ProjectedSkyObject = objects[index];
-        if (object.label.length === 0 || !this.inDrawingBounds(object, width, height) ||
-          this.labelBucket(object) !== priority) {
-          continue;
+      if (object.type !== CelestialType.CONSTELLATION) {
+        const opacity: number = object.aboveHorizon === false ? 0.42 : 1.0;
+        if (object.glyphKind === SkyObjectGlyphKind.STAR) {
+          if (object.selected) this.drawStarGlyph(object, opacity);
+        } else if (this.isSolarSystemGlyph(object.glyphKind)) {
+          this.drawSolarSystemGlyph(object, opacity);
+        } else {
+          this.drawDeepSkyGlyph(object, opacity);
         }
-        this.drawLabel(object, occupied, width, height);
+      }
+      if (object.selected) {
+        selectedObject = object;
       }
     }
-    this.drawSelectedObject(objects, width, height);
+    // 标签已在 prepareObjectBuckets 中按优先级收集，这里无需再重复扫描整个对象数组。
+    for (let bucketIndex: number = LABEL_BUCKET_COUNT - 1; bucketIndex >= 0; bucketIndex--) {
+      const bucket: ProjectedSkyObject[] = this.labelBuckets[bucketIndex];
+      for (let objectIndex: number = 0; objectIndex < bucket.length; objectIndex++) {
+        this.drawLabel(bucket[objectIndex], occupied, width, height);
+      }
+    }
+    if (selectedObject !== undefined) {
+      this.drawSelectedObject(selectedObject);
+    }
     this.context.restore();
   }
 
+  private prepareObjectBuckets(objects: ProjectedSkyObject[], width: number, height: number): void {
+    this.clearObjectBuckets();
+    for (let index: number = 0; index < objects.length; index++) {
+      const object: ProjectedSkyObject = objects[index];
+      if (!this.inDrawingBounds(object, width, height)) {
+        continue;
+      }
+      if (object.label.length > 0) {
+        this.labelBuckets[this.labelBucketIndex(object)].push(object);
+      }
+      if (object.glyphKind !== SkyObjectGlyphKind.STAR || object.selected) {
+        continue;
+      }
+      const dimmed: boolean = object.aboveHorizon === false;
+      const bucketIndex: number = this.starColorBucketIndex(object.color) +
+        (dimmed ? STAR_DISC_COLORS.length : 0);
+      this.starDiscBuckets[bucketIndex].push(object);
+      this.drawStarHighlightEffects(object, dimmed ? 0.42 : 1.0);
+    }
+  }
+
+  private clearObjectBuckets(): void {
+    for (let index: number = 0; index < STAR_DISC_BUCKET_COUNT; index++) {
+      this.starDiscBuckets[index].length = 0;
+    }
+    for (let index: number = 0; index < LABEL_BUCKET_COUNT; index++) {
+      this.labelBuckets[index].length = 0;
+    }
+  }
+
+  private drawStarDiscBuckets(): void {
+    for (let bucketIndex: number = 0; bucketIndex < STAR_DISC_BUCKET_COUNT; bucketIndex++) {
+      const bucket: ProjectedSkyObject[] = this.starDiscBuckets[bucketIndex];
+      if (bucket.length === 0) {
+        continue;
+      }
+      this.context.beginPath();
+      for (let objectIndex: number = 0; objectIndex < bucket.length; objectIndex++) {
+        const object: ProjectedSkyObject = bucket[objectIndex];
+        const radius: number = Math.max(0.7, object.sizePixels / 2.0);
+        this.context.moveTo(object.xPixels + radius, object.yPixels);
+        this.context.arc(object.xPixels, object.yPixels, radius, 0.0, Math.PI * 2.0);
+      }
+      const dimmed: boolean = bucketIndex >= STAR_DISC_COLORS.length;
+      const colorIndex: number = dimmed ? bucketIndex - STAR_DISC_COLORS.length : bucketIndex;
+      this.context.globalAlpha = dimmed ? 0.42 : 1.0;
+      this.context.fillStyle = STAR_DISC_COLORS[colorIndex];
+      this.context.fill();
+    }
+  }
+
+  private starColorBucketIndex(color: string): number {
+    for (let index: number = 0; index < STAR_DISC_COLORS.length; index++) {
+      if (STAR_DISC_COLORS[index] === color) {
+        return index;
+      }
+    }
+    return STAR_DISC_COLORS.length - 1;
+  }
+
   private drawStarGlyph(object: ProjectedSkyObject, opacity: number): void {
+    this.drawStarHighlightEffects(object, opacity);
+    const radius: number = Math.max(0.7, object.sizePixels / 2.0);
+    this.context.globalAlpha = opacity;
+    this.context.fillStyle = object.color;
+    this.context.beginPath();
+    this.context.arc(object.xPixels, object.yPixels, radius, 0.0, Math.PI * 2.0);
+    this.context.fill();
+  }
+
+  private drawStarHighlightEffects(object: ProjectedSkyObject, opacity: number): void {
     const radius: number = Math.max(0.7, object.sizePixels / 2.0);
     const magnitude: number = object.magnitude === undefined ? 9.0 : object.magnitude;
     if (magnitude <= 1.5 || object.selected) {
@@ -234,11 +328,6 @@ export struct NormalSkyMap {
       this.context.lineTo(object.xPixels, object.yPixels + ray);
       this.context.stroke();
     }
-    this.context.globalAlpha = opacity;
-    this.context.fillStyle = object.color;
-    this.context.beginPath();
-    this.context.arc(object.xPixels, object.yPixels, radius, 0.0, Math.PI * 2.0);
-    this.context.fill();
   }
 
   private isSolarSystemGlyph(kind: SkyObjectGlyphKind): boolean {
@@ -682,31 +771,24 @@ export struct NormalSkyMap {
       boxY + boxHeight / 2.0, Math.max(1.0, boxWidth - 8.0));
   }
 
-  private drawSelectedObject(objects: ProjectedSkyObject[], width: number, height: number): void {
-    for (let index: number = 0; index < objects.length; index++) {
-      const object: ProjectedSkyObject = objects[index];
-      if (!object.selected || !this.inDrawingBounds(object, width, height)) {
-        continue;
-      }
-      this.context.globalAlpha = 0.92;
-      this.context.strokeStyle = '#7DE5EA';
-      this.context.lineWidth = 1.8;
-      this.context.beginPath();
-      this.context.arc(object.xPixels, object.yPixels, Math.max(12.0, object.sizePixels + 7.0),
-        0.0, Math.PI * 2.0);
-      this.context.stroke();
-      return;
-    }
+  private drawSelectedObject(object: ProjectedSkyObject): void {
+    this.context.globalAlpha = 0.92;
+    this.context.strokeStyle = '#7DE5EA';
+    this.context.lineWidth = 1.8;
+    this.context.beginPath();
+    this.context.arc(object.xPixels, object.yPixels, Math.max(12.0, object.sizePixels + 7.0),
+      0.0, Math.PI * 2.0);
+    this.context.stroke();
   }
 
-  private labelBucket(object: ProjectedSkyObject): number {
-    if (object.selected) return 100;
+  private labelBucketIndex(object: ProjectedSkyObject): number {
+    if (object.selected) return 5;
     if (object.type === CelestialType.SUN || object.type === CelestialType.MOON ||
-      object.type === CelestialType.PLANET) return 90;
-    if (object.type === CelestialType.MESSIER) return 80;
-    if (object.type === CelestialType.CONSTELLATION) return 70;
-    if (object.magnitude !== undefined && object.magnitude <= 1.5) return 60;
-    return 50;
+      object.type === CelestialType.PLANET) return 4;
+    if (object.type === CelestialType.MESSIER) return 3;
+    if (object.type === CelestialType.CONSTELLATION) return 2;
+    if (object.magnitude !== undefined && object.magnitude <= 1.5) return 1;
+    return 0;
   }
 
   private overlaps(candidate: SkyLabelBox, occupied: SkyLabelBox[]): boolean {

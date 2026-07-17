@@ -12,7 +12,6 @@ import {
   SolarSystemAppearance
 } from '../models/DomainModels';
 import {
-  NormalSkyProjection,
   NormalSkyScene,
   NormalSkyViewport,
   ProjectedSkyObject,
@@ -28,9 +27,17 @@ import {
 import { AstronomyService } from './AstronomyService';
 import { EphemerisService } from './EphemerisService';
 import { ConstellationLineGroup, NormalSkyCatalogService } from './NormalSkyCatalogService';
-import { NormalSkyProjectionService } from './NormalSkyProjectionService';
+import {
+  NormalSkyPreparedProjection,
+  NormalSkyProjectionService,
+  NormalSkyScreenProjection
+} from './NormalSkyProjectionService';
 import { NormalSkyOrientationService } from './NormalSkyOrientationService';
-import { VisibleStar, VisibleStarCatalogService } from './VisibleStarCatalogService';
+import {
+  SphericalVisibleStar,
+  VisibleStar,
+  VisibleStarCatalogService
+} from './VisibleStarCatalogService';
 
 export interface NormalSkySceneQuery {
   viewport: NormalSkyViewport;
@@ -41,6 +48,8 @@ export interface NormalSkySceneQuery {
   observer?: ObserverState;
   guideInsets?: SkyGuideInsets;
   showDirectionMarkers?: boolean;
+  /** 连续拖动、缩放、惯性和飞行动画期间仅降低标签与地平遮罩细节，恒星集合保持不变。 */
+  interactive?: boolean;
 }
 
 interface NormalSkyStaticCache {
@@ -57,27 +66,56 @@ interface NormalSkyTrajectoryCache {
   lines: SkyPolyline[];
 }
 
+interface NormalSkyTrajectorySourceCache {
+  key: string;
+  coordinates: EquatorialCoordinate[];
+}
+
+interface NormalSkyDynamicCatalogEntry {
+  object: CelestialObject;
+  coordinate: EquatorialCoordinate;
+  appearance?: SolarSystemAppearance;
+}
+
+interface NormalSkyDynamicCatalogCache {
+  key: string;
+  entries: NormalSkyDynamicCatalogEntry[];
+}
+
+interface NormalSkyDirectionVector {
+  x: number;
+  y: number;
+  z: number;
+}
+
 export interface NormalSkySceneCacheStats {
   staticBuildCount: number;
   staticCacheHitCount: number;
   dynamicBuildCount: number;
+  dynamicCatalogCacheHitCount: number;
   trajectoryBuildCount: number;
   trajectoryCacheHitCount: number;
 }
 
 /** 把多个离线目录合成为 Canvas 一次可绘制的场景。 */
 export class NormalSkySceneService {
+  private static readonly CURATED_DUPLICATE_MINIMUM_DOT: number = 0.9999998629221643;
   private readonly visibleStars: VisibleStarCatalogService;
   private readonly lineCatalog: NormalSkyCatalogService;
   private staticCache: NormalSkyStaticCache | undefined = undefined;
   private trajectoryCache: NormalSkyTrajectoryCache | undefined = undefined;
+  private trajectorySourceCache: NormalSkyTrajectorySourceCache | undefined = undefined;
+  private dynamicCatalogCache: NormalSkyDynamicCatalogCache | undefined = undefined;
   private staticRevision: number = 0;
   private dynamicRevision: number = 0;
   private staticBuildCount: number = 0;
   private staticCacheHitCount: number = 0;
   private dynamicBuildCount: number = 0;
+  private dynamicCatalogCacheHitCount: number = 0;
   private trajectoryBuildCount: number = 0;
   private trajectoryCacheHitCount: number = 0;
+  private curatedBrightStarDirections: NormalSkyDirectionVector[] = [];
+  private curatedBrightStarDirectionSourceCount: number = -1;
 
   constructor(visibleStars: VisibleStarCatalogService, lineCatalog: NormalSkyCatalogService) {
     this.visibleStars = visibleStars;
@@ -85,13 +123,16 @@ export class NormalSkySceneService {
   }
 
   build(query: NormalSkySceneQuery): NormalSkyScene {
-    const staticLayer: NormalSkyStaticCache = this.resolveStaticLayer(query);
+    const prepared: NormalSkyPreparedProjection =
+      NormalSkyProjectionService.prepare(query.viewport, query.size);
+    const staticLayer: NormalSkyStaticCache = this.resolveStaticLayer(query, prepared);
     const dynamicObjects: ProjectedSkyObject[] = [];
     if (query.layers.solarSystem) {
-      this.appendCatalogObjects(dynamicObjects, CelestialCatalog.solarSystem(), query, true);
+      this.appendCatalogObjects(
+        dynamicObjects, CelestialCatalog.solarSystem(), query, true, prepared);
     }
     const horizonMask: SkyScreenRect[] = query.layers.horizon && query.observer !== undefined ?
-      this.buildHorizonMask(query) : [];
+      this.buildHorizonMask(query, prepared) : [];
     const objects: ProjectedSkyObject[] = staticLayer.objects.concat(dynamicObjects);
     this.dynamicRevision++;
     this.dynamicBuildCount++;
@@ -102,8 +143,10 @@ export class NormalSkySceneService {
       constellationLines: staticLayer.constellationLines,
       gridLines: staticLayer.gridLines,
       eclipticLines: staticLayer.eclipticLines,
-      horizonLines: query.layers.horizon && query.observer !== undefined ? this.buildHorizon(query) : [],
-      trajectoryLines: query.layers.solarSystem ? this.buildSelectedTrajectoryCached(query) : [],
+      horizonLines: query.layers.horizon && query.observer !== undefined ?
+        this.buildHorizon(query, prepared) : [],
+      trajectoryLines: query.layers.solarSystem ?
+        this.buildSelectedTrajectoryCached(query, prepared) : [],
       horizonMask: horizonMask,
       orientationSnapshot: NormalSkyOrientationService.build({
         viewport: query.viewport,
@@ -123,6 +166,7 @@ export class NormalSkySceneService {
       staticBuildCount: this.staticBuildCount,
       staticCacheHitCount: this.staticCacheHitCount,
       dynamicBuildCount: this.dynamicBuildCount,
+      dynamicCatalogCacheHitCount: this.dynamicCatalogCacheHitCount,
       trajectoryBuildCount: this.trajectoryBuildCount,
       trajectoryCacheHitCount: this.trajectoryCacheHitCount
     };
@@ -132,9 +176,12 @@ export class NormalSkySceneService {
   invalidateForTimeSelection(): void {
     this.staticCache = undefined;
     this.trajectoryCache = undefined;
+    this.trajectorySourceCache = undefined;
+    this.dynamicCatalogCache = undefined;
   }
 
-  private resolveStaticLayer(query: NormalSkySceneQuery): NormalSkyStaticCache {
+  private resolveStaticLayer(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): NormalSkyStaticCache {
     const key: string = this.staticCacheKey(query);
     if (this.staticCache !== undefined && this.staticCache.key === key) {
       this.staticCacheHitCount++;
@@ -142,13 +189,16 @@ export class NormalSkySceneService {
     }
     const objects: ProjectedSkyObject[] = [];
     const brightStars: CelestialObject[] = CelestialCatalog.brightStars();
-    this.appendCatalogObjects(objects, brightStars, query, false);
-    this.appendVisibleStars(objects, brightStars, query, false);
+    this.prepareCuratedBrightStarDirections(brightStars);
+    this.appendCatalogObjects(objects, brightStars, query, false, prepared);
+    this.appendVisibleStars(objects, query, false, prepared);
     if (query.layers.constellationLines) {
-      this.appendCatalogObjects(objects, CelestialCatalog.constellations(), query, false);
+      this.appendCatalogObjects(
+        objects, CelestialCatalog.constellations(), query, false, prepared);
     }
     if (query.layers.deepSky) {
-      this.appendCatalogObjects(objects, CelestialCatalog.messierObjects(), query, false);
+      this.appendCatalogObjects(
+        objects, CelestialCatalog.messierObjects(), query, false, prepared);
     }
     this.staticRevision++;
     this.staticBuildCount++;
@@ -156,21 +206,24 @@ export class NormalSkySceneService {
       key: key,
       revision: this.staticRevision,
       objects: objects,
-      constellationLines: query.layers.constellationLines ? this.buildConstellationLines(query) : [],
-      gridLines: query.layers.equatorialGrid ? this.buildEquatorialGrid(query) : [],
-      eclipticLines: query.layers.ecliptic ? this.buildEcliptic(query) : []
+      constellationLines: query.layers.constellationLines ?
+        this.buildConstellationLines(query, prepared) : [],
+      gridLines: query.layers.equatorialGrid ? this.buildEquatorialGrid(query, prepared) : [],
+      eclipticLines: query.layers.ecliptic ? this.buildEcliptic(query, prepared) : []
     };
     this.staticCache = cache;
     return cache;
   }
 
-  private appendVisibleStars(result: ProjectedSkyObject[], brightStars: CelestialObject[],
-    query: NormalSkySceneQuery, includeHorizon: boolean): void {
+  private appendVisibleStars(result: ProjectedSkyObject[],
+    query: NormalSkySceneQuery, includeHorizon: boolean,
+    prepared: NormalSkyPreparedProjection): void {
     if (!this.visibleStars.isLoaded()) {
       return;
     }
     const radius: number = this.queryRadius(query.viewport, query.size);
-    const stars: VisibleStar[] = this.visibleStars.filterSphericalViewport({
+    const candidates: SphericalVisibleStar[] =
+      this.visibleStars.filterSphericalViewportCoordinates({
       center: {
         raHours: query.viewport.centerRaHours,
         decDegrees: query.viewport.centerDecDegrees,
@@ -181,20 +234,24 @@ export class NormalSkySceneService {
       maxResults: this.maximumStarCount(query.viewport.fieldOfViewDegrees),
       timestampMs: query.timestampMs
     });
-    for (let index: number = 0; index < stars.length; index++) {
-      const star: VisibleStar = stars[index];
-      const coordinate: EquatorialCoordinate = this.visibleStars.coordinateAt(star, query.timestampMs);
-      if (this.duplicatesCuratedStar(coordinate, brightStars)) {
+    for (let index: number = 0; index < candidates.length; index++) {
+      const candidate: SphericalVisibleStar = candidates[index];
+      const star: VisibleStar = candidate.star;
+      const coordinate: EquatorialCoordinate = candidate.coordinate;
+      if (this.duplicatesCuratedStar(candidate)) {
         continue;
       }
-      const projection: NormalSkyProjection = NormalSkyProjectionService.project(
-        coordinate, query.viewport, query.size);
+      const projection: NormalSkyScreenProjection =
+        NormalSkyProjectionService.projectDirectionScreenPrepared(
+          candidate.directionX, candidate.directionY, candidate.directionZ, prepared);
       if (!projection.inViewport) {
         continue;
       }
       const id: string = `hyg-${star.id.toLowerCase()}`;
       const selected: boolean = id === query.selectedTargetId;
-      const labelMagnitude: number = query.viewport.fieldOfViewDegrees <= 35.0 ? 4.5 : 2.2;
+      const labelMagnitude: number = query.interactive === true ?
+        (query.viewport.fieldOfViewDegrees <= 35.0 ? 2.8 : 1.2) :
+        (query.viewport.fieldOfViewDegrees <= 35.0 ? 4.5 : 2.2);
       result.push({
         id: id,
         type: CelestialType.STAR,
@@ -216,7 +273,16 @@ export class NormalSkySceneService {
   }
 
   private appendCatalogObjects(result: ProjectedSkyObject[], objects: CelestialObject[],
-    query: NormalSkySceneQuery, includeHorizon: boolean): void {
+    query: NormalSkySceneQuery, includeHorizon: boolean,
+    prepared: NormalSkyPreparedProjection): void {
+    if (includeHorizon) {
+      const entries: NormalSkyDynamicCatalogEntry[] =
+        this.resolveDynamicCatalogEntries(objects, query.timestampMs);
+      for (let index: number = 0; index < entries.length; index++) {
+        this.appendDynamicCatalogEntry(result, entries[index], query, prepared);
+      }
+      return;
+    }
     for (let index: number = 0; index < objects.length; index++) {
       const object: CelestialObject = objects[index];
       const coordinate: EquatorialCoordinate | undefined = EphemerisService.skyCoordinate(
@@ -224,8 +290,8 @@ export class NormalSkySceneService {
       if (coordinate === undefined || !this.shouldDisplay(object, query)) {
         continue;
       }
-      const projection: NormalSkyProjection = NormalSkyProjectionService.project(
-        coordinate, query.viewport, query.size);
+      const projection: NormalSkyScreenProjection =
+        NormalSkyProjectionService.projectScreenPrepared(coordinate, prepared);
       if (!projection.inViewport) {
         continue;
       }
@@ -245,14 +311,74 @@ export class NormalSkySceneService {
         magnitude: appearance === undefined ? object.magnitude : appearance.magnitude,
         appearance: appearance,
         brightLimbScreenAngleDegrees: appearance === undefined ? undefined :
-          this.brightLimbScreenAngle(coordinate, appearance.brightLimbAngleDegrees, query),
-        label: this.objectLabel(object, query.viewport.fieldOfViewDegrees, selected),
+          this.brightLimbScreenAngle(
+            coordinate, appearance.brightLimbAngleDegrees, query, prepared),
+        label: this.objectLabel(
+          object, query.viewport.fieldOfViewDegrees, selected, query.interactive === true),
         designation: object.designation,
         color: this.objectColor(object),
         aboveHorizon: includeHorizon ? this.aboveHorizon(coordinate, query.observer) : undefined,
         selected: selected
       });
     }
+  }
+
+  private resolveDynamicCatalogEntries(objects: CelestialObject[],
+    timestampMs: number): NormalSkyDynamicCatalogEntry[] {
+    const timestampBucket: number = Math.floor(timestampMs / 60000.0);
+    const key: string = `${timestampBucket}|${objects.length}`;
+    if (this.dynamicCatalogCache !== undefined && this.dynamicCatalogCache.key === key) {
+      this.dynamicCatalogCacheHitCount++;
+      return this.dynamicCatalogCache.entries;
+    }
+    const entries: NormalSkyDynamicCatalogEntry[] = [];
+    const bucketTimestampMs: number = timestampBucket * 60000.0;
+    for (let index: number = 0; index < objects.length; index++) {
+      const object: CelestialObject = objects[index];
+      const coordinate: EquatorialCoordinate | undefined =
+        EphemerisService.skyCoordinate(object, bucketTimestampMs);
+      if (coordinate === undefined) continue;
+      entries.push({
+        object: object,
+        coordinate: coordinate,
+        appearance: EphemerisService.appearance(object, bucketTimestampMs)
+      });
+    }
+    this.dynamicCatalogCache = { key: key, entries: entries };
+    return entries;
+  }
+
+  private appendDynamicCatalogEntry(result: ProjectedSkyObject[],
+    entry: NormalSkyDynamicCatalogEntry, query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): void {
+    const object: CelestialObject = entry.object;
+    if (!this.shouldDisplay(object, query)) return;
+    const projection: NormalSkyScreenProjection =
+      NormalSkyProjectionService.projectScreenPrepared(entry.coordinate, prepared);
+    if (!projection.inViewport) return;
+    const selected: boolean = object.id === query.selectedTargetId;
+    result.push({
+      id: object.id,
+      type: object.type,
+      glyphKind: NormalSkySceneService.glyphKindFor(object),
+      coordinate: entry.coordinate,
+      xPixels: projection.xPixels,
+      yPixels: projection.yPixels,
+      sizePixels: this.objectSize(object, selected, query.viewport.fieldOfViewDegrees),
+      hitRadiusPixels: 20.0,
+      hitPriority: selected ? 100 : this.hitPriority(object.type),
+      magnitude: entry.appearance === undefined ? object.magnitude : entry.appearance.magnitude,
+      appearance: entry.appearance,
+      brightLimbScreenAngleDegrees: entry.appearance === undefined ? undefined :
+        this.brightLimbScreenAngle(
+          entry.coordinate, entry.appearance.brightLimbAngleDegrees, query, prepared),
+      label: this.objectLabel(
+        object, query.viewport.fieldOfViewDegrees, selected, query.interactive === true),
+      designation: object.designation,
+      color: this.objectColor(object),
+      aboveHorizon: this.aboveHorizon(entry.coordinate, query.observer),
+      selected: selected
+    });
   }
 
   private shouldDisplay(object: CelestialObject, query: NormalSkySceneQuery): boolean {
@@ -272,23 +398,48 @@ export class NormalSkySceneService {
     return true;
   }
 
-  private buildConstellationLines(query: NormalSkySceneQuery): SkyPolyline[] {
+  private buildConstellationLines(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyPolyline[] {
     if (!this.lineCatalog.isLoaded()) {
       return [];
     }
     const result: SkyPolyline[] = [];
     const groups: ConstellationLineGroup[] = this.lineCatalog.getLineGroups();
+    const viewportRadiusDegrees: number = this.queryRadius(query.viewport, query.size);
     for (let groupIndex: number = 0; groupIndex < groups.length; groupIndex++) {
       const group: ConstellationLineGroup = groups[groupIndex];
+      if (!this.constellationGroupIntersectsViewport(
+        group, prepared, viewportRadiusDegrees)) {
+        continue;
+      }
       for (let lineIndex: number = 0; lineIndex < group.lines.length; lineIndex++) {
         this.appendProjectedLine(result, `${group.designation}-${lineIndex}`,
-          SkyPolylineKind.CONSTELLATION, group.lines[lineIndex], query);
+          SkyPolylineKind.CONSTELLATION, group.lines[lineIndex], query, prepared);
       }
     }
     return result;
   }
 
-  private buildEquatorialGrid(query: NormalSkySceneQuery): SkyPolyline[] {
+  /**
+   * 使用离线加载时计算的球面包围帽做整组粗裁剪。
+   * 两个球面帽明确不相交时才跳过，180° 标记组始终保留，确保跨 0h、近天极和超大星座不漏线。
+   */
+  private constellationGroupIntersectsViewport(group: ConstellationLineGroup,
+    prepared: NormalSkyPreparedProjection, viewportRadiusDegrees: number): boolean {
+    const combinedRadiusDegrees: number =
+      viewportRadiusDegrees + group.angularRadiusDegrees;
+    if (combinedRadiusDegrees >= 180.0) {
+      return true;
+    }
+    const centerDot: number = prepared.centerX * group.centerDirectionX +
+      prepared.centerY * group.centerDirectionY +
+      prepared.centerZ * group.centerDirectionZ;
+    const minimumDot: number = Math.cos(combinedRadiusDegrees * Math.PI / 180.0);
+    return centerDot >= minimumDot;
+  }
+
+  private buildEquatorialGrid(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyPolyline[] {
     const result: SkyPolyline[] = [];
     const rightAscensionStep: number = query.viewport.fieldOfViewDegrees <= 35.0 ? 1.0 : 2.0;
     for (let ra: number = 0.0; ra < 24.0; ra += rightAscensionStep) {
@@ -296,19 +447,22 @@ export class NormalSkySceneService {
       for (let dec: number = -90.0; dec <= 90.0; dec += 3.0) {
         line.push({ raHours: ra, decDegrees: dec, frame: EquatorialFrame.ICRS_J2000 });
       }
-      this.appendProjectedLine(result, `ra-${ra}`, SkyPolylineKind.GRID, line, query);
+      this.appendProjectedLine(
+        result, `ra-${ra}`, SkyPolylineKind.GRID, line, query, prepared);
     }
     for (let dec: number = -75.0; dec <= 75.0; dec += 15.0) {
       const line: EquatorialCoordinate[] = [];
       for (let ra: number = 0.0; ra <= 24.0; ra += 0.25) {
         line.push({ raHours: ra, decDegrees: dec, frame: EquatorialFrame.ICRS_J2000 });
       }
-      this.appendProjectedLine(result, `dec-${dec}`, SkyPolylineKind.GRID, line, query);
+      this.appendProjectedLine(
+        result, `dec-${dec}`, SkyPolylineKind.GRID, line, query, prepared);
     }
     return result;
   }
 
-  private buildEcliptic(query: NormalSkySceneQuery): SkyPolyline[] {
+  private buildEcliptic(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyPolyline[] {
     const line: EquatorialCoordinate[] = [];
     const obliquity: number = 23.43928 * Math.PI / 180.0;
     for (let longitude: number = 0.0; longitude <= 360.0; longitude += 2.0) {
@@ -323,52 +477,73 @@ export class NormalSkySceneService {
       });
     }
     const result: SkyPolyline[] = [];
-    this.appendProjectedLine(result, 'ecliptic', SkyPolylineKind.ECLIPTIC, line, query);
+    this.appendProjectedLine(
+      result, 'ecliptic', SkyPolylineKind.ECLIPTIC, line, query, prepared);
     return result;
   }
 
-  private buildHorizon(query: NormalSkySceneQuery): SkyPolyline[] {
+  private buildHorizon(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyPolyline[] {
     const observer: ObserverState | undefined = query.observer;
     if (observer === undefined) {
       return [];
     }
     const line: EquatorialCoordinate[] = [];
-    for (let azimuth: number = 0.0; azimuth <= 360.0; azimuth += 3.0) {
+    const azimuthStep: number = query.interactive === true ? 8.0 : 4.0;
+    for (let azimuth: number = 0.0; azimuth <= 360.0; azimuth += azimuthStep) {
       line.push(EphemerisService.horizontalToEqj(
         azimuth, 0.0, observer, query.timestampMs, RefractionMode.NONE));
     }
     const result: SkyPolyline[] = [];
-    this.appendProjectedLine(result, 'horizon', SkyPolylineKind.HORIZON, line, query);
+    this.appendProjectedLine(
+      result, 'horizon', SkyPolylineKind.HORIZON, line, query, prepared);
     return result;
   }
 
-  private buildSelectedTrajectoryCached(query: NormalSkySceneQuery): SkyPolyline[] {
+  private buildSelectedTrajectoryCached(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyPolyline[] {
     const key: string = this.trajectoryCacheKey(query);
     if (this.trajectoryCache !== undefined && this.trajectoryCache.key === key) {
       this.trajectoryCacheHitCount++;
       return this.trajectoryCache.lines;
     }
-    const lines: SkyPolyline[] = this.buildSelectedTrajectory(query);
+    const lines: SkyPolyline[] = this.buildSelectedTrajectory(query, prepared);
     this.trajectoryBuildCount++;
     this.trajectoryCache = { key: key, lines: lines };
     return lines;
   }
 
-  private buildSelectedTrajectory(query: NormalSkySceneQuery): SkyPolyline[] {
+  private buildSelectedTrajectory(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyPolyline[] {
     const target: CelestialObject | undefined = CelestialCatalog.getById(query.selectedTargetId);
     if (target === undefined || target.precision !== CatalogPrecision.DYNAMIC) return [];
+    const coordinates: EquatorialCoordinate[] =
+      this.resolveTrajectoryCoordinates(target, query.timestampMs);
+    const result: SkyPolyline[] = [];
+    this.appendProjectedLine(result, `trajectory-${target.id}`,
+      SkyPolylineKind.TRAJECTORY, coordinates, query, prepared);
+    return result;
+  }
+
+  private resolveTrajectoryCoordinates(target: CelestialObject,
+    timestampMs: number): EquatorialCoordinate[] {
+    const bucketSize: number = target.id === 'solar-moon' ? 3600000.0 : 86400000.0;
+    const timestampBucket: number = Math.floor(timestampMs / bucketSize);
+    const key: string = `${target.id}|${timestampBucket}`;
+    if (this.trajectorySourceCache !== undefined &&
+      this.trajectorySourceCache.key === key) {
+      return this.trajectorySourceCache.coordinates;
+    }
     const trajectory: ApparentTrajectory | undefined = EphemerisService.trajectory(
-      target, query.timestampMs);
+      target, timestampBucket * bucketSize);
     if (trajectory === undefined) return [];
     const coordinates: EquatorialCoordinate[] = [];
     for (let index: number = 0; index < trajectory.points.length; index++) {
       const point: ApparentTrajectoryPoint = trajectory.points[index];
       coordinates.push(point.coordinate);
     }
-    const result: SkyPolyline[] = [];
-    this.appendProjectedLine(result, `trajectory-${target.id}`,
-      SkyPolylineKind.TRAJECTORY, coordinates, query);
-    return result;
+    this.trajectorySourceCache = { key: key, coordinates: coordinates };
+    return coordinates;
   }
 
   private staticCacheKey(query: NormalSkySceneQuery): string {
@@ -378,7 +553,8 @@ export class NormalSkySceneService {
     return `${this.projectionCacheKey(query)}|${selectedKey}|` +
       `${query.layers.constellationLines ? 1 : 0}${query.layers.equatorialGrid ? 1 : 0}` +
       `${query.layers.ecliptic ? 1 : 0}${query.layers.deepSky ? 1 : 0}|` +
-      `${this.visibleStars.isLoaded() ? 1 : 0}${this.lineCatalog.isLoaded() ? 1 : 0}`;
+      `${this.visibleStars.isLoaded() ? 1 : 0}${this.lineCatalog.isLoaded() ? 1 : 0}|` +
+      `${query.interactive === true ? 1 : 0}`;
   }
 
   private trajectoryCacheKey(query: NormalSkySceneQuery): string {
@@ -398,12 +574,13 @@ export class NormalSkySceneService {
   }
 
   /** 以屏幕条带近似地平线以下区域；条带随投影重建，不会把不可见区固定在屏幕某一侧。 */
-  private buildHorizonMask(query: NormalSkySceneQuery): SkyScreenRect[] {
+  private buildHorizonMask(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyScreenRect[] {
     const observer: ObserverState | undefined = query.observer;
     if (observer === undefined) {
       return [];
     }
-    const cellSize: number = 32.0;
+    const cellSize: number = query.interactive === true ? 96.0 : 48.0;
     const columns: number = Math.ceil(query.size.widthPixels / cellSize);
     const rows: number = Math.ceil(query.size.heightPixels / cellSize);
     const result: SkyScreenRect[] = [];
@@ -412,9 +589,9 @@ export class NormalSkySceneService {
       for (let column: number = 0; column <= columns; column++) {
         let belowHorizon: boolean = false;
         if (column < columns) {
-          const coordinate: EquatorialCoordinate = NormalSkyProjectionService.unproject(
+          const coordinate: EquatorialCoordinate = NormalSkyProjectionService.unprojectPrepared(
             Math.min(query.size.widthPixels, (column + 0.5) * cellSize),
-            Math.min(query.size.heightPixels, (row + 0.5) * cellSize), query.viewport, query.size);
+            Math.min(query.size.heightPixels, (row + 0.5) * cellSize), prepared);
           belowHorizon = EphemerisService.horizontalFromEqjCoordinate(
             coordinate, observer, query.timestampMs, RefractionMode.NONE).altitudeDegrees < 0.0;
         }
@@ -436,14 +613,19 @@ export class NormalSkySceneService {
   }
 
   private appendProjectedLine(result: SkyPolyline[], baseId: string, kind: SkyPolylineKind,
-    coordinates: EquatorialCoordinate[], query: NormalSkySceneQuery): void {
+    coordinates: EquatorialCoordinate[], query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): void {
     let segment: SkyScreenPoint[] = [];
     let previous: SkyScreenPoint | undefined = undefined;
+    let minimumX: number = Number.MAX_VALUE;
+    let minimumY: number = Number.MAX_VALUE;
+    let maximumX: number = -Number.MAX_VALUE;
+    let maximumY: number = -Number.MAX_VALUE;
     const maximumGap: number = Math.max(query.size.widthPixels, query.size.heightPixels) * 1.5;
     let segmentIndex: number = 0;
     for (let index: number = 0; index < coordinates.length; index++) {
-      const projection: NormalSkyProjection = NormalSkyProjectionService.project(
-        coordinates[index], query.viewport, query.size);
+      const projection: NormalSkyScreenProjection =
+        NormalSkyProjectionService.projectScreenPrepared(coordinates[index], prepared);
       const point: SkyScreenPoint = { xPixels: projection.xPixels, yPixels: projection.yPixels };
       const finite: boolean = Number.isFinite(point.xPixels) && Number.isFinite(point.yPixels) &&
         Math.abs(point.xPixels) < 100000.0 && Math.abs(point.yPixels) < 100000.0;
@@ -451,26 +633,67 @@ export class NormalSkySceneService {
         (point.xPixels - previous.xPixels) * (point.xPixels - previous.xPixels) +
         (point.yPixels - previous.yPixels) * (point.yPixels - previous.yPixels));
       if (!finite || gap > maximumGap) {
-        if (segment.length >= 2) {
+        if (segment.length >= 2 && this.screenBoundsIntersect(
+          minimumX, minimumY, maximumX, maximumY, query.size)) {
           result.push({ id: `${baseId}-${segmentIndex}`, kind: kind, points: segment });
           segmentIndex++;
         }
         segment = [];
         previous = undefined;
+        minimumX = Number.MAX_VALUE;
+        minimumY = Number.MAX_VALUE;
+        maximumX = -Number.MAX_VALUE;
+        maximumY = -Number.MAX_VALUE;
         continue;
       }
       segment.push(point);
+      minimumX = Math.min(minimumX, point.xPixels);
+      minimumY = Math.min(minimumY, point.yPixels);
+      maximumX = Math.max(maximumX, point.xPixels);
+      maximumY = Math.max(maximumY, point.yPixels);
       previous = point;
     }
-    if (segment.length >= 2) {
+    if (segment.length >= 2 && this.screenBoundsIntersect(
+      minimumX, minimumY, maximumX, maximumY, query.size)) {
       result.push({ id: `${baseId}-${segmentIndex}`, kind: kind, points: segment });
     }
   }
 
-  private duplicatesCuratedStar(coordinate: EquatorialCoordinate, brightStars: CelestialObject[]): boolean {
+  private screenBoundsIntersect(minimumX: number, minimumY: number,
+    maximumX: number, maximumY: number, size: SkyMapSize): boolean {
+    const margin: number = 64.0;
+    return maximumX >= -margin && minimumX <= size.widthPixels + margin &&
+      maximumY >= -margin && minimumY <= size.heightPixels + margin;
+  }
+
+  private prepareCuratedBrightStarDirections(brightStars: CelestialObject[]): void {
+    if (this.curatedBrightStarDirectionSourceCount === brightStars.length) {
+      return;
+    }
+    const directions: NormalSkyDirectionVector[] = [];
     for (let index: number = 0; index < brightStars.length; index++) {
-      const curated: EquatorialCoordinate | undefined = brightStars[index].coordinate;
-      if (curated !== undefined && AstronomyService.angularSeparation(coordinate, curated) < 0.03) {
+      const coordinate: EquatorialCoordinate | undefined = brightStars[index].coordinate;
+      if (coordinate === undefined) continue;
+      const rightAscensionRadians: number = coordinate.raHours * Math.PI / 12.0;
+      const declinationRadians: number = coordinate.decDegrees * Math.PI / 180.0;
+      const declinationCosine: number = Math.cos(declinationRadians);
+      directions.push({
+        x: declinationCosine * Math.cos(rightAscensionRadians),
+        y: declinationCosine * Math.sin(rightAscensionRadians),
+        z: Math.sin(declinationRadians)
+      });
+    }
+    this.curatedBrightStarDirections = directions;
+    this.curatedBrightStarDirectionSourceCount = brightStars.length;
+  }
+
+  private duplicatesCuratedStar(candidate: SphericalVisibleStar): boolean {
+    for (let index: number = 0; index < this.curatedBrightStarDirections.length; index++) {
+      const curated: NormalSkyDirectionVector = this.curatedBrightStarDirections[index];
+      // 0.03° 阈值与原球面角距判断一致；单位向量点积避免每对恒星重复 sin/cos/acos。
+      if (candidate.directionX * curated.x + candidate.directionY * curated.y +
+        candidate.directionZ * curated.z >
+        NormalSkySceneService.CURATED_DUPLICATE_MINIMUM_DOT) {
         return true;
       }
     }
@@ -528,11 +751,13 @@ export class NormalSkySceneService {
     return 15;
   }
 
-  private objectLabel(object: CelestialObject, fieldOfViewDegrees: number, selected: boolean): string {
+  private objectLabel(object: CelestialObject, fieldOfViewDegrees: number,
+    selected: boolean, interactive: boolean): string {
     if (selected) return object.nameZh;
     if (object.type === CelestialType.CONSTELLATION) return object.nameZh;
     if (object.type === CelestialType.SUN || object.type === CelestialType.MOON ||
       object.type === CelestialType.PLANET) return object.nameZh;
+    if (interactive && object.type === CelestialType.MESSIER) return '';
     if (object.type === CelestialType.MESSIER) {
       const magnitude: number = object.magnitude === undefined ? 99.0 : object.magnitude;
       if (fieldOfViewDegrees <= 30.0) return object.designation;
@@ -543,6 +768,7 @@ export class NormalSkySceneService {
       return magnitude <= 5.0 ? object.designation : '';
     }
     const magnitude: number = object.magnitude === undefined ? 99.0 : object.magnitude;
+    if (interactive) return magnitude <= 1.0 ? object.nameZh : '';
     if (fieldOfViewDegrees >= 90.0) return magnitude <= 1.5 ? object.nameZh : '';
     if (fieldOfViewDegrees >= 30.0) return magnitude <= 2.5 ? object.nameZh : '';
     return object.nameZh;
@@ -569,9 +795,9 @@ export class NormalSkySceneService {
    * 通过目标附近的球面短弧重新投影，可同时吸收视口旋转和宽视场边缘的局部扭曲。
    */
   private brightLimbScreenAngle(coordinate: EquatorialCoordinate, positionAngleDegrees: number,
-    query: NormalSkySceneQuery): number {
-    const source: NormalSkyProjection = NormalSkyProjectionService.project(
-      coordinate, query.viewport, query.size);
+    query: NormalSkySceneQuery, prepared: NormalSkyPreparedProjection): number {
+    const source: NormalSkyScreenProjection =
+      NormalSkyProjectionService.projectScreenPrepared(coordinate, prepared);
     const distanceRadians: number = 0.25 * Math.PI / 180.0;
     const positionRadians: number = positionAngleDegrees * Math.PI / 180.0;
     const sourceRa: number = coordinate.raHours * Math.PI / 12.0;
@@ -588,8 +814,8 @@ export class NormalSkySceneService {
       frame: coordinate.frame,
       validAtMs: coordinate.validAtMs
     };
-    const projectedDestination: NormalSkyProjection = NormalSkyProjectionService.project(
-      destination, query.viewport, query.size);
+    const projectedDestination: NormalSkyScreenProjection =
+      NormalSkyProjectionService.projectScreenPrepared(destination, prepared);
     const deltaX: number = projectedDestination.xPixels - source.xPixels;
     const deltaY: number = projectedDestination.yPixels - source.yPixels;
     if (!Number.isFinite(deltaX) || !Number.isFinite(deltaY) ||

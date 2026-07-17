@@ -1,4 +1,5 @@
 import { common } from '@kit.AbilityKit';
+import { FrameCallback } from '@kit.ArkUI';
 import { ArSkyDome } from '../components/ArSkyDome';
 import { DeviceCameraPreview } from '../components/DeviceCameraPreview';
 import { DeviceWorkspace } from '../components/DeviceWorkspace';
@@ -166,6 +167,28 @@ function emptyNormalSkyScene(): NormalSkyScene {
   };
 }
 
+const NORMAL_SCENE_MIN_FRAME_INTERVAL_NS: number = 10000000.0;
+
+/**
+ * 普通星图交互更新跟随 ArkUI 下一显示帧执行，避免固定 16ms 定时器等待时间与场景构建耗时相加。
+ * 回调实例由页面长期复用，不在高频手势事件中分配临时对象。
+ */
+class NormalSceneFrameCallback extends FrameCallback {
+  private readonly action: (frameTimeInNano: number) => void;
+
+  constructor(action: (frameTimeInNano: number) => void) {
+    super();
+    this.action = action;
+  }
+
+  onFrame(frameTimeInNano: number): void {
+    this.action(frameTimeInNano);
+  }
+
+  onIdle(_timeLeftInNano: number): void {
+  }
+}
+
 @Entry
 @Component
 struct Index {
@@ -176,9 +199,14 @@ struct Index {
   @State private targetSearch: string = '';
   @State private gestureEnabled: boolean = false;
   @State private gestureStatus: string = '未安装手势模型';
-  @State private normalViewState: NormalSkyViewState = NormalSkyViewStateService.defaultState();
-  // Canvas 与控件只读取该快照；所有交互必须通过 normalViewState 更新四元数长期姿态。
-  @State private normalViewport: NormalSkyViewport = NormalSkyViewStateService.snapshot(
+  private normalViewState: NormalSkyViewState = NormalSkyViewStateService.defaultState();
+  /**
+   * Canvas 与控件只读取该快照；所有交互必须通过 normalViewState 更新四元数长期姿态。
+   * 该值不能声明为顶层 @State：手指移动事件可能达到 120 Hz，若每次都触发 Index 整页响应，
+   * 会绕过下方 16 ms 场景节流并显著挤占 Canvas 的主线程帧预算。normalScene 更新时会让
+   * 普通星图及其控件在同一渲染帧读取最新快照。
+   */
+  private normalViewport: NormalSkyViewport = NormalSkyViewStateService.snapshot(
     NormalSkyViewStateService.defaultState());
   @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
   @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
@@ -317,6 +345,14 @@ struct Index {
   private normalSceneTimer: number = -1;
   private normalTimeLastTickMs: number = 0;
   private normalSceneUpdateTimer: number = -1;
+  private normalSceneFramePending: boolean = false;
+  private lastNormalSceneFrameTimeNs: number = 0.0;
+  private readonly normalSceneFrameCallback: NormalSceneFrameCallback =
+    new NormalSceneFrameCallback((frameTimeInNano: number): void => {
+      this.flushNormalSceneFrame(frameTimeInNano);
+    });
+  private normalSceneSettleTimer: number = -1;
+  private normalSceneInteractive: boolean = false;
   private normalInertiaTimer: number = -1;
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
@@ -785,7 +821,7 @@ struct Index {
               this.lastPanOffsetY = event.offsetY;
               this.applyNormalViewState(NormalSkyViewStateService.pan(
                 this.normalViewState, this.normalSkySize(), deltaX, deltaY));
-              this.scheduleNormalSceneUpdate();
+              this.scheduleNormalSceneUpdate(true);
             }
           })
           .onActionEnd((event: GestureEvent) => {
@@ -804,7 +840,7 @@ struct Index {
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
               if (update.changed) {
                 this.applyNormalViewState(update.viewState);
-                this.scheduleNormalSceneUpdate();
+                this.scheduleNormalSceneUpdate(true);
               }
             }
           })
@@ -822,7 +858,7 @@ struct Index {
                 this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
               if (update.changed) {
                 this.applyNormalViewState(update.viewState);
-                this.scheduleNormalSceneUpdate();
+                this.scheduleNormalSceneUpdate(true);
               }
             }
           })
@@ -2180,7 +2216,14 @@ struct Index {
     this.rebuildNormalScene();
   }
 
-  private scheduleNormalSceneUpdate(): void {
+  private scheduleNormalSceneUpdate(interactive: boolean = false): void {
+    if (interactive) {
+      this.markNormalSceneInteractive();
+      if (this.normalSceneFramePending) return;
+      this.normalSceneFramePending = true;
+      this.getUIContext().postFrameCallback(this.normalSceneFrameCallback);
+      return;
+    }
     if (this.normalSceneUpdateTimer >= 0) return;
     this.normalSceneUpdateTimer = setTimeout(() => {
       this.normalSceneUpdateTimer = -1;
@@ -2188,7 +2231,43 @@ struct Index {
     }, 16);
   }
 
+  private flushNormalSceneFrame(frameTimeInNano: number): void {
+    if (!this.normalSceneFramePending) {
+      return;
+    }
+    if (this.lastNormalSceneFrameTimeNs > 0.0 &&
+      frameTimeInNano - this.lastNormalSceneFrameTimeNs < NORMAL_SCENE_MIN_FRAME_INTERVAL_NS) {
+      // 120 Hz 屏幕在相邻 VSync 间只有约 8.3 ms；场景构建限制为隔帧一次，
+      // 避免追逐 120 Hz 触摸事件造成高低帧交替，60 Hz 屏幕仍会逐帧更新。
+      this.getUIContext().postFrameCallback(this.normalSceneFrameCallback);
+      return;
+    }
+    this.normalSceneFramePending = false;
+    this.lastNormalSceneFrameTimeNs = frameTimeInNano;
+    if (this.activeSection === 0 && this.skyMode === 1) {
+      this.rebuildNormalScene();
+    }
+  }
+
+  private markNormalSceneInteractive(): void {
+    this.normalSceneInteractive = true;
+    if (this.normalSceneSettleTimer >= 0) {
+      clearTimeout(this.normalSceneSettleTimer);
+    }
+    // 停手后再恢复完整星等、标签和细地平遮罩，避免精细重建抢占最后几帧惯性动画。
+    this.normalSceneSettleTimer = setTimeout(() => {
+      this.normalSceneSettleTimer = -1;
+      this.normalSceneInteractive = false;
+      if (this.activeSection === 0 && this.skyMode === 1) {
+        this.updateNormalScene();
+      }
+    }, 140);
+  }
+
   private clearScheduledNormalSceneUpdate(): void {
+    // postFrameCallback 没有取消接口；清除 pending 后，已入队回调会安全地空操作。
+    this.normalSceneFramePending = false;
+    this.lastNormalSceneFrameTimeNs = 0.0;
     if (this.normalSceneUpdateTimer >= 0) {
       clearTimeout(this.normalSceneUpdateTimer);
       this.normalSceneUpdateTimer = -1;
@@ -2205,6 +2284,7 @@ struct Index {
       timestampMs: timestampMs,
       observer: this.normalObserver(timestampMs),
       guideInsets: this.normalSkyGuideInsets(),
+      interactive: this.normalSceneInteractive,
       showDirectionMarkers: NormalSkyLayoutService.showDirectionMarkers(
         this.useSkyBottomSheet(), this.skyOverlayPanel)
     });
@@ -2389,7 +2469,7 @@ struct Index {
       const easedProgress: number = 1.0 - Math.pow(1.0 - linearProgress, 3.0);
       this.applyNormalViewState(NormalSkyViewStateService.interpolate(
         source, destination, easedProgress));
-      this.scheduleNormalSceneUpdate();
+      this.scheduleNormalSceneUpdate(true);
       if (linearProgress >= 1.0) {
         this.stopNormalFly();
       }
@@ -2416,7 +2496,7 @@ struct Index {
       this.applyNormalViewState(NormalSkyViewStateService.panWithVelocity(
         this.normalViewState, this.normalSkySize(),
         initialVelocityX * decay, initialVelocityY * decay, deltaSeconds));
-      this.scheduleNormalSceneUpdate();
+      this.scheduleNormalSceneUpdate(true);
       if (progress >= 1.0) {
         this.stopNormalInertia();
       }
@@ -2469,6 +2549,11 @@ struct Index {
 
   private clearNormalSceneTimer(): void {
     this.clearScheduledNormalSceneUpdate();
+    if (this.normalSceneSettleTimer >= 0) {
+      clearTimeout(this.normalSceneSettleTimer);
+      this.normalSceneSettleTimer = -1;
+    }
+    this.normalSceneInteractive = false;
     if (this.normalSceneTimer >= 0) {
       clearInterval(this.normalSceneTimer);
       this.normalSceneTimer = -1;
@@ -2522,7 +2607,7 @@ struct Index {
       this.gestureStatus = '等待手部进入画面';
     }
     if (normalSkyChanged) {
-      this.scheduleNormalSceneUpdate();
+      this.scheduleNormalSceneUpdate(true);
     }
   }
 
