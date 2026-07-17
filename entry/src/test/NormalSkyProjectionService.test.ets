@@ -12,7 +12,11 @@ import {
   SkyMapSize
 } from '../main/ets/models/NormalSkyModels';
 import { AstronomyService } from '../main/ets/services/AstronomyService';
-import { NormalSkyProjectionService } from '../main/ets/services/NormalSkyProjectionService';
+import {
+  NormalSkyPreparedProjection,
+  NormalSkyProjectionService,
+  NormalSkyScreenProjection
+} from '../main/ets/services/NormalSkyProjectionService';
 
 const TEST_SIZE: SkyMapSize = { widthPixels: 1000.0, heightPixels: 700.0 };
 
@@ -60,6 +64,47 @@ export default function normalSkyProjectionServiceTest(): void {
       expect(closeTo(projection.xPixels, 500.0, 0.001)).assertTrue();
       expect(closeTo(projection.yPixels, 350.0, 0.001)).assertTrue();
       expect(projection.inViewport).assertTrue();
+    });
+
+    it('预计算投影与逐点投影结果保持一致', 0, () => {
+      const current: NormalSkyViewport = viewport(23.7, 62.0, 120.0);
+      current.rotationDegrees = 37.0;
+      const prepared: NormalSkyPreparedProjection =
+        NormalSkyProjectionService.prepare(current, TEST_SIZE);
+      const samples: EquatorialCoordinate[] = [
+        coordinate(23.9, 58.0),
+        coordinate(0.4, 70.0),
+        coordinate(20.0, 20.0)
+      ];
+      for (let index: number = 0; index < samples.length; index++) {
+        const standard = NormalSkyProjectionService.project(samples[index], current, TEST_SIZE);
+        const optimized = NormalSkyProjectionService.projectPrepared(samples[index], prepared);
+        const screenOnly: NormalSkyScreenProjection =
+          NormalSkyProjectionService.projectScreenPrepared(samples[index], prepared);
+        const raRadians: number = samples[index].raHours * Math.PI / 12.0;
+        const decRadians: number = samples[index].decDegrees * Math.PI / 180.0;
+        const decCosine: number = Math.cos(decRadians);
+        const directionOnly: NormalSkyScreenProjection =
+          NormalSkyProjectionService.projectDirectionScreenPrepared(
+            decCosine * Math.cos(raRadians),
+            decCosine * Math.sin(raRadians),
+            Math.sin(decRadians),
+            prepared);
+        expect(closeTo(optimized.xPixels, standard.xPixels, 0.000001)).assertTrue();
+        expect(closeTo(optimized.yPixels, standard.yPixels, 0.000001)).assertTrue();
+        expect(optimized.inViewport === standard.inViewport).assertTrue();
+        expect(closeTo(screenOnly.xPixels, standard.xPixels, 0.000001)).assertTrue();
+        expect(closeTo(screenOnly.yPixels, standard.yPixels, 0.000001)).assertTrue();
+        expect(screenOnly.inViewport === standard.inViewport).assertTrue();
+        expect(closeTo(directionOnly.xPixels, standard.xPixels, 0.000001)).assertTrue();
+        expect(closeTo(directionOnly.yPixels, standard.yPixels, 0.000001)).assertTrue();
+        expect(directionOnly.inViewport === standard.inViewport).assertTrue();
+        if (optimized.inViewport) {
+          const restored: EquatorialCoordinate = NormalSkyProjectionService.unprojectPrepared(
+            optimized.xPixels, optimized.yPixels, prepared);
+          expect(AstronomyService.angularSeparation(samples[index], restored) < 0.0001).assertTrue();
+        }
+      }
     });
 
     it('跨越赤经零点仍按最短方向投影并可反算', 0, () => {

@@ -1,6 +1,11 @@
 import { describe, expect, it } from '@ohos/hypium';
 import { CelestialCatalog } from '../main/ets/data/CelestialCatalog';
-import { CelestialObject, ObserverState } from '../main/ets/models/DomainModels';
+import {
+  CelestialObject,
+  EquatorialCoordinate,
+  EquatorialFrame,
+  ObserverState
+} from '../main/ets/models/DomainModels';
 import {
   DEFAULT_SKY_LAYERS,
   NormalSkyScene,
@@ -9,7 +14,10 @@ import {
   SkyMapOrientation,
   SkyObjectGlyphKind
 } from '../main/ets/models/NormalSkyModels';
-import { NormalSkyCatalogService } from '../main/ets/services/NormalSkyCatalogService';
+import {
+  ConstellationSphericalBounds,
+  NormalSkyCatalogService
+} from '../main/ets/services/NormalSkyCatalogService';
 import { NormalSkyProjectionService } from '../main/ets/services/NormalSkyProjectionService';
 import {
   NormalSkySceneCacheStats,
@@ -75,6 +83,21 @@ export default function normalSkySceneServiceTest(): void {
       });
       expect(scene.horizonLines.length > 0).assertTrue();
       expect(scene.horizonMask.length > 0).assertTrue();
+      const interactive: NormalSkyScene = service.build({
+        viewport: viewport,
+        size: { widthPixels: 600.0, heightPixels: 600.0 },
+        layers: DEFAULT_SKY_LAYERS,
+        selectedTargetId: 'star-vega',
+        timestampMs: observer.timestampMs + 30000.0,
+        observer: observer,
+        interactive: true
+      });
+      expect(interactive.horizonLines.length > 0).assertTrue();
+      expect(interactive.horizonMask.length > 0 &&
+        interactive.horizonMask.length < scene.horizonMask.length).assertTrue();
+      // 交互态只允许减少标签与遮罩采样，不能再次通过隐藏恒星或目录目标换取帧率。
+      expect(interactive.staticObjects.length).assertEqual(scene.staticObjects.length);
+      expect(service.getCacheStats().dynamicCatalogCacheHitCount).assertEqual(1);
     });
 
     it('太阳系目标均映射为确定图符且土星保留星环语义', 0, () => {
@@ -86,6 +109,29 @@ export default function normalSkySceneServiceTest(): void {
       const saturn: CelestialObject | undefined = CelestialCatalog.getById('planet-saturn');
       expect(saturn !== undefined &&
         NormalSkySceneService.glyphKindFor(saturn) === SkyObjectGlyphKind.SATURN).assertTrue();
+    });
+
+    it('星座球面包围范围正确处理赤经回绕与近天极', 0, () => {
+      const wrapLine: EquatorialCoordinate[] = [
+        { raHours: 23.8, decDegrees: 10.0, frame: EquatorialFrame.ICRS_J2000 },
+        { raHours: 0.2, decDegrees: 11.0, frame: EquatorialFrame.ICRS_J2000 }
+      ];
+      const wrapBounds: ConstellationSphericalBounds =
+        NormalSkyCatalogService.buildSphericalBounds([wrapLine]);
+      expect(wrapBounds.centerDirectionX > 0.9 &&
+        Math.abs(wrapBounds.centerDirectionY) < 0.1 &&
+        wrapBounds.angularRadiusDegrees < 8.0).assertTrue();
+
+      const poleLine: EquatorialCoordinate[] = [
+        { raHours: 0.0, decDegrees: 88.0, frame: EquatorialFrame.ICRS_J2000 },
+        { raHours: 6.0, decDegrees: 88.0, frame: EquatorialFrame.ICRS_J2000 },
+        { raHours: 12.0, decDegrees: 88.0, frame: EquatorialFrame.ICRS_J2000 },
+        { raHours: 18.0, decDegrees: 88.0, frame: EquatorialFrame.ICRS_J2000 }
+      ];
+      const poleBounds: ConstellationSphericalBounds =
+        NormalSkyCatalogService.buildSphericalBounds([poleLine]);
+      expect(poleBounds.centerDirectionZ > 0.99 &&
+        poleBounds.angularRadiusDegrees < 6.0).assertTrue();
     });
 
     it('动态目标携带真实外观与亮边屏幕方向', 0, () => {
