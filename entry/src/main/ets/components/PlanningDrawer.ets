@@ -13,6 +13,7 @@ import {
   VisibilityStatus
 } from '../models';
 import { MotionTokens } from '../utils/MotionTokens';
+import { PlanningSnapshotService } from '../services/PlanningSnapshotService';
 
 interface PlanningHeightBar {
   id: string;
@@ -20,6 +21,11 @@ interface PlanningHeightBar {
   height: number;
   color: ResourceColor;
   recommended: boolean;
+}
+
+interface PlanningRenderFrame {
+  id: string;
+  pageState: PlanningPageState;
 }
 
 @Component
@@ -79,18 +85,23 @@ export struct PlanningDrawer {
       }
       Scroll() {
         Column({ space: 10 }) {
-          if (this.pageState === PlanningPageState.NEEDS_LOCATION) {
-            this.LocationEmptyState()
-          } else if (this.pageState === PlanningPageState.WEATHER_LOADING) {
-            this.ResultContent(PlanningPageState.WEATHER_LOADING)
-          } else if (this.pageState === PlanningPageState.READY) {
-            this.ResultContent(PlanningPageState.READY)
-          } else if (this.pageState === PlanningPageState.WEATHER_UNAVAILABLE) {
-            this.ResultContent(PlanningPageState.WEATHER_UNAVAILABLE)
-          } else {
-            this.ResultContent(PlanningPageState.ASTRONOMY_ONLY)
-          }
-          this.TargetList()
+          // ArkUI 局部更新不会可靠追踪嵌套 @Prop 对象中每个计算字符串的依赖。
+          // 使用快照生成序号作为 ForEach 键，在日期、地点或天气重算后原子替换整个结果区，
+          // 防止标题已经切到明晚，而分数、月光或天气仍保留今晚节点的混合画面。
+          ForEach(this.renderFrames(), (frame: PlanningRenderFrame) => {
+            if (frame.pageState === PlanningPageState.NEEDS_LOCATION) {
+              this.LocationEmptyState()
+            } else if (frame.pageState === PlanningPageState.WEATHER_LOADING) {
+              this.ResultContent(PlanningPageState.WEATHER_LOADING)
+            } else if (frame.pageState === PlanningPageState.READY) {
+              this.ResultContent(PlanningPageState.READY)
+            } else if (frame.pageState === PlanningPageState.WEATHER_UNAVAILABLE) {
+              this.ResultContent(PlanningPageState.WEATHER_UNAVAILABLE)
+            } else {
+              this.ResultContent(PlanningPageState.ASTRONOMY_ONLY)
+            }
+            this.TargetList()
+          }, (frame: PlanningRenderFrame) => frame.id)
         }
         .width('100%')
         .padding({ left: 12, right: 12, bottom: 14 })
@@ -268,16 +279,25 @@ export struct PlanningDrawer {
           Text(this.planningSummaryText())
             .fontSize(12).lineHeight(18).fontColor($r('app.color.sky_text_secondary')).width('100%').maxLines(2)
         }
-        Row({ space: 6 }) {
-          this.ScoreMetric($r('app.string.planning_astronomy_score'), this.astronomyScoreText())
-          this.ScoreMetric($r('app.string.planning_weather_score'), this.weatherScoreText())
-          this.ScoreMetric($r('app.string.planning_overall_score'), this.overallScoreText())
-        }
-        .width('100%')
       }
       .width('100%').padding(14)
       .backgroundColor($r('app.color.sky_surface_soft'))
       .borderRadius($r('app.float.corner_card'))
+
+      Column({ space: 6 }) {
+        this.InfoLine($r('app.string.planning_recommended_capture_window'), this.recommendedCaptureText())
+        this.InfoLine($r('app.string.planning_astronomical_window'), this.astronomicalWindowText())
+      }
+      .width('100%').padding(11)
+      .backgroundColor($r('app.color.sky_background'))
+      .borderRadius($r('app.float.corner_card'))
+
+      Row({ space: 6 }) {
+        this.ScoreMetric($r('app.string.planning_astronomy_score'), this.astronomyScoreText())
+        this.ScoreMetric($r('app.string.planning_weather_score'), this.weatherScoreText())
+        this.ScoreMetric($r('app.string.planning_overall_score'), this.overallScoreText())
+      }
+      .width('100%')
 
       Row({ space: 6 }) {
         this.EventMetric($r('app.string.planning_rise'), this.eventText('rise'))
@@ -291,8 +311,6 @@ export struct PlanningDrawer {
       }
 
       Column({ space: 6 }) {
-        this.InfoLine($r('app.string.planning_recommended_capture_window'), this.recommendedCaptureText())
-        this.InfoLine($r('app.string.planning_astronomical_window'), this.astronomicalWindowText())
         this.InfoLine($r('app.string.planning_moonlight'), this.moonText())
         if (pageState === PlanningPageState.WEATHER_LOADING) {
           this.InfoLine($r('app.string.planning_weather_period'), $r('app.string.planning_weather_loading'))
@@ -300,7 +318,14 @@ export struct PlanningDrawer {
           pageState === PlanningPageState.ASTRONOMY_ONLY) {
           this.InfoLine($r('app.string.planning_weather_period'), $r('app.string.planning_weather_unavailable'))
         } else {
-          this.InfoLine($r('app.string.planning_weather_period'), this.weatherMetricsText())
+          Column({ space: 3 }) {
+            Text($r('app.string.planning_weather_period'))
+              .fontSize(11).fontColor($r('app.color.sky_text_tertiary')).width('100%')
+            Text(this.weatherMetricsText())
+              .fontSize(10).lineHeight(15).fontColor($r('app.color.sky_text_secondary'))
+              .width('100%').maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+          }
+          .width('100%')
         }
         Row({ space: 8 }) {
           Text(this.weatherMessage)
@@ -331,6 +356,7 @@ export struct PlanningDrawer {
       }
     }
     .width('100%')
+    .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
   }
 
   @Builder
@@ -416,10 +442,9 @@ export struct PlanningDrawer {
   @Builder
   private InfoLine(label: Resource, value: ResourceStr) {
     Row({ space: 8 }) {
-      Text(label).fontSize(11).fontColor($r('app.color.sky_text_tertiary'))
-      Blank()
+      Text(label).fontSize(11).fontColor($r('app.color.sky_text_tertiary')).flexShrink(0)
       Text(value).fontSize(11).fontColor($r('app.color.sky_text_secondary'))
-        .textAlign(TextAlign.End).maxLines(2)
+        .textAlign(TextAlign.End).maxLines(2).layoutWeight(1)
     }
     .width('100%')
   }
@@ -596,12 +621,17 @@ export struct PlanningDrawer {
   /** 抽屉只从一个原子快照读取结果，避免日期、地点与结果分别更新。 */
   private planningResult(): ObservationPlanningResult | undefined {
     if (this.snapshot === undefined) return undefined;
-    if (this.snapshot.result.startAtMs !== this.snapshot.period.startAtMs ||
-      this.snapshot.result.endAtMs !== this.snapshot.period.endAtMs ||
-      this.snapshot.result.targetId !== this.snapshot.targetId) {
-      return undefined;
-    }
+    if (!PlanningSnapshotService.isConsistent(this.snapshot)) return undefined;
     return this.snapshot.result;
+  }
+
+  private renderFrames(): PlanningRenderFrame[] {
+    const generation: number = this.snapshot === undefined ? 0 : this.snapshot.generation;
+    const frame: PlanningRenderFrame = {
+      id: `${generation}:${this.pageState}`,
+      pageState: this.pageState
+    };
+    return [frame];
   }
 
   private activePeriod(): ObservationNightPeriod {

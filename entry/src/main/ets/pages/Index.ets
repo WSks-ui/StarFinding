@@ -119,6 +119,7 @@ import {
   ObservationExecutionPolicy,
   ObservationPlanningService,
   PlanningPeriodService,
+  PlanningSnapshotService,
   RaspberryPiClient,
   TaskSessionStore,
   TaskSessionPresentationService,
@@ -1819,17 +1820,15 @@ struct Index {
         throw new Error('规划结果与当前观测夜不一致');
       }
       this.planningGeneration++;
-      this.activePlanningSnapshot = {
-        generation: this.planningGeneration,
-        dayOffset: resolvedPeriod.selection === ObservationNightSelection.TONIGHT ? 0 : 1,
-        period: resolvedPeriod,
-        targetId: planningTarget.id,
-        observerLatitudeDegrees: this.observer.latitudeDegrees,
-        observerLongitudeDegrees: this.observer.longitudeDegrees,
-        locationSource: this.planningLocationSource,
-        locationProvisional: this.planningLocationProvisional,
-        result: this.activePlanningResult
-      };
+      this.activePlanningSnapshot = PlanningSnapshotService.create(
+        this.planningGeneration,
+        resolvedPeriod.selection === ObservationNightSelection.TONIGHT ? 0 : 1,
+        resolvedPeriod,
+        planningTarget.id,
+        this.observer,
+        this.planningLocationSource,
+        this.planningLocationProvisional,
+        this.activePlanningResult);
       this.refreshPlannedTargetSummaries(startAtMs, constraints);
     } catch (error) {
       this.planningResult = undefined;

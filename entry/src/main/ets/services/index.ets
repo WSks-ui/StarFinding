@@ -26,6 +26,7 @@ export * from './NormalSkyOrientationService';
 export * from './NormalSkyLayoutService';
 export * from './ObservationExecutionPolicy';
 export * from './PlanningPeriodService';
+export * from './PlanningSnapshotService';
 export * from './DeviceReadinessService';
 export * from './TaskSessionStore';
 export * from './TaskSessionPresentationService';
