@@ -5,6 +5,7 @@ import { sensor } from '@kit.SensorServiceKit';
 import { DevicePose, ObserverState } from '../models/DomainModels';
 import type { Quaternion } from '../models/ArSkyModels';
 import { AstronomyService } from './AstronomyService';
+import { ObserverLocationPolicy } from './ObserverLocationPolicy';
 import { SkyDomeEulerOrientation, SkyDomeProjectionService } from './SkyDomeProjectionService';
 
 export interface ObserverLocationResult {
@@ -33,9 +34,6 @@ export type DevicePoseListener = (pose: DevicePose) => void;
  * 比赛回放如需固定位置，应由明确标注的模拟服务注入，而不是混入真实设备链路。
  */
 export class ObserverLocationService {
-  private static readonly LAST_LOCATION_MAX_AGE_MS: number = 24 * 60 * 60 * 1000;
-  private static readonly LAST_LOCATION_MAX_ACCURACY_METERS: number = 5000;
-
   /**
    * 先同步读取系统最近位置，再在后台等待高精度结果。最近位置只用于立即生成临时规划，
    * 高精度结果返回后必须由页面使用同一请求代次校正，不能覆盖用户随后输入的手动地点。
@@ -98,10 +96,7 @@ export class ObserverLocationService {
 
   private static mapLastLocation(location: geoLocationManager.Location): ObserverLocationResult | undefined {
     const timestampMs: number = ObserverLocationService.locationTimestamp(location);
-    const ageMs: number = Date.now() - timestampMs;
-    if (ageMs < -5 * 60 * 1000 || ageMs > ObserverLocationService.LAST_LOCATION_MAX_AGE_MS ||
-      !Number.isFinite(location.accuracy) || location.accuracy < 0 ||
-      location.accuracy > ObserverLocationService.LAST_LOCATION_MAX_ACCURACY_METERS) {
+    if (!ObserverLocationPolicy.isUsable(Date.now(), timestampMs, location.accuracy)) {
       return undefined;
     }
     return ObserverLocationService.mapLocation(
