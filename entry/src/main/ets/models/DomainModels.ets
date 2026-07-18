@@ -533,6 +533,37 @@ export interface ObservationWindow {
   overallScore?: number;
 }
 
+/** 推荐拍摄时段内的天气统计，所有字段与推荐时段使用完全相同的采样范围。 */
+export interface PlanningWeatherSummary {
+  startAtMs: number;
+  endAtMs: number;
+  sampleCount: number;
+  averageCloudCoverPercent?: number;
+  maximumCloudCoverPercent?: number;
+  maximumPrecipitationProbabilityPercent?: number;
+  totalPrecipitationMillimeters?: number;
+  averageWindSpeedKph?: number;
+  maximumWindSpeedKph?: number;
+  maximumWindGustKph?: number;
+}
+
+/**
+ * 在天文可观测窗口内选出的连续拍摄建议。图像拍摄只消费这个短窗口，
+ * 原始 ObservationWindow 继续表达整段目标高度与暮光条件。
+ */
+export interface RecommendedCaptureWindow {
+  startAtMs: number;
+  endAtMs: number;
+  peakAtMs: number;
+  durationMinutes: number;
+  peakAltitudeDegrees: number;
+  astronomyScore: number;
+  weatherScore?: number;
+  overallScore?: number;
+  astronomyOnly: boolean;
+  weatherSummary?: PlanningWeatherSummary;
+}
+
 export enum OutingRecommendation {
   GOOD = 'good',
   CAUTION = 'caution',
@@ -557,7 +588,11 @@ export interface ObservationPlanningResult {
   moonSeparationDegrees?: number;
   samples: ObservationSample[];
   windows: ObservationWindow[];
+  /** 兼容旧页面的天文可观测窗口；新页面不得再把它称为天气意义上的最佳窗口。 */
   bestWindow?: ObservationWindow;
+  recommendedCaptureWindow?: RecommendedCaptureWindow;
+  planningWeatherSummary?: PlanningWeatherSummary;
+  recommendedCaptureUnavailableReason: string;
   astronomyScore?: number;
   weatherScore?: number;
   overallScore?: number;

@@ -9,6 +9,8 @@ import {
   ObservationWindow,
   ObserverState,
   OutingRecommendation,
+  PlanningWeatherSummary,
+  RecommendedCaptureWindow,
   RefractionMode,
   RiseTransitSet,
   VisibilityStatus,
@@ -24,6 +26,12 @@ interface WindowAccumulator {
   samples: ObservationSample[];
   startAtMs: number;
   endAtMs: number;
+}
+
+interface RecommendedWindowSelection {
+  candidate?: RecommendedCaptureWindow;
+  accepted?: RecommendedCaptureWindow;
+  unavailableReason: string;
 }
 
 /**
@@ -101,7 +109,11 @@ export class ObservationPlanningService {
     const windows: ObservationWindow[] = ObservationPlanningService.buildWindows(samples, constraints);
     const riseTransitSet: RiseTransitSet = ObservationPlanningService.buildRiseTransitSet(samples, windows.length);
     const bestWindow: ObservationWindow | undefined = ObservationPlanningService.selectBestWindow(windows);
-    const referenceTime: number = bestWindow === undefined ? startAtMs : bestWindow.peakAtMs;
+    const captureSelection: RecommendedWindowSelection =
+      ObservationPlanningService.selectRecommendedCaptureWindow(windows, samples, forecast);
+    const representativeCapture: RecommendedCaptureWindow | undefined = captureSelection.candidate;
+    const referenceTime: number = representativeCapture !== undefined ? representativeCapture.peakAtMs :
+      (bestWindow === undefined ? startAtMs : bestWindow.peakAtMs);
     const moon: CelestialObject | undefined = CelestialCatalog.getById('solar-moon');
     const moonCoordinate: EquatorialCoordinate | undefined = moon === undefined ? undefined :
       EphemerisService.skyCoordinate(moon, referenceTime);
@@ -110,8 +122,10 @@ export class ObservationPlanningService {
     const moonSeparation: number | undefined = targetCoordinate === undefined || moonCoordinate === undefined ?
       undefined : AstronomyService.angularSeparation(targetCoordinate, moonCoordinate);
     const warnings: string[] = ObservationPlanningService.buildWarnings(target, weatherStatus, windows);
-    const recommendation: OutingRecommendation = ObservationPlanningService.recommend(bestWindow, weatherStatus);
-    const summary: string = ObservationPlanningService.summary(recommendation, bestWindow, target.nameZh);
+    const recommendation: OutingRecommendation = ObservationPlanningService.recommend(
+      bestWindow, representativeCapture, weatherStatus);
+    const summary: string = ObservationPlanningService.summary(
+      recommendation, bestWindow, captureSelection.accepted, target.nameZh);
 
     const result: ObservationPlanningResult = {
       targetId: target.id,
@@ -125,6 +139,7 @@ export class ObservationPlanningService {
       moonPhaseName: ObservationPlanningService.moonPhaseName(referenceTime),
       samples: samples,
       windows: windows,
+      recommendedCaptureUnavailableReason: captureSelection.unavailableReason,
       recommendation: recommendation,
       summary: summary,
       warnings: warnings,
@@ -133,9 +148,23 @@ export class ObservationPlanningService {
     if (moonSeparation !== undefined) result.moonSeparationDegrees = moonSeparation;
     if (bestWindow !== undefined) {
       result.bestWindow = bestWindow;
+    }
+    if (representativeCapture !== undefined) {
+      result.astronomyScore = representativeCapture.astronomyScore;
+      if (representativeCapture.weatherScore !== undefined) {
+        result.weatherScore = representativeCapture.weatherScore;
+      }
+      if (representativeCapture.overallScore !== undefined) {
+        result.overallScore = representativeCapture.overallScore;
+      }
+    } else if (bestWindow !== undefined) {
       result.astronomyScore = bestWindow.astronomyScore;
-      if (bestWindow.weatherScore !== undefined) result.weatherScore = bestWindow.weatherScore;
-      if (bestWindow.overallScore !== undefined) result.overallScore = bestWindow.overallScore;
+    }
+    if (captureSelection.accepted !== undefined) {
+      result.recommendedCaptureWindow = captureSelection.accepted;
+    }
+    if (representativeCapture !== undefined && representativeCapture.weatherSummary !== undefined) {
+      result.planningWeatherSummary = representativeCapture.weatherSummary;
     }
     return result;
   }
@@ -414,15 +443,203 @@ export class ObservationPlanningService {
     let best: ObservationWindow = windows[0];
     for (let index: number = 1; index < windows.length; index++) {
       const candidate: ObservationWindow = windows[index];
-      const candidateScore: number = candidate.overallScore === undefined ?
-        candidate.astronomyScore : candidate.overallScore;
-      const bestScore: number = best.overallScore === undefined ? best.astronomyScore : best.overallScore;
-      if (candidateScore > bestScore || (candidateScore === bestScore &&
+      // 天文可观测窗口只按目标高度、暮光和月光选择，天气不得改变它的语义。
+      if (candidate.astronomyScore > best.astronomyScore || (candidate.astronomyScore === best.astronomyScore &&
         candidate.peakAltitudeDegrees > best.peakAltitudeDegrees)) {
         best = candidate;
       }
     }
     return best;
+  }
+
+  private static selectRecommendedCaptureWindow(windows: ObservationWindow[], samples: ObservationSample[],
+    forecast?: WeatherForecast): RecommendedWindowSelection {
+    const candidates: RecommendedCaptureWindow[] =
+      ObservationPlanningService.buildRecommendedCandidates(windows, samples, forecast);
+    if (candidates.length === 0) {
+      return {
+        unavailableReason: windows.length === 0 ? '本夜没有满足高度与暮光条件的天文窗口' :
+          '天文可观测窗口不足 60 分钟'
+      };
+    }
+
+    let maximumScore: number = -1;
+    for (let index: number = 0; index < candidates.length; index++) {
+      maximumScore = Math.max(maximumScore, ObservationPlanningService.captureRank(candidates[index]));
+    }
+    let selected: RecommendedCaptureWindow | undefined = undefined;
+    for (let index: number = 0; index < candidates.length; index++) {
+      const candidate: RecommendedCaptureWindow = candidates[index];
+      const candidateScore: number = ObservationPlanningService.captureRank(candidate);
+      if (candidateScore < maximumScore - 3) continue;
+      if (selected === undefined || candidate.durationMinutes > selected.durationMinutes ||
+        (candidate.durationMinutes === selected.durationMinutes &&
+          (candidateScore > ObservationPlanningService.captureRank(selected) ||
+            (candidateScore === ObservationPlanningService.captureRank(selected) &&
+              candidate.peakAltitudeDegrees > selected.peakAltitudeDegrees)))) {
+        selected = candidate;
+      }
+    }
+    if (selected === undefined) return { unavailableReason: '没有可生成的连续拍摄时段' };
+    if (!selected.astronomyOnly && (selected.overallScore === undefined || selected.overallScore < 45)) {
+      return {
+        candidate: selected,
+        unavailableReason: '本夜有天文可观测窗口，但天气不适合拍摄'
+      };
+    }
+    return {
+      candidate: selected,
+      accepted: selected,
+      unavailableReason: ''
+    };
+  }
+
+  private static buildRecommendedCandidates(windows: ObservationWindow[], samples: ObservationSample[],
+    forecast?: WeatherForecast): RecommendedCaptureWindow[] {
+    const result: RecommendedCaptureWindow[] = [];
+    for (let windowIndex: number = 0; windowIndex < windows.length; windowIndex++) {
+      const window: ObservationWindow = windows[windowIndex];
+      for (let startIndex: number = 0; startIndex < samples.length; startIndex++) {
+        const startSample: ObservationSample = samples[startIndex];
+        if (startSample.timestampMs < window.startAtMs || startSample.timestampMs > window.endAtMs) continue;
+        for (let durationMinutes: number = 60; durationMinutes <= 180; durationMinutes += 10) {
+          const endAtMs: number = startSample.timestampMs + durationMinutes * 60000;
+          if (endAtMs > window.endAtMs) break;
+          let endIndex: number = startIndex;
+          while (endIndex + 1 < samples.length && samples[endIndex + 1].timestampMs <= endAtMs) {
+            endIndex++;
+          }
+          if (samples[endIndex].timestampMs !== endAtMs) continue;
+          result.push(ObservationPlanningService.finishRecommendedCandidate(
+            samples, startIndex, endIndex, forecast));
+        }
+      }
+    }
+    return result;
+  }
+
+  private static finishRecommendedCandidate(samples: ObservationSample[], startIndex: number, endIndex: number,
+    forecast?: WeatherForecast): RecommendedCaptureWindow {
+    let peak: ObservationSample = samples[startIndex];
+    let astronomyTotal: number = 0;
+    let weatherTotal: number = 0;
+    let weatherCount: number = 0;
+    let overallTotal: number = 0;
+    let overallCount: number = 0;
+    const weatherSamples: WeatherHourlySample[] = [];
+    for (let index: number = startIndex; index <= endIndex; index++) {
+      const sample: ObservationSample = samples[index];
+      astronomyTotal += sample.astronomyScore;
+      if (sample.weatherScore !== undefined) {
+        weatherTotal += sample.weatherScore;
+        weatherCount++;
+      }
+      if (sample.overallScore !== undefined) {
+        overallTotal += sample.overallScore;
+        overallCount++;
+      }
+      const sampleRank: number = sample.overallScore === undefined ? sample.astronomyScore : sample.overallScore;
+      const peakRank: number = peak.overallScore === undefined ? peak.astronomyScore : peak.overallScore;
+      if (sampleRank > peakRank || (sampleRank === peakRank &&
+        sample.altitudeDegrees > peak.altitudeDegrees)) {
+        peak = sample;
+      }
+      const weatherSample: WeatherHourlySample | undefined =
+        ObservationPlanningService.nearestWeather(forecast, sample.timestampMs);
+      if (weatherSample !== undefined &&
+        (weatherSamples.length === 0 ||
+          weatherSamples[weatherSamples.length - 1].timestampMs !== weatherSample.timestampMs)) {
+        weatherSamples.push(weatherSample);
+      }
+    }
+    const sampleCount: number = endIndex - startIndex + 1;
+    const candidate: RecommendedCaptureWindow = {
+      startAtMs: samples[startIndex].timestampMs,
+      endAtMs: samples[endIndex].timestampMs,
+      peakAtMs: peak.timestampMs,
+      durationMinutes: Math.round((samples[endIndex].timestampMs - samples[startIndex].timestampMs) / 60000),
+      peakAltitudeDegrees: peak.altitudeDegrees,
+      astronomyScore: Math.round(astronomyTotal / sampleCount),
+      astronomyOnly: true
+    };
+    if (weatherCount >= Math.ceil(sampleCount / 2) && overallCount >= Math.ceil(sampleCount / 2)) {
+      candidate.weatherScore = Math.round(weatherTotal / weatherCount);
+      candidate.overallScore = Math.round(overallTotal / overallCount);
+      candidate.astronomyOnly = false;
+    }
+    const weatherSummary: PlanningWeatherSummary | undefined =
+      ObservationPlanningService.buildWeatherSummary(
+        candidate.startAtMs, candidate.endAtMs, weatherSamples);
+    if (weatherSummary !== undefined) candidate.weatherSummary = weatherSummary;
+    return candidate;
+  }
+
+  private static buildWeatherSummary(startAtMs: number, endAtMs: number,
+    samples: WeatherHourlySample[]): PlanningWeatherSummary | undefined {
+    if (samples.length === 0) return undefined;
+    let cloudTotal: number = 0;
+    let cloudCount: number = 0;
+    let maximumCloud: number = 0;
+    let maximumPrecipitationProbability: number = 0;
+    let precipitationProbabilityCount: number = 0;
+    let precipitationTotal: number = 0;
+    let precipitationCount: number = 0;
+    let windTotal: number = 0;
+    let windCount: number = 0;
+    let maximumWind: number = 0;
+    let maximumGust: number = 0;
+    let gustCount: number = 0;
+    for (let index: number = 0; index < samples.length; index++) {
+      const sample: WeatherHourlySample = samples[index];
+      if (sample.cloudCoverPercent !== undefined) {
+        cloudTotal += sample.cloudCoverPercent;
+        cloudCount++;
+        maximumCloud = Math.max(maximumCloud, sample.cloudCoverPercent);
+      }
+      if (sample.precipitationProbabilityPercent !== undefined) {
+        maximumPrecipitationProbability = Math.max(
+          maximumPrecipitationProbability, sample.precipitationProbabilityPercent);
+        precipitationProbabilityCount++;
+      }
+      if (sample.precipitationMillimeters !== undefined) {
+        precipitationTotal += sample.precipitationMillimeters;
+        precipitationCount++;
+      }
+      if (sample.windSpeedKph !== undefined) {
+        windTotal += sample.windSpeedKph;
+        windCount++;
+        maximumWind = Math.max(maximumWind, sample.windSpeedKph);
+      }
+      if (sample.windGustKph !== undefined) {
+        maximumGust = Math.max(maximumGust, sample.windGustKph);
+        gustCount++;
+      }
+    }
+    const result: PlanningWeatherSummary = {
+      startAtMs: startAtMs,
+      endAtMs: endAtMs,
+      sampleCount: samples.length
+    };
+    if (cloudCount > 0) {
+      result.averageCloudCoverPercent = cloudTotal / cloudCount;
+      result.maximumCloudCoverPercent = maximumCloud;
+    }
+    if (precipitationProbabilityCount > 0) {
+      result.maximumPrecipitationProbabilityPercent = maximumPrecipitationProbability;
+    }
+    if (precipitationCount > 0) {
+      result.totalPrecipitationMillimeters = precipitationTotal;
+    }
+    if (windCount > 0) {
+      result.averageWindSpeedKph = windTotal / windCount;
+      result.maximumWindSpeedKph = maximumWind;
+    }
+    if (gustCount > 0) result.maximumWindGustKph = maximumGust;
+    return result;
+  }
+
+  private static captureRank(candidate: RecommendedCaptureWindow): number {
+    return candidate.overallScore === undefined ? candidate.astronomyScore : candidate.overallScore;
   }
 
   private static nearestWeather(forecast: WeatherForecast | undefined,
@@ -431,16 +648,26 @@ export class ObservationPlanningService {
       forecast.status !== WeatherDataStatus.CACHED) || forecast.hourly.length === 0) {
       return undefined;
     }
-    let nearest: WeatherHourlySample = forecast.hourly[0];
-    let distance: number = Math.abs(nearest.timestampMs - timestampMs);
-    for (let index: number = 1; index < forecast.hourly.length; index++) {
-      const candidate: WeatherHourlySample = forecast.hourly[index];
-      const candidateDistance: number = Math.abs(candidate.timestampMs - timestampMs);
-      if (candidateDistance < distance) {
-        nearest = candidate;
-        distance = candidateDistance;
+    let low: number = 0;
+    let high: number = forecast.hourly.length - 1;
+    while (low <= high) {
+      const middle: number = Math.floor((low + high) / 2);
+      const middleTimestamp: number = forecast.hourly[middle].timestampMs;
+      if (middleTimestamp < timestampMs) {
+        low = middle + 1;
+      } else if (middleTimestamp > timestampMs) {
+        high = middle - 1;
+      } else {
+        return forecast.hourly[middle];
       }
     }
+    let nearestIndex: number = Math.max(0, Math.min(forecast.hourly.length - 1, low));
+    if (high >= 0 && Math.abs(forecast.hourly[high].timestampMs - timestampMs) <
+      Math.abs(forecast.hourly[nearestIndex].timestampMs - timestampMs)) {
+      nearestIndex = high;
+    }
+    const nearest: WeatherHourlySample = forecast.hourly[nearestIndex];
+    const distance: number = Math.abs(nearest.timestampMs - timestampMs);
     // 超过 90 分钟不外推，防止把陈旧天气误当成目标时段的预报。
     return distance <= 5400000 ? nearest : undefined;
   }
@@ -451,23 +678,30 @@ export class ObservationPlanningService {
   }
 
   private static recommend(bestWindow: ObservationWindow | undefined,
+    captureWindow: RecommendedCaptureWindow | undefined,
     weatherStatus: WeatherDataStatus): OutingRecommendation {
     if (bestWindow === undefined) return OutingRecommendation.UNAVAILABLE;
     if (weatherStatus !== WeatherDataStatus.LIVE && weatherStatus !== WeatherDataStatus.CACHED) {
       return OutingRecommendation.ASTRONOMY_ONLY;
     }
-    if (bestWindow.overallScore === undefined) return OutingRecommendation.ASTRONOMY_ONLY;
-    if (bestWindow.overallScore >= 65) return OutingRecommendation.GOOD;
-    if (bestWindow.overallScore >= 45) return OutingRecommendation.CAUTION;
+    if (captureWindow === undefined || captureWindow.overallScore === undefined) {
+      return OutingRecommendation.ASTRONOMY_ONLY;
+    }
+    if (captureWindow.overallScore >= 65) return OutingRecommendation.GOOD;
+    if (captureWindow.overallScore >= 45) return OutingRecommendation.CAUTION;
     return OutingRecommendation.POOR;
   }
 
   private static summary(recommendation: OutingRecommendation,
-    bestWindow: ObservationWindow | undefined, targetName: string): string {
+    bestWindow: ObservationWindow | undefined, acceptedCapture: RecommendedCaptureWindow | undefined,
+    targetName: string): string {
     if (bestWindow === undefined) return `未来规划范围内没有适合 ${targetName} 的连续暗夜窗口`;
+    if (recommendation === OutingRecommendation.POOR || acceptedCapture === undefined &&
+      recommendation !== OutingRecommendation.ASTRONOMY_ONLY) {
+      return '目标在天文条件上可见，但天气不适合安排拍摄';
+    }
     if (recommendation === OutingRecommendation.GOOD) return '天气与天文条件较好，值得安排出行';
     if (recommendation === OutingRecommendation.CAUTION) return '存在可用窗口，建议出发前复查云量和降水';
-    if (recommendation === OutingRecommendation.POOR) return '天气风险较高，不建议为本窗口专程出行';
     return '天文窗口已离线算出，联网获取天气后再决定是否出门';
   }
 
@@ -507,6 +741,7 @@ export class ObservationPlanningService {
       moonPhaseName: ObservationPlanningService.moonPhaseName(startAtMs),
       samples: [],
       windows: [],
+      recommendedCaptureUnavailableReason: '目标缺少可靠坐标',
       recommendation: OutingRecommendation.UNAVAILABLE,
       summary: '该离线目录条目暂缺可靠坐标，可以查看资料，但不能生成可见时间窗口',
       warnings: ['请选择带精确坐标的亮星、重点星座、梅西耶目标、月球或主要行星'],
