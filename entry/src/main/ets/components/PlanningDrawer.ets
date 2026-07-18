@@ -6,6 +6,7 @@ import {
   ObservationWindow,
   OutingRecommendation,
   PlanningPageState,
+  PlanningSnapshot,
   PlanningTargetSummary,
   VisibilityStatus,
   WeatherHourlySample
@@ -39,7 +40,7 @@ export struct PlanningDrawer {
   @Prop activeDesignation: string = '';
   @Prop activeTargetIncluded: boolean = false;
   @Prop targetCount: number = 0;
-  @Prop result: ObservationPlanningResult | undefined = undefined;
+  @Prop snapshot: PlanningSnapshot | undefined = undefined;
   @Prop targetSummaries: PlanningTargetSummary[] = [];
   @Prop weatherSample: WeatherHourlySample | undefined = undefined;
   @Prop weatherMessage: string = '';
@@ -253,8 +254,8 @@ export struct PlanningDrawer {
           .layoutWeight(1)
           this.TargetActionButton()
         }
-        if (this.result !== undefined) {
-          Text(this.result.summary)
+        if (this.planningResult() !== undefined) {
+          Text(this.planningSummaryText())
             .fontSize(12).lineHeight(18).fontColor($r('app.color.sky_text_secondary')).width('100%').maxLines(2)
         }
         Row({ space: 6 }) {
@@ -275,7 +276,7 @@ export struct PlanningDrawer {
       }
       .width('100%')
 
-      if (this.result !== undefined && this.result.samples.length > 0) {
+      if (this.hasPlanningSamples()) {
         this.HeightTrend()
       }
 
@@ -298,8 +299,8 @@ export struct PlanningDrawer {
       .backgroundColor($r('app.color.sky_background'))
       .borderRadius($r('app.float.corner_card'))
 
-      if (this.result !== undefined && this.result.warnings.length > 0) {
-        Text(this.result.warnings[0])
+      if (this.hasPlanningWarning()) {
+        Text(this.planningWarningText())
           .fontSize(10).lineHeight(15).fontColor($r('app.color.app_warning')).width('100%').maxLines(2)
       }
     }
@@ -448,55 +449,61 @@ export struct PlanningDrawer {
   }
 
   private astronomyScoreText(): string {
-    if (this.result === undefined || this.result.astronomyScore === undefined) return '暂无';
-    return this.result.astronomyScore.toFixed(0);
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.astronomyScore === undefined) return '暂无';
+    return result.astronomyScore.toFixed(0);
   }
 
   private weatherScoreText(): string {
-    if (this.result === undefined || this.result.weatherScore === undefined) return '待获取';
-    return this.result.weatherScore.toFixed(0);
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.weatherScore === undefined) return '待获取';
+    return result.weatherScore.toFixed(0);
   }
 
   private overallScoreText(): string {
-    if (this.result === undefined || this.result.overallScore === undefined) return '仅天文';
-    return this.result.overallScore.toFixed(0);
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.overallScore === undefined) return '仅天文';
+    return result.overallScore.toFixed(0);
   }
 
   private eventText(kind: string): string {
-    if (this.result === undefined || this.result.samples.length === 0) return '暂无';
-    const first: ObservationSample = this.result.samples[0];
-    const last: ObservationSample = this.result.samples[this.result.samples.length - 1];
-    if (this.result.riseTransitSet.status === VisibilityStatus.NEVER_RISE) return '本夜不升';
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.samples.length === 0) return '暂无';
+    const first: ObservationSample = result.samples[0];
+    const last: ObservationSample = result.samples[result.samples.length - 1];
+    if (result.riseTransitSet.status === VisibilityStatus.NEVER_RISE) return '本夜不升';
     if (kind === 'transit') {
-      const transitAtMs: number | undefined = this.result.riseTransitSet.transitAtMs;
+      const transitAtMs: number | undefined = result.riseTransitSet.transitAtMs;
       return transitAtMs === undefined ? '暂无' :
-        `${this.formatClock(transitAtMs)} · ${this.result.riseTransitSet.maxAltitudeDegrees.toFixed(0)}°`;
+        `${this.formatClock(transitAtMs)} · ${result.riseTransitSet.maxAltitudeDegrees.toFixed(0)}°`;
     }
-    if (this.result.riseTransitSet.status === VisibilityStatus.ALWAYS_ABOVE_HORIZON) return '整夜可见';
+    if (result.riseTransitSet.status === VisibilityStatus.ALWAYS_ABOVE_HORIZON) return '整夜可见';
     if (kind === 'rise') {
-      if (this.result.riseTransitSet.riseAtMs !== undefined) {
-        return this.formatClock(this.result.riseTransitSet.riseAtMs);
+      if (result.riseTransitSet.riseAtMs !== undefined) {
+        return this.formatClock(result.riseTransitSet.riseAtMs);
       }
       return first.altitudeDegrees > 0 ? '夜初已升' : '本夜未升';
     }
-    if (this.result.riseTransitSet.setAtMs !== undefined) {
-      return this.formatClock(this.result.riseTransitSet.setAtMs);
+    if (result.riseTransitSet.setAtMs !== undefined) {
+      return this.formatClock(result.riseTransitSet.setAtMs);
     }
     return last.altitudeDegrees > 0 ? '夜末仍在' : '本夜未落';
   }
 
   private bestWindowText(): string {
-    if (this.result === undefined || this.result.bestWindow === undefined) return '本夜无可用窗口';
-    const window: ObservationWindow = this.result.bestWindow;
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.bestWindow === undefined) return '本夜无可用窗口';
+    const window: ObservationWindow = result.bestWindow;
     return `${this.formatClock(window.startAtMs)}–${this.formatClock(window.endAtMs)} · ` +
       `峰值 ${window.peakAltitudeDegrees.toFixed(0)}°`;
   }
 
   private moonText(): string {
-    if (this.result === undefined) return '暂无';
-    const separation: string = this.result.moonSeparationDegrees === undefined ? '' :
-      ` · 月距 ${this.result.moonSeparationDegrees.toFixed(0)}°`;
-    return `${this.result.moonPhaseName} ${this.result.moonIlluminationPercent.toFixed(0)}%${separation}`;
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined) return '暂无';
+    const separation: string = result.moonSeparationDegrees === undefined ? '' :
+      ` · 月距 ${result.moonSeparationDegrees.toFixed(0)}°`;
+    return `${result.moonPhaseName} ${result.moonIlluminationPercent.toFixed(0)}%${separation}`;
   }
 
   private weatherMetricsText(): string {
@@ -515,12 +522,13 @@ export struct PlanningDrawer {
   }
 
   private heightBars(): PlanningHeightBar[] {
-    if (this.result === undefined || this.result.samples.length === 0) return [];
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.samples.length === 0) return [];
     const bars: PlanningHeightBar[] = [];
     const count: number = 12;
     for (let index: number = 0; index < count; index++) {
-      const sampleIndex: number = Math.round(index * (this.result.samples.length - 1) / (count - 1));
-      const sample: ObservationSample = this.result.samples[sampleIndex];
+      const sampleIndex: number = Math.round(index * (result.samples.length - 1) / (count - 1));
+      const sample: ObservationSample = result.samples[sampleIndex];
       const height: number = Math.max(3, Math.min(50, (sample.altitudeDegrees + 10) / 90 * 50));
       let color: ResourceColor = $r('app.color.app_text_tertiary');
       if (sample.altitudeDegrees >= 20 && sample.sunAltitudeDegrees <= -12) {
@@ -536,6 +544,37 @@ export struct PlanningDrawer {
       });
     }
     return bars;
+  }
+
+  /** 抽屉只从一个原子快照读取结果，避免日期、地点与结果分别更新。 */
+  private planningResult(): ObservationPlanningResult | undefined {
+    if (this.snapshot === undefined) return undefined;
+    if (this.snapshot.result.startAtMs !== this.snapshot.period.startAtMs ||
+      this.snapshot.result.endAtMs !== this.snapshot.period.endAtMs ||
+      this.snapshot.result.targetId !== this.snapshot.targetId) {
+      return undefined;
+    }
+    return this.snapshot.result;
+  }
+
+  private planningSummaryText(): string {
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    return result === undefined ? '' : result.summary;
+  }
+
+  private hasPlanningSamples(): boolean {
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    return result !== undefined && result.samples.length > 0;
+  }
+
+  private hasPlanningWarning(): boolean {
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    return result !== undefined && result.warnings.length > 0;
+  }
+
+  private planningWarningText(): string {
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    return result === undefined || result.warnings.length === 0 ? '' : result.warnings[0];
   }
 
   private targetWindowText(summary: PlanningTargetSummary): string {

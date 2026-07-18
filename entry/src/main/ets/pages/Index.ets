@@ -45,11 +45,13 @@ import {
   NormalSkyViewState,
   NormalSkyViewport,
   ObservationNightPeriod,
+  ObservationNightSelection,
   ObservationPlanningConstraints,
   ObservationPlanningResult,
   ObserverState,
   OutingRecommendation,
   PlanningPageState,
+  PlanningSnapshot,
   PlanningTargetSummary,
   ProjectedSkyObject,
   RefractionMode,
@@ -291,6 +293,7 @@ struct Index {
   @State private plannedTargetSummaries: PlanningTargetSummary[] = [];
   @State private planningResult: ObservationPlanningResult | undefined = undefined;
   @State private activePlanningResult: ObservationPlanningResult | undefined = undefined;
+  @State private activePlanningSnapshot: PlanningSnapshot | undefined = undefined;
   @State private planningBusy: boolean = false;
   @State private planningLocationSource: string = '等待定位';
   @State private manualLatitudeText: string = '';
@@ -307,6 +310,7 @@ struct Index {
   private calibration: ArCalibration | undefined = undefined;
   private cameraCapabilities: CameraCapabilities | undefined = undefined;
   private weatherForecast: WeatherForecast | undefined = undefined;
+  private planningGeneration: number = 0;
   private mountPollTimer: number = -1;
   private gatewayPollTimer: number = -1;
   private taskPollTimer: number = -1;
@@ -1110,7 +1114,7 @@ struct Index {
       activeDesignation: this.activePlanningTarget().designation,
       activeTargetIncluded: this.plannedTargetIds.includes(this.activePlanningTarget().id),
       targetCount: this.plannedTargetIds.length,
-      result: this.activePlanningResult,
+      snapshot: this.activePlanningSnapshot,
       targetSummaries: this.plannedTargetSummaries,
       weatherSample: this.planningWeatherSample(this.activePlanningResult),
       weatherMessage: this.weatherMessage,
@@ -1764,7 +1768,8 @@ struct Index {
   }
 
   private refreshPlanningAndWeather(): void {
-    this.refreshPlanning();
+    const period: ObservationNightPeriod = this.planningPeriod();
+    this.refreshPlanning(period);
     if (this.observer !== undefined && this.weatherStatus === WeatherDataStatus.NOT_REQUESTED) {
       this.refreshWeatherForecast();
     }
@@ -1772,8 +1777,10 @@ struct Index {
 
   private selectPlanningDay(dayOffset: number): void {
     if (dayOffset === this.planningDayOffset || dayOffset < 0 || dayOffset > 1) return;
-    this.getUIContext().animateTo(MotionTokens.quick(), () => { this.planningDayOffset = dayOffset; });
-    this.refreshPlanning();
+    const period: ObservationNightPeriod = PlanningPeriodService.resolve(Date.now(), dayOffset);
+    // 业务日期先直接提交，再使用同一个 period 生成快照；动画不能参与规划数据的时序。
+    this.planningDayOffset = dayOffset;
+    this.refreshPlanning(period);
   }
 
   private togglePlanningLocationEditor(): void {
@@ -1782,16 +1789,18 @@ struct Index {
     });
   }
 
-  private refreshPlanning(): void {
+  private refreshPlanning(period?: ObservationNightPeriod): void {
     if (this.observer === undefined) {
       this.planningResult = undefined;
       this.activePlanningResult = undefined;
+      this.activePlanningSnapshot = undefined;
       this.refreshPlannedTargetSummaries();
       return;
     }
     const constraints: ObservationPlanningConstraints = ObservationPlanningService.defaultConstraints();
     constraints.horizonHours = 24;
-    const startAtMs: number = this.planningStartAtMs();
+    const resolvedPeriod: ObservationNightPeriod = period === undefined ? this.planningPeriod() : period;
+    const startAtMs: number = resolvedPeriod.startAtMs;
     try {
       this.planningResult = ObservationPlanningService.plan(
         this.selectedTarget(), this.observer, startAtMs, this.weatherForecast, constraints);
@@ -1799,10 +1808,27 @@ struct Index {
       this.activePlanningResult = planningTarget.id === this.selectedTargetId ? this.planningResult :
         ObservationPlanningService.plan(
           planningTarget, this.observer, startAtMs, this.weatherForecast, constraints);
+      if (this.activePlanningResult.startAtMs !== resolvedPeriod.startAtMs ||
+        this.activePlanningResult.endAtMs !== resolvedPeriod.endAtMs) {
+        throw new Error('规划结果与当前观测夜不一致');
+      }
+      this.planningGeneration++;
+      this.activePlanningSnapshot = {
+        generation: this.planningGeneration,
+        dayOffset: resolvedPeriod.selection === ObservationNightSelection.TONIGHT ? 0 : 1,
+        period: resolvedPeriod,
+        targetId: planningTarget.id,
+        observerLatitudeDegrees: this.observer.latitudeDegrees,
+        observerLongitudeDegrees: this.observer.longitudeDegrees,
+        locationSource: this.planningLocationSource,
+        locationProvisional: false,
+        result: this.activePlanningResult
+      };
       this.refreshPlannedTargetSummaries(startAtMs, constraints);
     } catch (error) {
       this.planningResult = undefined;
       this.activePlanningResult = undefined;
+      this.activePlanningSnapshot = undefined;
       this.operationMessage = `观测规划失败：${error}`;
     }
   }

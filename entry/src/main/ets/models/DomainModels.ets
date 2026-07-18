@@ -474,6 +474,22 @@ export interface PlanningTargetSummary {
   unavailableReason: string;
 }
 
+/**
+ * 规划抽屉的一次原子计算快照。观测夜、地点和结果必须来自同一次计算，
+ * 避免 ArkUI 状态提交期间出现“新日期标题 + 旧日期结果”的混合画面。
+ */
+export interface PlanningSnapshot {
+  generation: number;
+  dayOffset: number;
+  period: ObservationNightPeriod;
+  targetId: string;
+  observerLatitudeDegrees: number;
+  observerLongitudeDegrees: number;
+  locationSource: string;
+  locationProvisional: boolean;
+  result: ObservationPlanningResult;
+}
+
 /** 某一时刻的目标、太阳、月球和天气联合状态。 */
 export interface ObservationSample {
   timestampMs: number;
