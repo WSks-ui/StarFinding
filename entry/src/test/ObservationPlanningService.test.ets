@@ -36,17 +36,22 @@ function requireTarget(id: string): CelestialObject {
 }
 
 function clearForecast(startAtMs: number): WeatherForecast {
+  return uniformForecast(startAtMs, 0, 0, 3.6, 7.2);
+}
+
+function uniformForecast(startAtMs: number, cloudPercent: number, rainPercent: number,
+  windSpeedKph: number, windGustKph: number): WeatherForecast {
   const hourly: WeatherHourlySample[] = [];
   for (let offsetHours: number = 0; offsetHours <= 48; offsetHours++) {
     hourly.push({
       timestampMs: startAtMs + offsetHours * 3600000,
-      cloudCoverPercent: 0,
-      precipitationProbabilityPercent: 0,
-      precipitationMillimeters: 0,
+      cloudCoverPercent: cloudPercent,
+      precipitationProbabilityPercent: rainPercent,
+      precipitationMillimeters: rainPercent >= 60 ? 0.5 : 0,
       humidityPercent: 50,
       visibilityMeters: 20000,
-      windSpeedKph: 3.6,
-      windGustKph: 7.2
+      windSpeedKph: windSpeedKph,
+      windGustKph: windGustKph
     });
   }
   return {
@@ -107,6 +112,12 @@ export default function observationPlanningServiceTest(): void {
         requireTarget('star-vega'), zhengzhouObserver(startAtMs), startAtMs);
       expect(result.windows.length > 0).assertTrue();
       expect(result.bestWindow !== undefined).assertTrue();
+      expect(result.recommendedCaptureWindow !== undefined).assertTrue();
+      if (result.recommendedCaptureWindow !== undefined) {
+        expect(result.recommendedCaptureWindow.astronomyOnly).assertTrue();
+        expect(result.recommendedCaptureWindow.durationMinutes >= 60 &&
+          result.recommendedCaptureWindow.durationMinutes <= 180).assertTrue();
+      }
       expect(result.recommendation).assertEqual(OutingRecommendation.ASTRONOMY_ONLY);
       expect(result.overallScore === undefined).assertTrue();
     });
@@ -165,6 +176,30 @@ export default function observationPlanningServiceTest(): void {
       expect(result.weatherStatus).assertEqual(WeatherDataStatus.LIVE);
       expect(result.weatherScore !== undefined).assertTrue();
       expect(result.overallScore !== undefined).assertTrue();
+      expect(result.recommendedCaptureWindow !== undefined).assertTrue();
+      if (result.recommendedCaptureWindow !== undefined) {
+        expect(result.recommendedCaptureWindow.durationMinutes).assertEqual(180);
+        expect(result.planningWeatherSummary !== undefined).assertTrue();
+        if (result.planningWeatherSummary !== undefined) {
+          expect(result.planningWeatherSummary.startAtMs)
+            .assertEqual(result.recommendedCaptureWindow.startAtMs);
+          expect(result.planningWeatherSummary.endAtMs)
+            .assertEqual(result.recommendedCaptureWindow.endAtMs);
+        }
+      }
+    });
+
+    it('整夜恶劣天气保留天文窗口但不生成推荐拍摄时段', 0, () => {
+      const startAtMs: number = Date.UTC(2026, 6, 18, 4, 0, 0);
+      const forecast: WeatherForecast = uniformForecast(startAtMs, 98, 75, 48, 60);
+      const result: ObservationPlanningResult = ObservationPlanningService.plan(
+        requireTarget('star-vega'), zhengzhouObserver(startAtMs), startAtMs, forecast);
+      expect(result.bestWindow !== undefined).assertTrue();
+      expect(result.recommendedCaptureWindow === undefined).assertTrue();
+      expect(result.recommendedCaptureUnavailableReason.includes('天气不适合拍摄')).assertTrue();
+      expect(result.planningWeatherSummary !== undefined).assertTrue();
+      expect(result.overallScore !== undefined && result.overallScore < 45).assertTrue();
+      expect(result.recommendation).assertEqual(OutingRecommendation.POOR);
     });
 
     it('亮星月球和行星均可生成完整离线规划', 0, () => {
@@ -186,6 +221,28 @@ export default function observationPlanningServiceTest(): void {
       expect(result.weatherScore === undefined).assertTrue();
       expect(result.overallScore === undefined).assertTrue();
       expect(result.recommendation).assertEqual(OutingRecommendation.ASTRONOMY_ONLY);
+      expect(result.recommendedCaptureWindow !== undefined).assertTrue();
+      if (result.recommendedCaptureWindow !== undefined) {
+        expect(result.recommendedCaptureWindow.astronomyOnly).assertTrue();
+      }
+    });
+
+    it('相邻观测夜使用同一预报时仍生成各自日期的结果', 0, () => {
+      const tonightStartAtMs: number = Date.UTC(2026, 6, 18, 4, 0, 0);
+      const tomorrowStartAtMs: number = tonightStartAtMs + 24 * 60 * 60 * 1000;
+      const forecast: WeatherForecast = clearForecast(tonightStartAtMs);
+      const tonight: ObservationPlanningResult = ObservationPlanningService.plan(
+        requireTarget('star-vega'), zhengzhouObserver(tonightStartAtMs), tonightStartAtMs, forecast);
+      const tomorrow: ObservationPlanningResult = ObservationPlanningService.plan(
+        requireTarget('star-vega'), zhengzhouObserver(tomorrowStartAtMs), tomorrowStartAtMs, forecast);
+      expect(tomorrow.startAtMs - tonight.startAtMs).assertEqual(24 * 60 * 60 * 1000);
+      expect(tomorrow.riseTransitSet.transitAtMs !== tonight.riseTransitSet.transitAtMs).assertTrue();
+      expect(Math.abs(tomorrow.moonIlluminationPercent - tonight.moonIlluminationPercent) > 1).assertTrue();
+      expect(tomorrow.recommendedCaptureWindow !== undefined &&
+        tonight.recommendedCaptureWindow !== undefined).assertTrue();
+      if (tomorrow.recommendedCaptureWindow !== undefined) {
+        expect(tomorrow.recommendedCaptureWindow.startAtMs >= tomorrowStartAtMs).assertTrue();
+      }
     });
 
     it('动态月球坐标随规划时间变化', 0, () => {

@@ -14,6 +14,8 @@ import normalSkyViewStateServiceTest from './NormalSkyViewStateService.test';
 import normalSkyTimeServiceTest from './NormalSkyTimeService.test';
 import observationExecutionPolicyTest from './ObservationExecutionPolicy.test';
 import planningPeriodServiceTest from './PlanningPeriodService.test';
+import planningSnapshotServiceTest from './PlanningSnapshotService.test';
+import observerLocationPolicyTest from './ObserverLocationPolicy.test';
 import deviceReadinessServiceTest from './DeviceReadinessService.test';
 import taskSessionStoreTest from './TaskSessionStore.test';
 
@@ -34,6 +36,8 @@ export default function testsuite() {
   normalSkyTimeServiceTest();
   observationExecutionPolicyTest();
   planningPeriodServiceTest();
+  planningSnapshotServiceTest();
+  observerLocationPolicyTest();
   deviceReadinessServiceTest();
   taskSessionStoreTest();
 }
