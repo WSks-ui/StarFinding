@@ -181,6 +181,14 @@
       "value": "最佳窗口"
     },
     {
+      "name": "planning_recommended_capture_window",
+      "value": "推荐拍摄时段"
+    },
+    {
+      "name": "planning_astronomical_window",
+      "value": "天文可观测时段"
+    },
+    {
       "name": "planning_moonlight",
       "value": "月光"
     },
@@ -191,6 +199,18 @@
     {
       "name": "planning_cloud_rain_wind",
       "value": "云 / 雨 / 风"
+    },
+    {
+      "name": "planning_weather_period",
+      "value": "时段天气"
+    },
+    {
+      "name": "planning_weather_details",
+      "value": "预报详情"
+    },
+    {
+      "name": "planning_weather_details_hide",
+      "value": "收起详情"
     },
     {
       "name": "planning_set_location_first",

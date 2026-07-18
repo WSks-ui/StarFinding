@@ -70,7 +70,6 @@ import {
   VisibilityStatus,
   WeatherDataStatus,
   WeatherForecast,
-  WeatherHourlySample,
   WorkflowCheckpoint,
   WorkflowStage,
   WorkflowStepState
@@ -1121,8 +1120,8 @@ struct Index {
       targetCount: this.plannedTargetIds.length,
       snapshot: this.activePlanningSnapshot,
       targetSummaries: this.plannedTargetSummaries,
-      weatherSample: this.planningWeatherSample(this.activePlanningResult),
       weatherMessage: this.weatherMessage,
+      weatherDetailsText: this.weatherDetailsText(),
       locationText: this.locationText,
       locationSource: this.planningLocationSource,
       locationEditorOpen: this.planningLocationEditorOpen,
@@ -1775,7 +1774,9 @@ struct Index {
   private refreshPlanningAndWeather(): void {
     const period: ObservationNightPeriod = this.planningPeriod();
     this.refreshPlanning(period);
-    if (this.observer !== undefined && this.weatherStatus === WeatherDataStatus.NOT_REQUESTED) {
+    if (this.observer !== undefined && !this.planningBusy &&
+      (this.weatherForecast === undefined ||
+        Date.now() - this.weatherForecast.fetchedAtMs > 30 * 60 * 1000)) {
       this.refreshWeatherForecast();
     }
   }
@@ -1932,7 +1933,7 @@ struct Index {
       }
       this.weatherForecast = forecast;
       this.weatherStatus = WeatherDataStatus.LIVE;
-      this.weatherMessage = `在线预报 · Open-Meteo · ${this.formatPlanningTime(forecast.fetchedAtMs)} 获取`;
+      this.weatherMessage = `预报更新于 ${this.formatClockTime(forecast.fetchedAtMs)}`;
     } catch (error) {
       if (requestGeneration !== this.weatherRequestGeneration) return;
       const cacheUsable: boolean = previous !== undefined && Date.now() - previous.fetchedAtMs <= 86400000 &&
@@ -1953,7 +1954,7 @@ struct Index {
           errorMessage: `${error}`
         };
         this.weatherStatus = WeatherDataStatus.CACHED;
-        this.weatherMessage = `使用本次会话 ${this.weatherAgeText(previous.fetchedAtMs)}前预报 · 出发前请更新`;
+        this.weatherMessage = `使用 ${this.weatherAgeText(previous.fetchedAtMs)}前的缓存预报`;
       } else {
         this.weatherForecast = undefined;
         this.weatherStatus = WeatherDataStatus.UNAVAILABLE;
@@ -1975,39 +1976,16 @@ struct Index {
     return $r('app.color.app_text_secondary');
   }
 
-  private planningWeatherSample(result?: ObservationPlanningResult): WeatherHourlySample | undefined {
-    if (this.weatherForecast === undefined || this.weatherForecast.hourly.length === 0) return undefined;
-    let timestampMs: number = this.planningStartAtMs();
-    if (result !== undefined && result.bestWindow !== undefined) {
-      timestampMs = result.bestWindow.peakAtMs;
-      const nowMs: number = Date.now();
-      // 正在进行的最佳窗口优先展示当前小时天气，避免峰值已经过去时出现“待获取”。
-      if (nowMs >= result.bestWindow.startAtMs && nowMs <= result.bestWindow.endAtMs) {
-        timestampMs = nowMs;
-      }
-    }
-    let nearest: WeatherHourlySample = this.weatherForecast.hourly[0];
-    let distance: number = Math.abs(nearest.timestampMs - timestampMs);
-    for (let index: number = 1; index < this.weatherForecast.hourly.length; index++) {
-      const candidate: WeatherHourlySample = this.weatherForecast.hourly[index];
-      const candidateDistance: number = Math.abs(candidate.timestampMs - timestampMs);
-      if (candidateDistance < distance) {
-        nearest = candidate;
-        distance = candidateDistance;
-      }
-    }
-    return distance <= 5400000 ? nearest : undefined;
-  }
-
   private planningRecommendationTitle(): string {
     if (this.planningResult === undefined) return '等待规划';
     if (this.weatherStatus === WeatherDataStatus.LOADING) return '正在更新预报';
     if (this.weatherStatus === WeatherDataStatus.NOT_REQUESTED ||
       this.weatherStatus === WeatherDataStatus.UNAVAILABLE) return '仅天文条件';
     if (this.weatherRequiresConfirmation()) return '天气待确认';
-    if (this.planningResult.recommendation === OutingRecommendation.GOOD) return '今晚条件较好';
-    if (this.planningResult.recommendation === OutingRecommendation.CAUTION) return '今晚条件一般';
-    if (this.planningResult.recommendation === OutingRecommendation.POOR) return '今晚暂不推荐';
+    const nightLabel: string = this.planningDayOffset === 0 ? '今晚' : '明晚';
+    if (this.planningResult.recommendation === OutingRecommendation.GOOD) return `${nightLabel}条件较好`;
+    if (this.planningResult.recommendation === OutingRecommendation.CAUTION) return `${nightLabel}条件一般`;
+    if (this.planningResult.recommendation === OutingRecommendation.POOR) return `${nightLabel}暂不推荐`;
     if (this.planningResult.recommendation === OutingRecommendation.ASTRONOMY_ONLY) return '仅天文条件';
     return '暂无窗口';
   }
@@ -2045,11 +2023,18 @@ struct Index {
   }
 
   private planningPeekWindowText(): string {
-    if (this.planningResult === undefined || this.planningResult.bestWindow === undefined) {
+    if (this.planningResult === undefined) {
       return `${this.selectedVisibilityText()} · ${this.targetAltitudeText()}`;
     }
-    return `${this.formatClockTime(this.planningResult.bestWindow.startAtMs)}–` +
-      `${this.formatClockTime(this.planningResult.bestWindow.endAtMs)}`;
+    if (this.planningResult.recommendedCaptureWindow !== undefined) {
+      return `${this.formatClockTime(this.planningResult.recommendedCaptureWindow.startAtMs)}–` +
+        `${this.formatClockTime(this.planningResult.recommendedCaptureWindow.endAtMs)}`;
+    }
+    if (this.planningResult.bestWindow !== undefined) {
+      return `天文 ${this.formatClockTime(this.planningResult.bestWindow.startAtMs)}–` +
+        `${this.formatClockTime(this.planningResult.bestWindow.endAtMs)}`;
+    }
+    return `${this.selectedVisibilityText()} · ${this.targetAltitudeText()}`;
   }
 
   private recommendationColor(recommendation: OutingRecommendation): ResourceColor {
@@ -2119,6 +2104,13 @@ struct Index {
     const timestampMs: number = this.activeSection === 0 ? this.activeSkyTimestampMs() : Date.now();
     const date: Date = new Date(timestampMs);
     return this.pad2(date.getHours()) + ':' + this.pad2(date.getMinutes());
+  }
+
+  private weatherDetailsText(): string {
+    if (this.weatherForecast === undefined) return '';
+    const freshness: string = this.weatherRequiresConfirmation() ? '预报待确认' : '逐小时预报';
+    return `${this.weatherForecast.sourceName} · ${this.weatherForecast.timezone} · ` +
+      `${this.weatherForecast.forecastDays} 天${freshness}`;
   }
 
   private activeSkyTimestampMs(): number {
@@ -2737,7 +2729,7 @@ struct Index {
     this.manualLatitudeText = result.observer.latitudeDegrees.toFixed(5);
     this.manualLongitudeText = result.observer.longitudeDegrees.toFixed(5);
     this.planningLocationSource = result.source === ObserverLocationSource.LAST_KNOWN ?
-      '最近位置' : '系统定位';
+      '最近位置（精度校正中）' : '系统定位';
     this.planningLocationProvisional = result.provisional;
     this.getUIContext().animateTo(MotionTokens.standard(), () => {
       this.planningLocationEditorOpen = false;

@@ -1,0 +1,24 @@
+{
+  "string": [
+    {
+      "name": "planning_recommended_capture_window",
+      "value": "Recommended capture"
+    },
+    {
+      "name": "planning_astronomical_window",
+      "value": "Astronomical window"
+    },
+    {
+      "name": "planning_weather_period",
+      "value": "Window weather"
+    },
+    {
+      "name": "planning_weather_details",
+      "value": "Forecast details"
+    },
+    {
+      "name": "planning_weather_details_hide",
+      "value": "Hide details"
+    }
+  ]
+}

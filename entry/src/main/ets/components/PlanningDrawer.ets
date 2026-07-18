@@ -8,8 +8,9 @@ import {
   PlanningPageState,
   PlanningSnapshot,
   PlanningTargetSummary,
-  VisibilityStatus,
-  WeatherHourlySample
+  PlanningWeatherSummary,
+  RecommendedCaptureWindow,
+  VisibilityStatus
 } from '../models';
 import { MotionTokens } from '../utils/MotionTokens';
 
@@ -18,6 +19,7 @@ interface PlanningHeightBar {
   label: string;
   height: number;
   color: ResourceColor;
+  recommended: boolean;
 }
 
 @Component
@@ -42,14 +44,15 @@ export struct PlanningDrawer {
   @Prop targetCount: number = 0;
   @Prop snapshot: PlanningSnapshot | undefined = undefined;
   @Prop targetSummaries: PlanningTargetSummary[] = [];
-  @Prop weatherSample: WeatherHourlySample | undefined = undefined;
   @Prop weatherMessage: string = '';
+  @Prop weatherDetailsText: string = '';
   @Prop locationText: string = '';
   @Prop locationSource: string = '';
   @Prop locationEditorOpen: boolean = false;
   @Prop manualLatitudeText: string = '';
   @Prop manualLongitudeText: string = '';
   @Prop busy: boolean = false;
+  @State private weatherDetailsVisible: boolean = false;
 
   onClose: () => void = (): void => {};
   onDayChange: (dayOffset: number) => void = (_dayOffset: number): void => {};
@@ -109,11 +112,11 @@ export struct PlanningDrawer {
   private Header() {
     Row({ space: 10 }) {
       Column({ space: 3 }) {
-        Text(this.dayOffset === 0 ? $r('app.string.planning_title_tonight') :
+        Text(this.activeDayOffset() === 0 ? $r('app.string.planning_title_tonight') :
           $r('app.string.planning_title_tomorrow'))
           .fontSize(18).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary'))
         Row({ space: 6 }) {
-          Text(`${this.targetCount} 个目标 · ${this.formatDate(this.period.startAtMs)}`)
+          Text(`${this.targetCount} 个目标 · ${this.formatDate(this.activePeriod().startAtMs)}`)
             .fontSize(11).fontColor($r('app.color.sky_text_secondary'))
           Text($r('app.string.planning_device_time'))
             .fontSize(10).fontColor($r('app.color.sky_text_tertiary'))
@@ -159,16 +162,21 @@ export struct PlanningDrawer {
     }
     .width('100%')
     .padding({ left: 12, right: 12, bottom: 8 })
+    if (this.locationText.length > 0 && !this.locationEditorOpen) {
+      Text(`${this.locationSource} · ${this.locationText}`)
+        .fontSize(9).fontColor($r('app.color.sky_text_tertiary'))
+        .width('100%').padding({ left: 16, right: 16, bottom: 7 }).maxLines(1)
+    }
   }
 
   @Builder
   private DayButton(label: Resource, offset: number) {
     Button(label)
       .height(40).padding({ left: 16, right: 16 }).fontSize(13)
-      .fontWeight(this.dayOffset === offset ? FontWeight.Bold : FontWeight.Medium)
-      .fontColor(this.dayOffset === offset ?
+      .fontWeight(this.activeDayOffset() === offset ? FontWeight.Bold : FontWeight.Medium)
+      .fontColor(this.activeDayOffset() === offset ?
         $r('app.color.app_on_brand') : $r('app.color.app_text_secondary'))
-      .backgroundColor(this.dayOffset === offset ?
+      .backgroundColor(this.activeDayOffset() === offset ?
         $r('app.color.app_brand') : $r('app.color.app_surface_primary'))
       .borderRadius(20)
       .onClick(() => { this.onDayChange(offset); })
@@ -283,18 +291,34 @@ export struct PlanningDrawer {
       }
 
       Column({ space: 6 }) {
-        this.InfoLine($r('app.string.planning_best_window'), this.bestWindowText())
+        this.InfoLine($r('app.string.planning_recommended_capture_window'), this.recommendedCaptureText())
+        this.InfoLine($r('app.string.planning_astronomical_window'), this.astronomicalWindowText())
         this.InfoLine($r('app.string.planning_moonlight'), this.moonText())
         if (pageState === PlanningPageState.WEATHER_LOADING) {
-          this.InfoLine($r('app.string.planning_weather'), $r('app.string.planning_weather_loading'))
-          this.InfoLine($r('app.string.planning_cloud_rain_wind'), $r('app.string.planning_weather_pending'))
+          this.InfoLine($r('app.string.planning_weather_period'), $r('app.string.planning_weather_loading'))
         } else if (pageState === PlanningPageState.WEATHER_UNAVAILABLE ||
           pageState === PlanningPageState.ASTRONOMY_ONLY) {
-          this.InfoLine($r('app.string.planning_weather'), $r('app.string.planning_weather_unavailable'))
-          this.InfoLine($r('app.string.planning_cloud_rain_wind'), $r('app.string.planning_weather_pending'))
+          this.InfoLine($r('app.string.planning_weather_period'), $r('app.string.planning_weather_unavailable'))
         } else {
-          this.InfoLine($r('app.string.planning_weather'), this.weatherMessage)
-          this.InfoLine($r('app.string.planning_cloud_rain_wind'), this.weatherMetricsText())
+          this.InfoLine($r('app.string.planning_weather_period'), this.weatherMetricsText())
+        }
+        Row({ space: 8 }) {
+          Text(this.weatherMessage)
+            .fontSize(9).fontColor($r('app.color.sky_text_tertiary')).layoutWeight(1).maxLines(1)
+          if (this.weatherDetailsText.length > 0) {
+            Button(this.weatherDetailsVisible ? $r('app.string.planning_weather_details_hide') :
+              $r('app.string.planning_weather_details'))
+              .height(28).padding({ left: 10, right: 10 }).fontSize(9)
+              .fontColor($r('app.color.sky_text_secondary'))
+              .backgroundColor($r('app.color.app_surface_primary')).borderRadius(14)
+              .onClick(() => { this.weatherDetailsVisible = !this.weatherDetailsVisible; })
+          }
+        }
+        .width('100%')
+        if (this.weatherDetailsVisible && this.weatherDetailsText.length > 0) {
+          Text(this.weatherDetailsText)
+            .fontSize(9).lineHeight(14).fontColor($r('app.color.sky_text_tertiary'))
+            .width('100%').maxLines(3)
         }
       }
       .width('100%').padding(11)
@@ -369,7 +393,7 @@ export struct PlanningDrawer {
         Text($r('app.string.planning_altitude_trend'))
           .fontSize(11).fontWeight(FontWeight.Bold).fontColor($r('app.color.sky_text_primary'))
         Blank()
-        Text(`${this.formatDate(this.period.startAtMs)}–${this.formatDate(this.period.endAtMs)}`)
+        Text(`${this.formatDate(this.activePeriod().startAtMs)}–${this.formatDate(this.activePeriod().endAtMs)}`)
           .fontSize(9).fontColor($r('app.color.sky_text_tertiary'))
       }
       .width('100%')
@@ -492,12 +516,22 @@ export struct PlanningDrawer {
     return last.altitudeDegrees > 0 ? '夜末仍在' : '本夜未落';
   }
 
-  private bestWindowText(): string {
+  private astronomicalWindowText(): string {
     const result: ObservationPlanningResult | undefined = this.planningResult();
     if (result === undefined || result.bestWindow === undefined) return '本夜无可用窗口';
     const window: ObservationWindow = result.bestWindow;
     return `${this.formatClock(window.startAtMs)}–${this.formatClock(window.endAtMs)} · ` +
       `峰值 ${window.peakAltitudeDegrees.toFixed(0)}°`;
+  }
+
+  private recommendedCaptureText(): string {
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined) return '暂无';
+    const window: RecommendedCaptureWindow | undefined = result.recommendedCaptureWindow;
+    if (window === undefined) return result.recommendedCaptureUnavailableReason;
+    const mode: string = window.astronomyOnly ? ' · 仅天文' : '';
+    return `${this.formatClock(window.startAtMs)}–${this.formatClock(window.endAtMs)} · ` +
+      `${window.durationMinutes}分钟${mode}`;
   }
 
   private moonText(): string {
@@ -509,16 +543,23 @@ export struct PlanningDrawer {
   }
 
   private weatherMetricsText(): string {
-    if (this.weatherSample === undefined) return '待获取';
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.planningWeatherSummary === undefined) return '待获取';
+    const summary: PlanningWeatherSummary = result.planningWeatherSummary;
     const metrics: string[] = [];
-    if (this.weatherSample.cloudCoverPercent !== undefined) {
-      metrics.push(`云量 ${this.weatherSample.cloudCoverPercent.toFixed(0)}%`);
+    if (summary.averageCloudCoverPercent !== undefined && summary.maximumCloudCoverPercent !== undefined) {
+      metrics.push(`云均 ${summary.averageCloudCoverPercent.toFixed(0)}% / 最高 ` +
+        `${summary.maximumCloudCoverPercent.toFixed(0)}%`);
     }
-    if (this.weatherSample.precipitationProbabilityPercent !== undefined) {
-      metrics.push(`降水 ${this.weatherSample.precipitationProbabilityPercent.toFixed(0)}%`);
+    if (summary.maximumPrecipitationProbabilityPercent !== undefined) {
+      metrics.push(`降水最高 ${summary.maximumPrecipitationProbabilityPercent.toFixed(0)}%`);
     }
-    if (this.weatherSample.windSpeedKph !== undefined) {
-      metrics.push(`风速 ${this.weatherSample.windSpeedKph.toFixed(0)}km/h`);
+    if (summary.averageWindSpeedKph !== undefined && summary.maximumWindSpeedKph !== undefined) {
+      metrics.push(`风均 ${summary.averageWindSpeedKph.toFixed(0)} / 最高 ` +
+        `${summary.maximumWindSpeedKph.toFixed(0)}km/h`);
+    }
+    if (summary.maximumWindGustKph !== undefined) {
+      metrics.push(`阵风 ${summary.maximumWindGustKph.toFixed(0)}km/h`);
     }
     return metrics.length === 0 ? '暂无逐小时数据' : metrics.join(' · ');
   }
@@ -532,8 +573,11 @@ export struct PlanningDrawer {
       const sampleIndex: number = Math.round(index * (result.samples.length - 1) / (count - 1));
       const sample: ObservationSample = result.samples[sampleIndex];
       const height: number = Math.max(3, Math.min(50, (sample.altitudeDegrees + 10) / 90 * 50));
+      const recommended: boolean = this.isRecommendedTimestamp(sample.timestampMs);
       let color: ResourceColor = $r('app.color.app_text_tertiary');
-      if (sample.altitudeDegrees >= 20 && sample.sunAltitudeDegrees <= -12) {
+      if (recommended) {
+        color = $r('app.color.app_brand');
+      } else if (sample.altitudeDegrees >= 20 && sample.sunAltitudeDegrees <= -12) {
         color = $r('app.color.app_success');
       } else if (sample.altitudeDegrees >= 0) {
         color = $r('app.color.app_warning');
@@ -542,7 +586,8 @@ export struct PlanningDrawer {
         id: sample.timestampMs.toString(),
         label: this.pad2(new Date(sample.timestampMs).getHours()),
         height: height,
-        color: color
+        color: color,
+        recommended: recommended
       });
     }
     return bars;
@@ -557,6 +602,22 @@ export struct PlanningDrawer {
       return undefined;
     }
     return this.snapshot.result;
+  }
+
+  private activePeriod(): ObservationNightPeriod {
+    return this.snapshot === undefined ? this.period : this.snapshot.period;
+  }
+
+  private activeDayOffset(): number {
+    return this.snapshot === undefined ? this.dayOffset : this.snapshot.dayOffset;
+  }
+
+  private isRecommendedTimestamp(timestampMs: number): boolean {
+    const result: ObservationPlanningResult | undefined = this.planningResult();
+    if (result === undefined || result.recommendedCaptureWindow === undefined) return false;
+    // 高度图只有 12 根柱，每根代表约两小时；适度扩展命中范围，避免短晴窗完全没有高亮。
+    return timestampMs >= result.recommendedCaptureWindow.startAtMs - 60 * 60 * 1000 &&
+      timestampMs <= result.recommendedCaptureWindow.endAtMs + 60 * 60 * 1000;
   }
 
   private planningSummaryText(): string {
