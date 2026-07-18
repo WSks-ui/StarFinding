@@ -113,6 +113,8 @@ import {
   NormalSkyTimeService,
   NormalSkyViewStateService,
   ObserverLocationResult,
+  ObserverLocationSequence,
+  ObserverLocationSource,
   ObserverLocationService,
   OnStepLX200Client,
   ObservationExecutionPolicy,
@@ -295,6 +297,8 @@ struct Index {
   @State private activePlanningResult: ObservationPlanningResult | undefined = undefined;
   @State private activePlanningSnapshot: PlanningSnapshot | undefined = undefined;
   @State private planningBusy: boolean = false;
+  @State private planningLocationBusy: boolean = false;
+  @State private planningLocationProvisional: boolean = false;
   @State private planningLocationSource: string = '等待定位';
   @State private manualLatitudeText: string = '';
   @State private manualLongitudeText: string = '';
@@ -311,6 +315,7 @@ struct Index {
   private cameraCapabilities: CameraCapabilities | undefined = undefined;
   private weatherForecast: WeatherForecast | undefined = undefined;
   private planningGeneration: number = 0;
+  private weatherRequestGeneration: number = 0;
   private mountPollTimer: number = -1;
   private gatewayPollTimer: number = -1;
   private taskPollTimer: number = -1;
@@ -1123,7 +1128,7 @@ struct Index {
       locationEditorOpen: this.planningLocationEditorOpen,
       manualLatitudeText: this.manualLatitudeText,
       manualLongitudeText: this.manualLongitudeText,
-      busy: this.planningBusy,
+      busy: this.planningBusy || this.planningLocationBusy,
       onClose: (): void => { this.openSkyPanel(2); },
       onDayChange: (dayOffset: number): void => { this.selectPlanningDay(dayOffset); },
       onToggleLocationEditor: (): void => { this.togglePlanningLocationEditor(); },
@@ -1821,7 +1826,7 @@ struct Index {
         observerLatitudeDegrees: this.observer.latitudeDegrees,
         observerLongitudeDegrees: this.observer.longitudeDegrees,
         locationSource: this.planningLocationSource,
-        locationProvisional: false,
+        locationProvisional: this.planningLocationProvisional,
         result: this.activePlanningResult
       };
       this.refreshPlannedTargetSummaries(startAtMs, constraints);
@@ -1878,6 +1883,9 @@ struct Index {
       return;
     }
     this.locationRequestGeneration++;
+    this.planningLocationBusy = false;
+    this.weatherRequestGeneration++;
+    this.planningBusy = false;
     this.observer = {
       latitudeDegrees: latitude,
       longitudeDegrees: longitude,
@@ -1888,6 +1896,7 @@ struct Index {
     this.locationAccuracy = 0;
     this.locationText = `${latitude.toFixed(2)}, ${longitude.toFixed(2)}`;
     this.planningLocationSource = '手动坐标';
+    this.planningLocationProvisional = false;
     this.weatherForecast = undefined;
     this.weatherStatus = WeatherDataStatus.NOT_REQUESTED;
     this.weatherMessage = '地点已改变 · 天气预报待更新';
@@ -1903,6 +1912,7 @@ struct Index {
 
   private async refreshWeatherForecast(): Promise<void> {
     if (this.observer === undefined || this.planningBusy) return;
+    const requestGeneration: number = ++this.weatherRequestGeneration;
     const requestObserver: ObserverState = {
       latitudeDegrees: this.observer.latitudeDegrees,
       longitudeDegrees: this.observer.longitudeDegrees,
@@ -1915,7 +1925,8 @@ struct Index {
     this.weatherMessage = '正在更新预报 · 天文窗口仍可查看';
     try {
       const forecast: WeatherForecast = await this.weatherService.fetch(requestObserver);
-      if (this.observer === undefined || Math.abs(this.observer.latitudeDegrees - requestObserver.latitudeDegrees) >
+      if (requestGeneration !== this.weatherRequestGeneration || this.observer === undefined ||
+        Math.abs(this.observer.latitudeDegrees - requestObserver.latitudeDegrees) >
         0.0001 || Math.abs(this.observer.longitudeDegrees - requestObserver.longitudeDegrees) > 0.0001) {
         return;
       }
@@ -1923,6 +1934,7 @@ struct Index {
       this.weatherStatus = WeatherDataStatus.LIVE;
       this.weatherMessage = `在线预报 · Open-Meteo · ${this.formatPlanningTime(forecast.fetchedAtMs)} 获取`;
     } catch (error) {
+      if (requestGeneration !== this.weatherRequestGeneration) return;
       const cacheUsable: boolean = previous !== undefined && Date.now() - previous.fetchedAtMs <= 86400000 &&
         Math.abs(previous.latitudeDegrees - requestObserver.latitudeDegrees) <= 0.2 &&
         Math.abs(previous.longitudeDegrees - requestObserver.longitudeDegrees) <= 0.2;
@@ -1948,8 +1960,10 @@ struct Index {
         this.weatherMessage = '天气未获取 · 仅按天文条件规划';
       }
     } finally {
-      this.planningBusy = false;
-      this.refreshPlanning();
+      if (requestGeneration === this.weatherRequestGeneration) {
+        this.planningBusy = false;
+        this.refreshPlanning();
+      }
     }
   }
 
@@ -2646,45 +2660,91 @@ struct Index {
   }
 
   private async refreshLocation(): Promise<void> {
+    if (this.planningLocationBusy) return;
     const requestGeneration: number = ++this.locationRequestGeneration;
     const previousObserver: ObserverState | undefined = this.observer;
     const previousLocationText: string = this.locationText;
+    const previousLocationSource: string = this.planningLocationSource;
+    const previousProvisional: boolean = this.planningLocationProvisional;
+    this.planningLocationBusy = true;
     this.locationText = '正在定位';
+    this.planningLocationSource = '正在精确定位';
     try {
-      const result: ObserverLocationResult = await ObserverLocationService.current();
+      const sequence: ObserverLocationSequence = await ObserverLocationService.begin();
       if (requestGeneration !== this.locationRequestGeneration) return;
-      this.observer = result.observer;
-      this.locationAccuracy = result.accuracyMeters;
-      this.locationSynced = false;
-      this.locationText = `${result.observer.latitudeDegrees.toFixed(2)}, ${result.observer.longitudeDegrees.toFixed(2)}`;
-      this.manualLatitudeText = result.observer.latitudeDegrees.toFixed(5);
-      this.manualLongitudeText = result.observer.longitudeDegrees.toFixed(5);
-      this.planningLocationSource = '系统定位';
-      this.operationMessage = `定位精度约 ±${result.accuracyMeters.toFixed(0)} 米`;
-      this.getUIContext().animateTo(MotionTokens.standard(), () => {
-        this.planningLocationEditorOpen = false;
-      });
-      this.updateNormalScene();
-      this.updateProjectedTargets(true);
-      this.refreshPlanning();
-      this.refreshWeatherForecast();
+      if (sequence.provisional !== undefined) {
+        this.applySystemPlanningLocation(sequence.provisional);
+        this.operationMessage = `已使用最近位置生成临时规划，正在后台提高精度`;
+        if (this.weatherForecast === undefined) this.refreshWeatherForecast();
+      }
+      const preciseResult: ObserverLocationResult = await sequence.precise;
+      if (requestGeneration !== this.locationRequestGeneration) return;
+      const previousLatitude: number | undefined =
+        this.observer === undefined ? undefined : this.observer.latitudeDegrees;
+      const previousLongitude: number | undefined =
+        this.observer === undefined ? undefined : this.observer.longitudeDegrees;
+      this.applySystemPlanningLocation(preciseResult);
+      this.operationMessage = `定位精度约 ±${preciseResult.accuracyMeters.toFixed(0)} 米`;
+      const weatherLocationChanged: boolean = previousLatitude === undefined || previousLongitude === undefined ||
+        Math.abs(previousLatitude - preciseResult.observer.latitudeDegrees) > 0.2 ||
+        Math.abs(previousLongitude - preciseResult.observer.longitudeDegrees) > 0.2;
+      if (weatherLocationChanged) {
+        this.weatherRequestGeneration++;
+        this.planningBusy = false;
+        this.weatherForecast = undefined;
+        this.weatherStatus = WeatherDataStatus.NOT_REQUESTED;
+      }
+      if (this.weatherForecast === undefined) this.refreshWeatherForecast();
     } catch (error) {
       if (requestGeneration !== this.locationRequestGeneration) return;
       this.locationSynced = false;
       if (previousObserver === undefined) {
-        this.observer = undefined;
-        this.locationText = '定位不可用';
-        this.planningLocationSource = '等待手动地点';
-        this.operationMessage = `定位失败：${error}`;
-        this.updateNormalScene();
+        if (this.observer === undefined) {
+          this.locationText = '定位不可用';
+          this.planningLocationSource = '等待手动地点';
+          this.planningLocationProvisional = false;
+          this.operationMessage = `定位失败：${error}`;
+          this.updateNormalScene();
+        } else {
+          this.operationMessage = `高精度定位失败，继续使用最近位置：${error}`;
+        }
       } else {
         this.observer = previousObserver;
         this.locationText = previousLocationText;
-        this.operationMessage = `系统定位失败，已保留${this.planningLocationSource}：${error}`;
+        this.planningLocationSource = previousLocationSource;
+        this.planningLocationProvisional = previousProvisional;
+        this.operationMessage = `系统定位失败，已保留${previousLocationSource}：${error}`;
         this.updateNormalScene();
         this.refreshPlanning();
       }
+    } finally {
+      if (requestGeneration === this.locationRequestGeneration) {
+        this.planningLocationBusy = false;
+      }
     }
+  }
+
+  /**
+   * 系统最近位置和高精度位置共用一条应用路径。这里只更新软件规划地点，
+   * locationSynced 始终保持 false，避免把 Pad 定位误认为已经同步到赤道仪。
+   */
+  private applySystemPlanningLocation(result: ObserverLocationResult): void {
+    this.observer = result.observer;
+    this.locationAccuracy = result.accuracyMeters;
+    this.locationSynced = false;
+    this.locationText =
+      `${result.observer.latitudeDegrees.toFixed(2)}, ${result.observer.longitudeDegrees.toFixed(2)}`;
+    this.manualLatitudeText = result.observer.latitudeDegrees.toFixed(5);
+    this.manualLongitudeText = result.observer.longitudeDegrees.toFixed(5);
+    this.planningLocationSource = result.source === ObserverLocationSource.LAST_KNOWN ?
+      '最近位置' : '系统定位';
+    this.planningLocationProvisional = result.provisional;
+    this.getUIContext().animateTo(MotionTokens.standard(), () => {
+      this.planningLocationEditorOpen = false;
+    });
+    this.updateNormalScene();
+    this.updateProjectedTargets(true);
+    this.refreshPlanning();
   }
 
   private handleHuaweiArFrame(snapshot: HuaweiArFrameSnapshot): void {

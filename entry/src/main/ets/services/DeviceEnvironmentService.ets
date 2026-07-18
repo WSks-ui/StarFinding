@@ -10,6 +10,20 @@ import { SkyDomeEulerOrientation, SkyDomeProjectionService } from './SkyDomeProj
 export interface ObserverLocationResult {
   observer: ObserverState;
   accuracyMeters: number;
+  source: ObserverLocationSource;
+  locationTimestampMs: number;
+  provisional: boolean;
+}
+
+export enum ObserverLocationSource {
+  LAST_KNOWN = 'last_known',
+  CURRENT = 'current',
+  MANUAL = 'manual'
+}
+
+export interface ObserverLocationSequence {
+  provisional?: ObserverLocationResult;
+  precise: Promise<ObserverLocationResult>;
 }
 
 export type DevicePoseListener = (pose: DevicePose) => void;
@@ -19,7 +33,14 @@ export type DevicePoseListener = (pose: DevicePose) => void;
  * 比赛回放如需固定位置，应由明确标注的模拟服务注入，而不是混入真实设备链路。
  */
 export class ObserverLocationService {
-  static async current(): Promise<ObserverLocationResult> {
+  private static readonly LAST_LOCATION_MAX_AGE_MS: number = 24 * 60 * 60 * 1000;
+  private static readonly LAST_LOCATION_MAX_ACCURACY_METERS: number = 5000;
+
+  /**
+   * 先同步读取系统最近位置，再在后台等待高精度结果。最近位置只用于立即生成临时规划，
+   * 高精度结果返回后必须由页面使用同一请求代次校正，不能覆盖用户随后输入的手动地点。
+   */
+  static async begin(): Promise<ObserverLocationSequence> {
     const context: common.UIAbilityContext | undefined =
       AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
     if (context === undefined) {
@@ -45,20 +66,73 @@ export class ObserverLocationService {
       throw new Error('系统定位服务未开启');
     }
 
+    let provisional: ObserverLocationResult | undefined = undefined;
+    try {
+      const lastLocation: geoLocationManager.Location = geoLocationManager.getLastLocation();
+      provisional = ObserverLocationService.mapLastLocation(lastLocation);
+    } catch (error) {
+      // 设备没有历史位置或能力受限时继续请求当前定位，不能把快速路径失败当成整体失败。
+    }
+    const sequence: ObserverLocationSequence = {
+      precise: ObserverLocationService.requestPreciseLocation()
+    };
+    if (provisional !== undefined) sequence.provisional = provisional;
+    return sequence;
+  }
+
+  /** 保留原有单结果入口，供不需要快速路径的调用方使用。 */
+  static async current(): Promise<ObserverLocationResult> {
+    const sequence: ObserverLocationSequence = await ObserverLocationService.begin();
+    return sequence.precise;
+  }
+
+  private static async requestPreciseLocation(): Promise<ObserverLocationResult> {
     const location: geoLocationManager.Location = await geoLocationManager.getCurrentLocation({
       priority: geoLocationManager.LocationRequestPriority.ACCURACY,
       maxAccuracy: 500,
       timeoutMs: 12000
     });
+    return ObserverLocationService.mapLocation(
+      location, ObserverLocationSource.CURRENT, false);
+  }
+
+  private static mapLastLocation(location: geoLocationManager.Location): ObserverLocationResult | undefined {
+    const timestampMs: number = ObserverLocationService.locationTimestamp(location);
+    const ageMs: number = Date.now() - timestampMs;
+    if (ageMs < -5 * 60 * 1000 || ageMs > ObserverLocationService.LAST_LOCATION_MAX_AGE_MS ||
+      !Number.isFinite(location.accuracy) || location.accuracy < 0 ||
+      location.accuracy > ObserverLocationService.LAST_LOCATION_MAX_ACCURACY_METERS) {
+      return undefined;
+    }
+    return ObserverLocationService.mapLocation(
+      location, ObserverLocationSource.LAST_KNOWN, true);
+  }
+
+  private static mapLocation(location: geoLocationManager.Location, source: ObserverLocationSource,
+    provisional: boolean): ObserverLocationResult {
+    if (!Number.isFinite(location.latitude) || location.latitude < -90 || location.latitude > 90 ||
+      !Number.isFinite(location.longitude) || location.longitude < -180 || location.longitude > 180) {
+      throw new Error('系统返回的定位坐标无效');
+    }
+    const timestampMs: number = ObserverLocationService.locationTimestamp(location);
     return {
       observer: {
         latitudeDegrees: location.latitude,
         longitudeDegrees: location.longitude,
-        elevationMeters: location.altitude,
-        timestampMs: Date.now()
+        elevationMeters: Number.isFinite(location.altitude) ? location.altitude : 0,
+        timestampMs: timestampMs
       },
-      accuracyMeters: location.accuracy
+      accuracyMeters: Number.isFinite(location.accuracy) && location.accuracy >= 0 ?
+        location.accuracy : 0,
+      source: source,
+      locationTimestampMs: timestampMs,
+      provisional: provisional
     };
+  }
+
+  private static locationTimestamp(location: geoLocationManager.Location): number {
+    if (Number.isFinite(location.timeStamp) && location.timeStamp > 0) return location.timeStamp;
+    return Date.now();
   }
 }
 

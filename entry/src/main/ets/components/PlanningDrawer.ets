@@ -194,6 +194,7 @@ export struct PlanningDrawer {
           .onClick(this.onApplyManualLocation)
         Button($r('app.string.planning_use_current_location'))
           .layoutWeight(1).height(44).fontSize(13)
+          .enabled(!this.busy)
           .fontColor($r('app.color.sky_text_primary'))
           .backgroundColor($r('app.color.app_surface_primary')).borderRadius(22)
           .onClick(this.onUseCurrentLocation)
@@ -223,6 +224,7 @@ export struct PlanningDrawer {
       Row({ space: 8 }) {
         Button($r('app.string.planning_use_current_location'))
           .layoutWeight(1).height(46).fontSize(13).fontWeight(FontWeight.Bold)
+          .enabled(!this.busy)
           .fontColor($r('app.color.app_on_brand')).backgroundColor($r('app.color.app_brand')).borderRadius(23)
           .onClick(this.onUseCurrentLocation)
         Button($r('app.string.planning_enter_coordinates'))
