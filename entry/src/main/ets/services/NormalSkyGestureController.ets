@@ -59,7 +59,13 @@ export class NormalSkyGestureController {
       }
       this.pointerScaleActive = true;
     }
-    const incrementalScale: number = totalScale / Math.max(0.001, this.lastPointerScale);
+    /*
+     * ArkUI 在极短时间内可能重复上报同一比例，或者在两指重新同步时
+     * 给出一次异常大的比例跳变。视口层只接受有限的单帧缩放，避免星图
+     * 瞬间跳到视场边界；后续帧会继续把累计比例补回来。
+     */
+    const incrementalScale: number = this.clamp(
+      totalScale / Math.max(0.001, this.lastPointerScale), 0.5, 2.0);
     this.lastPointerScale = totalScale;
     return {
       viewState: NormalSkyViewStateService.zoomAt(
@@ -82,7 +88,14 @@ export class NormalSkyGestureController {
       }
       this.pointerRotationActive = true;
     }
-    const incrementalDegrees: number = totalDegrees - this.lastPointerRotationDegrees;
+    /*
+     * RotationGesture 的累计角度跨越 ±180° 时会回绕。直接相减会产生
+     * 接近 360° 的假旋转，表现为画面剧烈翻转；归一化后再限制单帧
+     * 增量，保证真实快速转动仍连续但不会被一次异常事件击穿。
+     */
+    const rawIncrementalDegrees: number = totalDegrees - this.lastPointerRotationDegrees;
+    const incrementalDegrees: number = this.clamp(
+      this.normalizeSignedDegrees(rawIncrementalDegrees), -45.0, 45.0);
     this.lastPointerRotationDegrees = totalDegrees;
     return {
       viewState: NormalSkyViewStateService.rotateAt(
@@ -180,5 +193,12 @@ export class NormalSkyGestureController {
 
   private clamp(value: number, minimum: number, maximum: number): number {
     return Math.max(minimum, Math.min(maximum, value));
+  }
+
+  private normalizeSignedDegrees(value: number): number {
+    let normalized: number = value % 360.0;
+    if (normalized > 180.0) normalized -= 360.0;
+    if (normalized < -180.0) normalized += 360.0;
+    return normalized;
   }
 }

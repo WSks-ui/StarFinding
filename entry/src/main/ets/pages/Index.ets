@@ -2492,9 +2492,23 @@ struct Index {
   private scheduleNormalSceneUpdate(interactive: boolean = false): void {
     if (interactive) {
       this.markNormalSceneInteractive();
-      if (this.normalSceneFramePending) return;
-      this.normalSceneFramePending = true;
-      this.getUIContext().postFrameCallback(this.normalSceneFrameCallback);
+      /*
+       * 交互期间不再把上一份场景做 Canvas affine 变换。
+       *
+       * 旧方案只加载当前视口内的恒星，然后在 Canvas 上平移/缩放/旋转这
+       * 一小批对象。用户一旦拖出原视口，新恒星并不存在，表现为星点成片
+       * 消失；宽视场下仿射近似还会让天极和双指锚点漂移。这里优先保证天球
+       * 几何正确：以约 32ms 的节流频率按当前四元数视口重新投影，手势结束
+       * 后再做一次非交互精确重建。这个频率仍低于触摸事件频率，不会形成
+       * 无限重建队列，同时保留固定 Canvas 渲染层的缓存机制。
+       */
+      if (this.normalSceneUpdateTimer >= 0) return;
+      this.normalSceneUpdateTimer = setTimeout(() => {
+        this.normalSceneUpdateTimer = -1;
+        if (this.activeSection === 0 && this.skyMode === 1) {
+          this.rebuildNormalScene();
+        }
+      }, 32);
       return;
     }
     if (this.normalSceneUpdateTimer >= 0) return;
@@ -2517,13 +2531,11 @@ struct Index {
     }
     this.normalSceneFramePending = false;
     this.lastNormalSceneFrameTimeNs = frameTimeInNano;
-    if (this.activeSection === 0 && this.skyMode === 1) {
-      /*
-       * 手势帧只更新 Canvas 的 affine 变换，不重新筛选/投影数千颗恒星。
-       * 停手后的 settle timer 会再执行一次完整球面投影。
-       */
-      this.updateInteractiveSkyTransform();
-    }
+    /*
+     * 兼容旧的 frame callback 入口，但不再更新 affine 变换。普通星图交互
+     * 统一走 scheduleNormalSceneUpdate(true) 的精确视口重建路径，避免上一
+     * 份场景中的星点集合与当前视口不一致。
+     */
   }
 
   private markNormalSceneInteractive(): void {
@@ -2584,11 +2596,15 @@ struct Index {
   }
 
   private normalGestureAnchorX(value: number): number {
-    return Number.isFinite(value) && value > 0.0 ? value : this.skyViewportWidth / 2.0;
+    const width: number = Math.max(1.0, this.skyViewportWidth);
+    const safeValue: number = Number.isFinite(value) ? value : width / 2.0;
+    return this.clamp(safeValue, 0.0, width);
   }
 
   private normalGestureAnchorY(value: number): number {
-    return Number.isFinite(value) && value > 0.0 ? value : this.skyViewportHeight / 2.0;
+    const height: number = Math.max(1.0, this.skyViewportHeight);
+    const safeValue: number = Number.isFinite(value) ? value : height / 2.0;
+    return this.clamp(safeValue, 0.0, height);
   }
 
   private setNormalLayer(layer: number, enabled: boolean): void {

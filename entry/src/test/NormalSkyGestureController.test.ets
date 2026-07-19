@@ -55,6 +55,31 @@ export default function normalSkyGestureControllerTest(): void {
         accepted.viewState).rotationDegrees - 4.0) < 0.01).assertTrue();
     });
 
+    it('指针旋转跨越角度回绕时不会产生三百六十度跳变', 0, () => {
+      const controller: NormalSkyGestureController = new NormalSkyGestureController();
+      controller.beginPointerRotation();
+      const first: NormalSkyGestureUpdate = controller.updatePointerRotation(
+        gestureViewState(), GESTURE_TEST_SIZE, 179.0, 500.0, 350.0);
+      const wrapped: NormalSkyGestureUpdate = controller.updatePointerRotation(
+        first.viewState, GESTURE_TEST_SIZE, -179.0, 500.0, 350.0);
+      const snapshot: NormalSkyViewport = NormalSkyViewStateService.snapshot(wrapped.viewState);
+      expect(wrapped.changed && wrapped.rotationChanged).assertTrue();
+      // 首帧会按单帧上限落在 45°，随后回绕只增加约 2°，绝不能翻转一整圈。
+      expect(Math.abs(snapshot.rotationDegrees - 47.0) < 0.2).assertTrue();
+    });
+
+    it('指针缩放单帧异常跳变会被限制', 0, () => {
+      const controller: NormalSkyGestureController = new NormalSkyGestureController();
+      controller.beginPointerScale();
+      const first: NormalSkyGestureUpdate = controller.updatePointerScale(
+        gestureViewState(), GESTURE_TEST_SIZE, 1.10, 500.0, 350.0);
+      const jumped: NormalSkyGestureUpdate = controller.updatePointerScale(
+        first.viewState, GESTURE_TEST_SIZE, 8.0, 500.0, 350.0);
+      expect(jumped.changed && jumped.scaleChanged).assertTrue();
+      // 单帧最多按 2 倍处理，不能直接把视场压到最小值。
+      expect(jumped.viewState.fieldOfViewDegrees > 30.0).assertTrue();
+    });
+
     it('单掌三轴变换在一次事务中更新视口', 0, () => {
       const controller: NormalSkyGestureController = new NormalSkyGestureController();
       const transform: SingleHandTransform = {
