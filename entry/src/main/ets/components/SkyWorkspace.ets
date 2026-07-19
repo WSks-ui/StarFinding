@@ -37,6 +37,7 @@ export struct SkyWorkspace {
   @Prop arTrackingText: string = '';
   @Prop domeRevealLevel: number = 2;
   @Prop gestureEnabled: boolean = false;
+  @Prop gestureCameraActive: boolean = false;
   @Prop normalViewport: NormalSkyViewport = {
     centerRaHours: 0.0,
     centerDecDegrees: 0.0,
@@ -66,6 +67,7 @@ export struct SkyWorkspace {
   onSearchSubmit: (value: string) => void = (_value: string): void => {};
   onOpenPanel: (panel: number) => void = (_panel: number): void => {};
   onNavigate: (section: number) => void = (_section: number): void => {};
+  onImmersive: () => void = (): void => {};
   onChromeVisibleChange: (visible: boolean) => void = (_visible: boolean): void => {};
   onNoticeDismiss: () => void = (): void => {};
   onModeChange: (mode: number) => void = (_mode: number): void => {};
@@ -101,9 +103,9 @@ export struct SkyWorkspace {
           this.normalTimeControls()
         }
 
-        if (this.skyMode === 1 && this.gestureEnabled &&
+        if (this.skyMode === 1 && this.gestureCameraActive &&
           (!this.useBottomSheet() || (this.viewportWidth >= 360 && this.viewportHeight >= 360)) &&
-          !(this.useBottomSheet() && this.overlayPanel > 0)) {
+          this.overlayPanel === 0) {
           this.gesturePreview()
         }
 
@@ -291,10 +293,7 @@ export struct SkyWorkspace {
       onDevice: (): void => { this.onNavigate(1); },
       onTask: (): void => { this.onNavigate(2); },
       onPost: (): void => { this.onNavigate(3); },
-      onImmersive: (): void => {
-        this.onOpenPanel(0);
-        this.onChromeVisibleChange(false);
-      },
+      onImmersive: (): void => { this.onImmersive(); },
       onEmergency: this.onEmergencyStop
     })
   }
