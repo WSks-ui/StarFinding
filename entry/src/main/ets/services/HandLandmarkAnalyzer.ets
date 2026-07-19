@@ -23,16 +23,126 @@ export interface HandLandmarkAnalyzerStatus {
   message: string;
   analyzedFrames: number;
   lastInferenceAtMs: number;
+  /** 真实运行时可报告 NNRT/CPU 等后端；不可用分析器可省略。 */
+  inferenceBackend?: string;
+  /** 用于真机性能诊断，不参与模型可用性判断。 */
+  averageInferenceMs?: number;
+  inferenceFps?: number;
 }
 
 /**
- * 相机帧的亮度平面。当前手势只需要几何关键点，亮度平面可避免复制完整 YUV 帧。
- * 分析器必须在 analyze 返回前完成对 lumaBuffer 的读取；返回后相机缓冲会立即释放。
+ * ImageReceiver 平面的自有副本。CameraHandFrameSource 在释放系统 Image 前复制完整平面，
+ * 因此分析器或 Worker 可以在 analyze 的整个异步周期内安全读取，不得再持有相机原始缓冲。
  */
+export interface HandImagePlane {
+  buffer: ArrayBuffer;
+  rowStride: number;
+  pixelStride: number;
+}
+
+export interface HandYuvPlaneSet {
+  yPlane: HandImagePlane;
+  uPlane: HandImagePlane;
+  vPlane: HandImagePlane;
+}
+
+/**
+ * 将 ImageReceiver 通过 ComponentType.JPEG 暴露的整块 NV21 缓冲拆成紧凑的 Y/U/V 平面。
+ *
+ * HarmonyOS 部分设备对 YUV_420_SP 预览流不支持 YUV_Y/YUV_U/YUV_V 三组件访问，
+ * 但会按官方 ImageReceiver 用法从 JPEG 组件返回带 rowStride 的 packed NV21。这里显式
+ * 跳过每行尾部填充，并把交错 VU 色度拆开，后续 Worker 因此不需要感知设备差异。
+ */
+export class HandPackedNv21Decoder {
+  static decode(buffer: ArrayBuffer, width: number, height: number,
+    rowStride: number): HandYuvPlaneSet {
+    if (width <= 0 || height <= 0 || width % 2 !== 0 || height % 2 !== 0) {
+      throw new Error('NV21 分析帧必须使用正数偶数宽高');
+    }
+    const sourceStride: number = rowStride > 0 ? rowStride : width;
+    if (sourceStride < width) {
+      throw new Error('NV21 行步长小于图像宽度');
+    }
+    const chromaHeight: number = height / 2;
+    const chromaWidth: number = width / 2;
+    const sourceRows: number = height + chromaHeight;
+    const requiredBytes: number = (sourceRows - 1) * sourceStride + width;
+    if (buffer.byteLength < requiredBytes) {
+      throw new Error('NV21 缓冲长度不足');
+    }
+
+    const source: Uint8Array = new Uint8Array(buffer);
+    const yBuffer: ArrayBuffer = new ArrayBuffer(width * height);
+    const uBuffer: ArrayBuffer = new ArrayBuffer(chromaWidth * chromaHeight);
+    const vBuffer: ArrayBuffer = new ArrayBuffer(chromaWidth * chromaHeight);
+    const y: Uint8Array = new Uint8Array(yBuffer);
+    const u: Uint8Array = new Uint8Array(uBuffer);
+    const v: Uint8Array = new Uint8Array(vBuffer);
+
+    for (let row: number = 0; row < height; row++) {
+      const sourceOffset: number = row * sourceStride;
+      const targetOffset: number = row * width;
+      for (let column: number = 0; column < width; column++) {
+        y[targetOffset + column] = source[sourceOffset + column];
+      }
+    }
+
+    for (let row: number = 0; row < chromaHeight; row++) {
+      const sourceOffset: number = (height + row) * sourceStride;
+      const targetOffset: number = row * chromaWidth;
+      for (let column: number = 0; column < chromaWidth; column++) {
+        // NV21 的色度顺序固定为 VU；拆平面后统一交给现有 YUV→RGB 预处理。
+        v[targetOffset + column] = source[sourceOffset + column * 2];
+        u[targetOffset + column] = source[sourceOffset + column * 2 + 1];
+      }
+    }
+
+    return {
+      yPlane: {
+        buffer: yBuffer,
+        rowStride: width,
+        pixelStride: 1
+      },
+      uPlane: {
+        buffer: uBuffer,
+        rowStride: chromaWidth,
+        pixelStride: 1
+      },
+      vPlane: {
+        buffer: vBuffer,
+        rowStride: chromaWidth,
+        pixelStride: 1
+      }
+    };
+  }
+}
+
+/**
+ * 从传感器帧映射到用户所见预览的参数。裁剪区域位于旋转后的 0–1 坐标空间，
+ * 镜像最后应用且只应用一次，避免前摄点击方向与画面相反。
+ */
+export interface HandLandmarkPreviewTransform {
+  mirrored: boolean;
+  rotationDegrees: number;
+  cropLeft: number;
+  cropTop: number;
+  cropWidth: number;
+  cropHeight: number;
+  /** 用户实际看到的预览宽高比，用于在归一化坐标中恢复等比例几何。 */
+  previewAspectRatio: number;
+}
+
 export interface HandLandmarkFrame {
   width: number;
   height: number;
   cameraFormat: number;
+  yPlane: HandImagePlane;
+  uPlane: HandImagePlane;
+  vPlane: HandImagePlane;
+  /**
+   * 兼容尚未迁移的灰度预处理代码；该缓冲与 yPlane.buffer 指向同一份自有副本，
+   * 后续分析器应优先读取 yPlane，不能据此假设相机只提供亮度数据。
+   */
   lumaBuffer: ArrayBuffer;
   rowStride: number;
   pixelStride: number;
@@ -40,12 +150,20 @@ export interface HandLandmarkFrame {
   receivedAtMs: number;
   mirrored: boolean;
   rotationDegrees: number;
+  cropLeft: number;
+  cropTop: number;
+  cropWidth: number;
+  cropHeight: number;
+  previewAspectRatio: number;
+  /** 每次 prepare/stop 都会推进代次，迟到推理结果必须按此值丢弃。 */
+  runGeneration: number;
 }
 
 export interface HandLandmarkAnalysisResult {
   hands: HandLandmarks[];
   frameReceivedAtMs: number;
   inferenceDurationMs: number;
+  runGeneration: number;
 }
 
 /**
@@ -54,7 +172,19 @@ export interface HandLandmarkAnalysisResult {
  */
 export class HandLandmarkCoordinateMapper {
   static mapPoint(point: HandPoint, mirrored: boolean, rotationDegrees: number): HandPoint {
-    const quarterTurns: number = HandLandmarkCoordinateMapper.quarterTurns(rotationDegrees);
+    return HandLandmarkCoordinateMapper.mapPointToPreview(point, {
+      mirrored: mirrored,
+      rotationDegrees: rotationDegrees,
+      cropLeft: 0.0,
+      cropTop: 0.0,
+      cropWidth: 1.0,
+      cropHeight: 1.0,
+      previewAspectRatio: 1.0
+    });
+  }
+
+  static mapPointToPreview(point: HandPoint, transform: HandLandmarkPreviewTransform): HandPoint {
+    const quarterTurns: number = HandLandmarkCoordinateMapper.quarterTurns(transform.rotationDegrees);
     let x: number = point.x;
     let y: number = point.y;
     if (quarterTurns === 1) {
@@ -69,28 +199,53 @@ export class HandLandmarkCoordinateMapper {
       x = y;
       y = 1.0 - previousX;
     }
-    if (mirrored) {
+    const cropWidth: number = Math.max(0.000001, transform.cropWidth);
+    const cropHeight: number = Math.max(0.000001, transform.cropHeight);
+    x = (x - transform.cropLeft) / cropWidth;
+    y = (y - transform.cropTop) / cropHeight;
+    if (transform.mirrored) {
       x = 1.0 - x;
     }
-    return {
+    const result: HandPoint = {
       x: HandLandmarkCoordinateMapper.clamp(x, 0.0, 1.0),
       y: HandLandmarkCoordinateMapper.clamp(y, 0.0, 1.0),
       confidence: point.confidence
     };
+    if (point.z !== undefined) {
+      result.z = point.z;
+    }
+    return result;
   }
 
   static mapHands(hands: HandLandmarks[], mirrored: boolean, rotationDegrees: number): HandLandmarks[] {
+    return HandLandmarkCoordinateMapper.mapHandsToPreview(hands, {
+      mirrored: mirrored,
+      rotationDegrees: rotationDegrees,
+      cropLeft: 0.0,
+      cropTop: 0.0,
+      cropWidth: 1.0,
+      cropHeight: 1.0,
+      previewAspectRatio: 1.0
+    });
+  }
+
+  static mapHandsToPreview(hands: HandLandmarks[],
+    transform: HandLandmarkPreviewTransform): HandLandmarks[] {
     const result: HandLandmarks[] = [];
     for (let handIndex: number = 0; handIndex < hands.length; handIndex++) {
       const points: HandPoint[] = [];
       for (let pointIndex: number = 0; pointIndex < hands[handIndex].points.length; pointIndex++) {
-        points.push(HandLandmarkCoordinateMapper.mapPoint(
-          hands[handIndex].points[pointIndex], mirrored, rotationDegrees));
+        points.push(HandLandmarkCoordinateMapper.mapPointToPreview(
+          hands[handIndex].points[pointIndex], transform));
       }
       result.push({
         trackingId: hands[handIndex].trackingId,
         points: points,
+        coordinateAspectRatio: Math.max(0.000001, transform.previewAspectRatio),
+        worldPoints: hands[handIndex].worldPoints,
         confidence: hands[handIndex].confidence,
+        palmConfidence: hands[handIndex].palmConfidence,
+        palmFacingConfidence: hands[handIndex].palmFacingConfidence,
         timestampMs: hands[handIndex].timestampMs
       });
     }
@@ -120,8 +275,8 @@ export interface HandLandmarkAnalyzer {
 }
 
 /**
- * 当前仓库未包含经过许可和精度验收的手部关键点模型，因此默认实现始终不可用。
- * 该类刻意不返回空成功结果，避免上层把“没有模型”误判为“画面中没有手”。
+ * 手势模型无法加载、设备能力不足或应用上下文尚未就绪时使用的诚实降级实现。
+ * 该类刻意不返回空成功结果，避免上层把“分析器不可用”误判为“画面中没有手”。
  */
 export class UnavailableHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
   private readonly reason: string;
@@ -172,12 +327,27 @@ export interface HandFrameSourceProfile {
   cameraFormat: number;
   mirrored: boolean;
   rotationDegrees: number;
+  /** 实际承载预览的组件宽高，仅用于计算 center-crop，不要求与相机像素单位相同。 */
+  previewWidth: number;
+  previewHeight: number;
+  /** 设备没有满足模型输入尺寸的输出时，保留可运行的降级原因并回传页面。 */
+  qualityWarning: string;
+}
+
+export interface HandFramePresentationProfile {
+  mirrored: boolean;
+  rotationDegrees: number;
+  previewWidth: number;
+  previewHeight: number;
 }
 
 export interface HandFrameSourceStatus {
   state: HandFrameSourceState;
   message: string;
   droppedFrames: number;
+  throttledFrames: number;
+  targetInferenceFps: number;
+  runGeneration: number;
   analyzer: HandLandmarkAnalyzerStatus;
 }
 
@@ -189,11 +359,30 @@ export type HandFrameSourceStatusListener = (status: HandFrameSourceStatus) => v
  * 验收的 MindSpore Lite 实现时，不需要改动 CameraKit 会话管理。
  */
 export interface HandLandmarkFrameSource {
+  /** 仅加载模型，不创建 ImageReceiver，也不申请相机权限。 */
+  prewarm(): Promise<HandLandmarkAnalyzerStatus>;
   prepare(profile: HandFrameSourceProfile): Promise<string>;
+  updatePresentation(profile: HandFramePresentationProfile): void;
   start(): void;
   rejectCameraOutput(reason: string): Promise<void>;
   stop(): Promise<void>;
   getStatus(): HandFrameSourceStatus;
+}
+
+/**
+ * 纯帧率策略，便于单元测试固定边界。50ms 最短间隔对应不高于20fps；
+ * 配合相机常见30fps节拍，会稳定落在约15–20fps，且停止流程无需等待 setTimeout。
+ */
+export class HandFrameThrottlePolicy {
+  static readonly MINIMUM_INFERENCE_INTERVAL_MS: number = 50.0;
+
+  static shouldStartInference(nowMs: number, lastStartedAtMs: number,
+    minimumIntervalMs: number = HandFrameThrottlePolicy.MINIMUM_INFERENCE_INTERVAL_MS): boolean {
+    if (lastStartedAtMs <= 0.0) {
+      return true;
+    }
+    return nowMs - lastStartedAtMs >= Math.max(0.0, minimumIntervalMs);
+  }
 }
 
 /**
@@ -207,23 +396,19 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   private readonly statusListener?: HandFrameSourceStatusListener;
   private receiver?: image.ImageReceiver;
   private profile?: HandFrameSourceProfile;
+  private receiverArrivalCallback?: () => void;
   private state: HandFrameSourceState = HandFrameSourceState.IDLE;
   private message: string = '等待前摄分析输出';
   private droppedFrames: number = 0;
+  private throttledFrames: number = 0;
+  private runGeneration: number = 0;
+  private presentationRevision: number = 0;
+  private lastInferenceStartedAtMs: number = 0.0;
   private active: boolean = false;
   private processing: boolean = false;
   private processingTask?: Promise<void>;
+  private prewarmTask?: Promise<void>;
   private framePending: boolean = false;
-
-  private readonly imageArrivalCallback = (): void => {
-    if (!this.active) {
-      return;
-    }
-    this.framePending = true;
-    if (!this.processing) {
-      this.processingTask = this.consumePendingFrames();
-    }
-  };
 
   constructor(analyzer: HandLandmarkAnalyzer, resultListener?: HandLandmarkResultListener,
     statusListener?: HandFrameSourceStatusListener) {
@@ -232,15 +417,37 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
     this.statusListener = statusListener;
   }
 
+  async prewarm(): Promise<HandLandmarkAnalyzerStatus> {
+    const current: HandLandmarkAnalyzerStatus = this.analyzer.getStatus();
+    if (current.available && current.modelLoaded &&
+      current.state === HandLandmarkAnalyzerState.READY) {
+      return current;
+    }
+
+    let task: Promise<void> | undefined = this.prewarmTask;
+    if (task === undefined) {
+      task = this.analyzer.initialize();
+      this.prewarmTask = task;
+    }
+    try {
+      await task;
+    } finally {
+      if (this.prewarmTask === task) {
+        this.prewarmTask = undefined;
+      }
+    }
+    return this.analyzer.getStatus();
+  }
+
   async prepare(profile: HandFrameSourceProfile): Promise<string> {
     this.active = false;
+    const generation: number = ++this.runGeneration;
     await this.waitForProcessing();
     await this.releaseReceiver();
     this.state = HandFrameSourceState.PREPARING;
     this.message = '正在初始化手部关键点分析器';
     this.emitStatus();
-    await this.analyzer.initialize();
-    const analyzerStatus: HandLandmarkAnalyzerStatus = this.analyzer.getStatus();
+    const analyzerStatus: HandLandmarkAnalyzerStatus = await this.prewarm();
     if (!analyzerStatus.available || !analyzerStatus.modelLoaded ||
       analyzerStatus.state !== HandLandmarkAnalyzerState.READY) {
       this.state = HandFrameSourceState.ERROR;
@@ -255,15 +462,22 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
       throw new Error(this.message);
     }
 
-    this.profile = profile;
+    this.profile = this.normalizedProfile(profile);
+    this.presentationRevision++;
+    this.lastInferenceStartedAtMs = 0.0;
     try {
-      // 采用接收器的 number 重载，以便传入 CameraKit 的 YUV_420_SP(1003) 格式值。
-      // 新版 ImageFormat 枚举没有列出 1003，但 CameraKit 预览能力实际返回该格式。
-      this.receiver = image.createImageReceiver(profile.width, profile.height, profile.cameraFormat, 2);
-      this.receiver.on('imageArrival', this.imageArrivalCallback);
+      this.receiver = this.createAnalysisReceiver(profile);
+      const arrivalCallback = (): void => {
+        this.onImageArrival(generation);
+      };
+      this.receiverArrivalCallback = arrivalCallback;
+      this.receiver.on('imageArrival', arrivalCallback);
       const surfaceId: string = await this.receiver.getReceivingSurfaceId();
       if (surfaceId.length === 0) {
         throw new Error('ImageReceiver 未返回有效 Surface');
+      }
+      if (generation !== this.runGeneration) {
+        throw new Error('前摄分析帧入口已过期');
       }
       this.state = HandFrameSourceState.READY;
       this.message = '前摄分析帧入口已就绪';
@@ -278,18 +492,59 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
     }
   }
 
+  private createAnalysisReceiver(profile: HandFrameSourceProfile): image.ImageReceiver {
+    // API 22 仍需使用自 API 9 起提供的数字重载；这里声明 ImageFormat.JPEG 是因为
+    // ImageReceiver 的 format 参数只接受 ImageFormat 常量，后续通过 ComponentType.JPEG
+    // 取得 packed NV21。实际生产者仍由 CameraKit 的 YUV_420_SP PreviewProfile 决定，
+    // 因此不会把分析 Surface 误切换成 JPEG 相机流。
+    return image.createImageReceiver(
+      profile.width,
+      profile.height,
+      image.ImageFormat.JPEG,
+      2
+    );
+  }
+
+  updatePresentation(profile: HandFramePresentationProfile): void {
+    const current: HandFrameSourceProfile | undefined = this.profile;
+    if (current === undefined) {
+      return;
+    }
+    const next: HandFrameSourceProfile = this.normalizedProfile({
+      width: current.width,
+      height: current.height,
+      cameraFormat: current.cameraFormat,
+      mirrored: profile.mirrored,
+      rotationDegrees: profile.rotationDegrees,
+      previewWidth: profile.previewWidth,
+      previewHeight: profile.previewHeight,
+      qualityWarning: current.qualityWarning
+    });
+    if (this.samePresentation(current, next)) {
+      return;
+    }
+    this.profile = next;
+    this.presentationRevision++;
+  }
+
   start(): void {
     if (this.receiver === undefined || this.state !== HandFrameSourceState.READY) {
-      return;
+      this.state = HandFrameSourceState.ERROR;
+      this.message = '前摄分析帧入口尚未就绪';
+      this.emitStatus();
+      throw new Error(this.message);
     }
     this.active = true;
     this.state = HandFrameSourceState.RUNNING;
-    this.message = '手部关键点分析运行中';
+    const profile: HandFrameSourceProfile | undefined = this.profile;
+    this.message = profile !== undefined && profile.qualityWarning.length > 0 ?
+      `手部关键点分析运行中；${profile.qualityWarning}` : '手部关键点分析运行中';
     this.emitStatus();
   }
 
   async rejectCameraOutput(reason: string): Promise<void> {
     this.active = false;
+    this.runGeneration++;
     await this.waitForProcessing();
     await this.releaseReceiver();
     this.state = HandFrameSourceState.ERROR;
@@ -299,6 +554,7 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
 
   async stop(): Promise<void> {
     this.active = false;
+    this.runGeneration++;
     await this.waitForProcessing();
     await this.releaseReceiver();
     if (this.state !== HandFrameSourceState.ERROR) {
@@ -313,12 +569,16 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
       state: this.state,
       message: this.message,
       droppedFrames: this.droppedFrames,
+      throttledFrames: this.throttledFrames,
+      targetInferenceFps: 1000.0 / HandFrameThrottlePolicy.MINIMUM_INFERENCE_INTERVAL_MS,
+      runGeneration: this.runGeneration,
       analyzer: this.analyzer.getStatus()
     };
   }
 
   async close(): Promise<void> {
     this.active = false;
+    this.runGeneration++;
     await this.waitForProcessing();
     await this.releaseReceiver();
     await this.analyzer.close();
@@ -327,15 +587,40 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
     this.emitStatus();
   }
 
-  private async consumePendingFrames(): Promise<void> {
+  private onImageArrival(generation: number): void {
+    if (!this.active || generation !== this.runGeneration) {
+      return;
+    }
+    if (!this.processing && !HandFrameThrottlePolicy.shouldStartInference(
+      Date.now(), this.lastInferenceStartedAtMs)) {
+      this.droppedFrames++;
+      this.throttledFrames++;
+      return;
+    }
+    if (this.framePending) {
+      // readLatestImage 会直接取得最新帧，已经挂起的旧帧在这里视为主动丢弃。
+      this.droppedFrames++;
+    }
+    this.framePending = true;
+    if (!this.processing) {
+      this.processingTask = this.consumePendingFrames(generation);
+    }
+  }
+
+  private async consumePendingFrames(generation: number): Promise<void> {
     this.processing = true;
     try {
-      while (this.active && this.framePending) {
-        this.framePending = false;
-        await this.consumeLatestFrame();
-        if (this.framePending) {
+      while (this.active && generation === this.runGeneration && this.framePending) {
+        const nowMs: number = Date.now();
+        if (!HandFrameThrottlePolicy.shouldStartInference(nowMs, this.lastInferenceStartedAtMs)) {
+          this.framePending = false;
           this.droppedFrames++;
+          this.throttledFrames++;
+          break;
         }
+        this.framePending = false;
+        this.lastInferenceStartedAtMs = nowMs;
+        await this.consumeLatestFrame(generation, this.presentationRevision);
       }
     } finally {
       this.processing = false;
@@ -343,37 +628,42 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
     }
   }
 
-  private async consumeLatestFrame(): Promise<void> {
+  private async consumeLatestFrame(generation: number, presentationRevision: number): Promise<void> {
     const receiver: image.ImageReceiver | undefined = this.receiver;
     const profile: HandFrameSourceProfile | undefined = this.profile;
-    if (receiver === undefined || profile === undefined) {
+    if (receiver === undefined || profile === undefined || generation !== this.runGeneration) {
       return;
     }
     let cameraImage: image.Image | undefined = undefined;
+    let frame: HandLandmarkFrame | undefined = undefined;
     try {
       cameraImage = await receiver.readLatestImage();
-      const luma: image.Component = await cameraImage.getComponent(image.ComponentType.YUV_Y);
-      const frame: HandLandmarkFrame = {
+      const planes: HandYuvPlaneSet = await this.copyCameraYuvPlanes(cameraImage);
+      const transform: HandLandmarkPreviewTransform =
+        this.buildPreviewTransform(cameraImage.size.width, cameraImage.size.height, profile);
+      frame = {
         width: cameraImage.size.width,
         height: cameraImage.size.height,
         cameraFormat: cameraImage.format,
-        lumaBuffer: luma.byteBuffer,
-        rowStride: luma.rowStride,
-        pixelStride: luma.pixelStride,
+        yPlane: planes.yPlane,
+        uPlane: planes.uPlane,
+        vPlane: planes.vPlane,
+        lumaBuffer: planes.yPlane.buffer,
+        rowStride: planes.yPlane.rowStride,
+        pixelStride: planes.yPlane.pixelStride,
         cameraTimestamp: cameraImage.timestamp,
         receivedAtMs: Date.now(),
-        mirrored: profile.mirrored,
-        rotationDegrees: profile.rotationDegrees
+        mirrored: transform.mirrored,
+        rotationDegrees: transform.rotationDegrees,
+        cropLeft: transform.cropLeft,
+        cropTop: transform.cropTop,
+        cropWidth: transform.cropWidth,
+        cropHeight: transform.cropHeight,
+        previewAspectRatio: transform.previewAspectRatio,
+        runGeneration: generation
       };
-      const result: HandLandmarkAnalysisResult = await this.analyzer.analyze(frame);
-      if (this.resultListener !== undefined) {
-        this.resultListener(result);
-      }
     } catch (error) {
-      this.state = HandFrameSourceState.ERROR;
-      this.message = this.errorMessage(error, '手部关键点推理失败');
-      this.active = false;
-      this.emitStatus();
+      this.failCurrentGeneration(generation, this.errorMessage(error, '无法读取前摄 YUV 帧'));
     } finally {
       if (cameraImage !== undefined) {
         try {
@@ -383,24 +673,152 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
         }
       }
     }
+
+    // Image 已经释放，后续异步推理只访问上面复制出的 Y/U/V 自有缓冲。
+    if (frame === undefined || !this.active || generation !== this.runGeneration ||
+      presentationRevision !== this.presentationRevision) {
+      return;
+    }
+    try {
+      const result: HandLandmarkAnalysisResult = await this.analyzer.analyze(frame);
+      if (!this.active || generation !== this.runGeneration || result.runGeneration !== generation ||
+        presentationRevision !== this.presentationRevision) {
+        return;
+      }
+      if (this.resultListener !== undefined) {
+        this.resultListener(result);
+      }
+    } catch (error) {
+      this.failCurrentGeneration(generation, this.errorMessage(error, '手部关键点推理失败'));
+    }
+  }
+
+  private async copyCameraYuvPlanes(cameraImage: image.Image): Promise<HandYuvPlaneSet> {
+    let packedFailure: string = '';
+    try {
+      // 对 YUV_420_SP 预览流，部分 HarmonyOS 真机把整块 NV21 数据放在 JPEG 组件中。
+      // 该名称来自 ImageReceiver 历史 API，并不表示这里拿到的是压缩 JPEG 文件。
+      const packed: image.Component = await cameraImage.getComponent(image.ComponentType.JPEG);
+      return HandPackedNv21Decoder.decode(
+        packed.byteBuffer,
+        cameraImage.size.width,
+        cameraImage.size.height,
+        packed.rowStride
+      );
+    } catch (error) {
+      packedFailure = this.errorMessage(error, 'packed NV21 不可读');
+    }
+
+    try {
+      // 保留支持三平面访问的设备路径，确保 API 22/24 以及不同厂商实现均可工作。
+      const luma: image.Component = await cameraImage.getComponent(image.ComponentType.YUV_Y);
+      const chromaU: image.Component = await cameraImage.getComponent(image.ComponentType.YUV_U);
+      const chromaV: image.Component = await cameraImage.getComponent(image.ComponentType.YUV_V);
+      return {
+        yPlane: this.copyPlane(luma),
+        uPlane: this.copyPlane(chromaU),
+        vPlane: this.copyPlane(chromaV)
+      };
+    } catch (error) {
+      const planarFailure: string = this.errorMessage(error, 'YUV 三平面不可读');
+      throw new Error(`${packedFailure}；${planarFailure}`);
+    }
   }
 
   private async releaseReceiver(): Promise<void> {
     const receiver: image.ImageReceiver | undefined = this.receiver;
+    const arrivalCallback: (() => void) | undefined = this.receiverArrivalCallback;
     this.receiver = undefined;
+    this.receiverArrivalCallback = undefined;
     this.profile = undefined;
     this.framePending = false;
     if (receiver === undefined) {
       return;
     }
     try {
-      receiver.off('imageArrival', this.imageArrivalCallback);
+      if (arrivalCallback !== undefined) {
+        receiver.off('imageArrival', arrivalCallback);
+      }
     } catch (error) {
     }
     try {
       await receiver.release();
     } catch (error) {
     }
+  }
+
+  private copyPlane(component: image.Component): HandImagePlane {
+    const source: Uint8Array = new Uint8Array(component.byteBuffer);
+    const ownedBuffer: ArrayBuffer = new ArrayBuffer(source.length);
+    const owned: Uint8Array = new Uint8Array(ownedBuffer);
+    owned.set(source);
+    return {
+      buffer: ownedBuffer,
+      rowStride: component.rowStride,
+      pixelStride: component.pixelStride
+    };
+  }
+
+  private normalizedProfile(profile: HandFrameSourceProfile): HandFrameSourceProfile {
+    const roundedQuarterTurns: number = Math.round(profile.rotationDegrees / 90.0);
+    const normalizedQuarterTurns: number = ((roundedQuarterTurns % 4) + 4) % 4;
+    const normalizedRotation: number = normalizedQuarterTurns * 90.0;
+    return {
+      width: profile.width,
+      height: profile.height,
+      cameraFormat: profile.cameraFormat,
+      mirrored: profile.mirrored,
+      rotationDegrees: normalizedRotation,
+      previewWidth: Math.max(1.0, profile.previewWidth),
+      previewHeight: Math.max(1.0, profile.previewHeight),
+      qualityWarning: profile.qualityWarning
+    };
+  }
+
+  private samePresentation(first: HandFrameSourceProfile, second: HandFrameSourceProfile): boolean {
+    return first.mirrored === second.mirrored &&
+      first.rotationDegrees === second.rotationDegrees &&
+      Math.abs(first.previewWidth - second.previewWidth) < 0.01 &&
+      Math.abs(first.previewHeight - second.previewHeight) < 0.01;
+  }
+
+  private buildPreviewTransform(frameWidth: number, frameHeight: number,
+    profile: HandFrameSourceProfile): HandLandmarkPreviewTransform {
+    const quarterTurns: number = ((Math.round(profile.rotationDegrees / 90.0) % 4) + 4) % 4;
+    const rotatedWidth: number = quarterTurns % 2 === 0 ? frameWidth : frameHeight;
+    const rotatedHeight: number = quarterTurns % 2 === 0 ? frameHeight : frameWidth;
+    const sourceAspect: number = rotatedWidth / Math.max(1.0, rotatedHeight);
+    const previewAspect: number = profile.previewWidth / Math.max(1.0, profile.previewHeight);
+    let cropLeft: number = 0.0;
+    let cropTop: number = 0.0;
+    let cropWidth: number = 1.0;
+    let cropHeight: number = 1.0;
+    if (sourceAspect > previewAspect) {
+      cropWidth = previewAspect / sourceAspect;
+      cropLeft = (1.0 - cropWidth) / 2.0;
+    } else if (sourceAspect < previewAspect) {
+      cropHeight = sourceAspect / previewAspect;
+      cropTop = (1.0 - cropHeight) / 2.0;
+    }
+    return {
+      mirrored: profile.mirrored,
+      rotationDegrees: profile.rotationDegrees,
+      cropLeft: cropLeft,
+      cropTop: cropTop,
+      cropWidth: cropWidth,
+      cropHeight: cropHeight,
+      previewAspectRatio: previewAspect
+    };
+  }
+
+  private failCurrentGeneration(generation: number, reason: string): void {
+    if (generation !== this.runGeneration) {
+      return;
+    }
+    this.state = HandFrameSourceState.ERROR;
+    this.message = reason;
+    this.active = false;
+    this.emitStatus();
   }
 
   private async waitForProcessing(): Promise<void> {

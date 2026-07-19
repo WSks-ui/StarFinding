@@ -1,0 +1,28 @@
+{
+  "manifestVersion": 1,
+  "pipelineName": "MediaPipe Hands Lite + MindSpore Lite",
+  "pipelineVersion": "mediapipe-assets-lite/mindspore-lite-2.4.1",
+  "maximumHands": 1,
+  "models": [
+    {
+      "id": "mediapipe-palm-detection-lite",
+      "rawFileName": "models/palm_detection_lite.ms",
+      "sourceUrl": "https://storage.googleapis.com/mediapipe-assets/palm_detection_lite.tflite",
+      "sourceLicense": "Apache-2.0",
+      "sourceSha256": "E9A4AADDF90DDA56A87235303CF00E4C2D3FB28725F68FD88772997DAC905C18",
+      "convertedSha256": "CB498EDDE8EB8B478EB36580F6D44EAD2D9EC66B9A5FCDBE016805C9978723F8",
+      "converterVersion": "MindSpore Lite 2.4.1",
+      "inputShape": [1, 192, 192, 3]
+    },
+    {
+      "id": "mediapipe-hand-landmark-lite",
+      "rawFileName": "models/hand_landmark_lite.ms",
+      "sourceUrl": "https://storage.googleapis.com/mediapipe-assets/hand_landmark_lite.tflite",
+      "sourceLicense": "Apache-2.0",
+      "sourceSha256": "D7FDE8AC11F8CE03F8663775BFC323F4FC9F2A38062B4F4EFA142874EF5B2A48",
+      "convertedSha256": "AECF20C97D4DFEBF95B2D587D3EA93C740AC8A0897EC47EB20787EDF25BE6029",
+      "converterVersion": "MindSpore Lite 2.4.1",
+      "inputShape": [1, 224, 224, 3]
+    }
+  ]
+}

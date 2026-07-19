@@ -1,4 +1,5 @@
 import { describe, expect, it } from '@ohos/hypium';
+import { SingleHandTransform } from '../main/ets/models/DomainModels';
 import {
   NormalSkyViewState,
   NormalSkyViewport,
@@ -54,24 +55,60 @@ export default function normalSkyGestureControllerTest(): void {
         accepted.viewState).rotationDegrees - 4.0) < 0.01).assertTrue();
     });
 
-    it('双掌的小幅连续变化会累计到激活阈值', 0, () => {
+    it('单掌三轴变换在一次事务中更新视口', 0, () => {
       const controller: NormalSkyGestureController = new NormalSkyGestureController();
-      const first: NormalSkyGestureUpdate = controller.updateHandTransform(
-        gestureViewState(), GESTURE_TEST_SIZE, 1.01, 1.5, 500.0, 350.0);
-      const second: NormalSkyGestureUpdate = controller.updateHandTransform(
-        first.viewState, GESTURE_TEST_SIZE, 1.01, 1.5, 500.0, 350.0);
-      expect(first.changed).assertFalse();
-      expect(second.changed).assertTrue();
-      expect(second.scaleChanged && second.rotationChanged).assertTrue();
+      const transform: SingleHandTransform = {
+        deltaX: 0.05,
+        deltaY: -0.03,
+        rotationDegrees: 5.0,
+        scale: 1.06,
+        anchorX: 0.58,
+        anchorY: 0.42
+      };
+      const update: NormalSkyGestureUpdate = controller.updateSingleHandTransform(
+        gestureViewState(), GESTURE_TEST_SIZE, transform);
+      expect(update.changed).assertTrue();
+      expect(update.translationChanged && update.scaleChanged && update.rotationChanged).assertTrue();
+      expect(update.viewState.fieldOfViewDegrees < 90.0).assertTrue();
+      expect(Number.isFinite(NormalSkyViewStateService.snapshot(
+        update.viewState).rotationDegrees)).assertTrue();
     });
 
-    it('结束事务会清除尚未达到阈值的残留量', 0, () => {
+    it('没有达到算法层死区的恒等变换不会改变视口', 0, () => {
       const controller: NormalSkyGestureController = new NormalSkyGestureController();
-      controller.updateHandTransform(gestureViewState(), GESTURE_TEST_SIZE, 1.01, 2.0, 500.0, 350.0);
-      controller.endHandTransform();
-      const next: NormalSkyGestureUpdate = controller.updateHandTransform(
-        gestureViewState(), GESTURE_TEST_SIZE, 1.01, 2.0, 500.0, 350.0);
-      expect(next.changed).assertFalse();
+      const transform: SingleHandTransform = {
+        deltaX: 0.0,
+        deltaY: 0.0,
+        rotationDegrees: 0.0,
+        scale: 1.0,
+        anchorX: 0.5,
+        anchorY: 0.5
+      };
+      const update: NormalSkyGestureUpdate = controller.updateSingleHandTransform(
+        gestureViewState(), GESTURE_TEST_SIZE, transform);
+      expect(update.changed).assertFalse();
+      expect(update.translationChanged || update.scaleChanged || update.rotationChanged).assertFalse();
+    });
+
+    it('控制器再次限制单帧旋转缩放和异常位移', 0, () => {
+      const controller: NormalSkyGestureController = new NormalSkyGestureController();
+      const transform: SingleHandTransform = {
+        deltaX: 1.0,
+        deltaY: -1.0,
+        rotationDegrees: 40.0,
+        scale: 2.0,
+        anchorX: 0.5,
+        anchorY: 0.5
+      };
+      const update: NormalSkyGestureUpdate = controller.updateSingleHandTransform(
+        gestureViewState(), GESTURE_TEST_SIZE, transform);
+      const snapshot: NormalSkyViewport = NormalSkyViewStateService.snapshot(update.viewState);
+      expect(update.changed && update.translationChanged).assertTrue();
+      expect(update.scaleChanged && update.rotationChanged).assertTrue();
+      expect(snapshot.fieldOfViewDegrees >= 8.0 && snapshot.fieldOfViewDegrees <= 160.0).assertTrue();
+      expect(Number.isFinite(snapshot.centerRaHours) &&
+        Number.isFinite(snapshot.centerDecDegrees) &&
+        Number.isFinite(snapshot.rotationDegrees)).assertTrue();
     });
   });
 }

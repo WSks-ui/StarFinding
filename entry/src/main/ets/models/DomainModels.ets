@@ -315,8 +315,7 @@ export interface EnhancementTask {
 
 export enum HandGesture {
   NONE = 'none',
-  DRAG = 'drag',
-  ROTATE_SCALE = 'rotate_scale',
+  SINGLE_HAND_TRANSFORM = 'single_hand_transform',
   PINCH_SELECT = 'pinch_select',
   FIST_RESET = 'fist_reset'
 }
@@ -324,22 +323,45 @@ export enum HandGesture {
 export interface HandPoint {
   x: number;
   y: number;
+  /** 模型输出的相对深度；它不代表相机到手部的真实物理距离。 */
+  z?: number;
   confidence: number;
 }
 
 export interface HandLandmarks {
   trackingId: number;
   points: HandPoint[];
+  /**
+   * 关键点所在预览坐标的宽高比。x/y 虽同为 0–1，几何距离和角度仍需按该比例还原，
+   * 否则长方形预览会把转掌误判成掌面尺寸变化。
+   */
+  coordinateAspectRatio?: number;
+  /** 模型可选输出的三维世界关键点，坐标单位和原点由模型清单定义。 */
+  worldPoints?: HandPoint[];
   confidence: number;
+  /** 腕部及掌指关节 0、5、9、13、17 的综合可信度。 */
+  palmConfidence?: number;
+  /** 掌面朝向摄像头的可信度；过低时手掌尺寸不得用于前后移动缩放。 */
+  palmFacingConfidence?: number;
   timestampMs: number;
 }
 
-export interface GestureFrame {
-  gesture: HandGesture;
+/**
+ * 单掌一帧产生的统一三轴变换。坐标和位移均为前摄预览中的 0–1 归一化值，
+ * 缩放大于 1 表示手靠近摄像头、星图放大。
+ */
+export interface SingleHandTransform {
   deltaX: number;
   deltaY: number;
   rotationDegrees: number;
   scale: number;
+  anchorX: number;
+  anchorY: number;
+}
+
+export interface GestureFrame {
+  gesture: HandGesture;
+  transform: SingleHandTransform;
   selectX: number;
   selectY: number;
   confidence: number;

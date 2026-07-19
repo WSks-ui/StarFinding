@@ -32,6 +32,12 @@ function createHand(trackingId: number, centerX: number, openPalm: boolean,
     points.push({ x: centerX, y: 0.65, confidence: 0.95 });
   }
   points[0] = { x: centerX, y: 0.82, confidence: 0.95 };
+  // 掌面几何必须包含非零宽度；真实模型的 5/9/13/17 不会重合，
+  // 测试也不能用退化掌面绕过按掌面尺寸归一化的握拳与捏合规则。
+  points[5] = { x: centerX - 0.08, y: 0.65, confidence: 0.95 };
+  points[9] = { x: centerX, y: 0.62, confidence: 0.95 };
+  points[13] = { x: centerX + 0.03, y: 0.64, confidence: 0.95 };
+  points[17] = { x: centerX + 0.05, y: 0.65, confidence: 0.95 };
   const joints: number[] = [6, 10, 14, 18];
   const tips: number[] = [8, 12, 16, 20];
   for (let index: number = 0; index < joints.length; index++) {
@@ -43,7 +49,6 @@ function createHand(trackingId: number, centerX: number, openPalm: boolean,
     };
   }
   points[4] = { x: openPalm ? centerX - 0.18 : centerX + 0.02, y: 0.62, confidence: 0.95 };
-  points[9] = { x: centerX, y: 0.62, confidence: 0.95 };
   return { trackingId: trackingId, points: points, confidence: 0.95, timestampMs: timestampMs };
 }
 
@@ -255,12 +260,12 @@ export default function starFindingCoreTest(): void {
       expect(AstronomyService.angularSeparation(rotated, target) < 0.000001).assertTrue();
     });
 
-    it('单掌位移被解释为拖拽', 0, () => {
+    it('单掌位移被解释为统一三轴变换', 0, () => {
       const interpreter = new GestureInterpreter();
       interpreter.interpret([createHand(1, 0.40, true, 1000)], 1000);
       const frame = interpreter.interpret([createHand(1, 0.50, true, 1100)], 1100);
-      expect(frame.gesture).assertEqual(HandGesture.DRAG);
-      expect(frame.deltaX > 0.05).assertTrue();
+      expect(frame.gesture).assertEqual(HandGesture.SINGLE_HAND_TRANSFORM);
+      expect(frame.transform.deltaX > 0.05).assertTrue();
     });
 
     it('握拳保持触发一次复位', 0, () => {
