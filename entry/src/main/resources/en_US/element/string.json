@@ -1,6 +1,62 @@
 {
   "string": [
     {
+      "name": "device_network_settings_title",
+      "value": "Device network addresses"
+    },
+    {
+      "name": "device_network_settings_detail",
+      "value": "Enter the current LAN IPs before connecting after switching hotspot or router."
+    },
+    {
+      "name": "device_network_settings_edit",
+      "value": "Edit addresses"
+    },
+    {
+      "name": "device_network_settings_hide",
+      "value": "Hide"
+    },
+    {
+      "name": "device_network_mount_ip",
+      "value": "OnStepX IP"
+    },
+    {
+      "name": "device_network_mount_port",
+      "value": "OnStepX TCP port"
+    },
+    {
+      "name": "device_network_gateway_ip",
+      "value": "Linux gateway IP"
+    },
+    {
+      "name": "device_network_gateway_port",
+      "value": "Gateway HTTP port"
+    },
+    {
+      "name": "device_network_ip_placeholder",
+      "value": "For example 192.168.137.20"
+    },
+    {
+      "name": "device_network_port_placeholder",
+      "value": "For example 9999"
+    },
+    {
+      "name": "device_network_settings_safe_note",
+      "value": "Saving updates endpoints only; it never connects, moves the mount, or triggers the shutter."
+    },
+    {
+      "name": "device_network_settings_locked",
+      "value": "Addresses are locked while a device or session is active."
+    },
+    {
+      "name": "device_network_restore_default",
+      "value": "Restore defaults"
+    },
+    {
+      "name": "device_network_save_apply",
+      "value": "Save and apply"
+    },
+    {
       "name": "planning_recommended_capture_window",
       "value": "Recommended capture"
     },

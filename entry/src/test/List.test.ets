@@ -5,6 +5,7 @@ import skyDomeProjectionServiceTest from './SkyDomeProjectionService.test';
 import huaweiArPoseAdapterTest from './HuaweiArPoseAdapter.test';
 import normalSkyProjectionServiceTest from './NormalSkyProjectionService.test';
 import gestureInteractionTest from './GestureInteraction.test';
+import handModelRuntimeTest from './HandModelRuntime.test';
 import normalSkySceneServiceTest from './NormalSkySceneService.test';
 import normalSkyGestureControllerTest from './NormalSkyGestureController.test';
 import normalSkyOrientationServiceTest from './NormalSkyOrientationService.test';
@@ -17,7 +18,9 @@ import planningPeriodServiceTest from './PlanningPeriodService.test';
 import planningSnapshotServiceTest from './PlanningSnapshotService.test';
 import observerLocationPolicyTest from './ObserverLocationPolicy.test';
 import deviceReadinessServiceTest from './DeviceReadinessService.test';
+import deviceConnectionSettingsStoreTest from './DeviceConnectionSettingsStore.test';
 import taskSessionStoreTest from './TaskSessionStore.test';
+import singleHandGestureAcceptanceTest from './SingleHandGestureAcceptance.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -27,6 +30,7 @@ export default function testsuite() {
   huaweiArPoseAdapterTest();
   normalSkyProjectionServiceTest();
   gestureInteractionTest();
+  handModelRuntimeTest();
   normalSkySceneServiceTest();
   normalSkyGestureControllerTest();
   normalSkyOrientationServiceTest();
@@ -39,5 +43,7 @@ export default function testsuite() {
   planningSnapshotServiceTest();
   observerLocationPolicyTest();
   deviceReadinessServiceTest();
+  deviceConnectionSettingsStoreTest();
   taskSessionStoreTest();
+  singleHandGestureAcceptanceTest();
 }

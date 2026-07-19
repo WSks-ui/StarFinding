@@ -21,7 +21,14 @@ export struct DeviceWorkspace {
   @Prop mountConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @Prop gatewayServiceConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @Prop cameraConnection: ConnectionState = ConnectionState.DISCONNECTED;
+  @Prop mountDetail: string = '';
   @Prop gatewayDetail: string = '';
+  @Prop connectionSettingsOpen: boolean = false;
+  @Prop connectionSettingsLocked: boolean = false;
+  @Prop mountHostInput: string = '';
+  @Prop mountPortInput: string = '';
+  @Prop gatewayHostInput: string = '';
+  @Prop gatewayPortInput: string = '';
   @Prop mountHomed: boolean = false;
   @Prop coordinateModeCompatible: boolean = false;
   @Prop tracking: boolean = false;
@@ -40,6 +47,13 @@ export struct DeviceWorkspace {
 
   onToggleMount: () => void = (): void => {};
   onToggleGateway: () => void = (): void => {};
+  onToggleConnectionSettings: () => void = (): void => {};
+  onMountHostChange: (value: string) => void = (_value: string): void => {};
+  onMountPortChange: (value: string) => void = (_value: string): void => {};
+  onGatewayHostChange: (value: string) => void = (_value: string): void => {};
+  onGatewayPortChange: (value: string) => void = (_value: string): void => {};
+  onSaveConnectionSettings: () => void = (): void => {};
+  onRestoreConnectionDefaults: () => void = (): void => {};
   onHomeMount: () => void = (): void => {};
   onSyncObserver: () => void = (): void => {};
   onToggleTracking: () => void = (): void => {};
@@ -70,25 +84,150 @@ export struct DeviceWorkspace {
 
   @Builder
   private ConnectionSection() {
-    if (this.compact) {
-      Column({ space: 12 }) {
-        this.ConnectionPanel($r('app.string.device_mount_title'), $r('app.string.device_mount_endpoint'),
-          this.mountConnection, this.mountUpdatedAtMs, this.mountActionText(), this.onToggleMount)
-        this.ConnectionPanel($r('app.string.device_gateway_title'), this.gatewaySubtitle(),
-          this.gatewayServiceConnection, this.gatewayUpdatedAtMs, this.gatewayActionText(), this.onToggleGateway)
-      }.width('100%')
-    } else {
-      Row({ space: 12 }) {
-        Column() {
-          this.ConnectionPanel($r('app.string.device_mount_title'), $r('app.string.device_mount_endpoint'),
+    Column({ space: 12 }) {
+      this.ConnectionSettingsPanel()
+      if (this.compact) {
+        Column({ space: 12 }) {
+          this.ConnectionPanel($r('app.string.device_mount_title'), this.mountSubtitle(),
             this.mountConnection, this.mountUpdatedAtMs, this.mountActionText(), this.onToggleMount)
-        }.layoutWeight(1)
-        Column() {
           this.ConnectionPanel($r('app.string.device_gateway_title'), this.gatewaySubtitle(),
             this.gatewayServiceConnection, this.gatewayUpdatedAtMs, this.gatewayActionText(), this.onToggleGateway)
+        }.width('100%')
+      } else {
+        Row({ space: 12 }) {
+          Column() {
+            this.ConnectionPanel($r('app.string.device_mount_title'), this.mountSubtitle(),
+              this.mountConnection, this.mountUpdatedAtMs, this.mountActionText(), this.onToggleMount)
+          }.layoutWeight(1)
+          Column() {
+            this.ConnectionPanel($r('app.string.device_gateway_title'), this.gatewaySubtitle(),
+              this.gatewayServiceConnection, this.gatewayUpdatedAtMs, this.gatewayActionText(), this.onToggleGateway)
+          }.layoutWeight(1)
+        }.width('100%')
+      }
+    }.width('100%')
+  }
+
+  @Builder
+  private ConnectionSettingsPanel() {
+    Column({ space: 10 }) {
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text($r('app.string.device_network_settings_title'))
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.app_text_primary'))
+          Text($r('app.string.device_network_settings_detail'))
+            .fontSize(12)
+            .fontColor($r('app.color.app_text_secondary'))
+            .maxLines(2)
         }.layoutWeight(1)
-      }.width('100%')
+        Button(this.connectionSettingsOpen ? $r('app.string.device_network_settings_hide') :
+          $r('app.string.device_network_settings_edit'))
+          .height(36)
+          .padding({ left: 14, right: 14 })
+          .fontSize(12)
+          .fontColor($r('app.color.app_brand'))
+          .backgroundColor($r('app.color.app_surface_secondary'))
+          .border({ width: 1, color: $r('app.color.app_divider') })
+          .borderRadius(18)
+          .enabled(!this.connectionSettingsLocked)
+          .onClick(this.onToggleConnectionSettings)
+      }.width('100%').alignItems(VerticalAlign.Top)
+
+      if (this.connectionSettingsOpen) {
+        Column({ space: 10 }) {
+          if (this.compact) {
+            Column({ space: 10 }) {
+              this.EndpointInput($r('app.string.device_network_mount_ip'), this.mountHostInput,
+                $r('app.string.device_network_ip_placeholder'), false, this.onMountHostChange)
+              this.EndpointInput($r('app.string.device_network_mount_port'), this.mountPortInput,
+                $r('app.string.device_network_port_placeholder'), true, this.onMountPortChange)
+              this.EndpointInput($r('app.string.device_network_gateway_ip'), this.gatewayHostInput,
+                $r('app.string.device_network_ip_placeholder'), false, this.onGatewayHostChange)
+              this.EndpointInput($r('app.string.device_network_gateway_port'), this.gatewayPortInput,
+                $r('app.string.device_network_port_placeholder'), true, this.onGatewayPortChange)
+            }.width('100%')
+          } else {
+            Row({ space: 10 }) {
+              Column({ space: 10 }) {
+                this.EndpointInput($r('app.string.device_network_mount_ip'), this.mountHostInput,
+                  $r('app.string.device_network_ip_placeholder'), false, this.onMountHostChange)
+                this.EndpointInput($r('app.string.device_network_mount_port'), this.mountPortInput,
+                  $r('app.string.device_network_port_placeholder'), true, this.onMountPortChange)
+              }.layoutWeight(1)
+              Column({ space: 10 }) {
+                this.EndpointInput($r('app.string.device_network_gateway_ip'), this.gatewayHostInput,
+                  $r('app.string.device_network_ip_placeholder'), false, this.onGatewayHostChange)
+                this.EndpointInput($r('app.string.device_network_gateway_port'), this.gatewayPortInput,
+                  $r('app.string.device_network_port_placeholder'), true, this.onGatewayPortChange)
+              }.layoutWeight(1)
+            }.width('100%')
+          }
+          Text(this.connectionSettingsLocked ? $r('app.string.device_network_settings_locked') :
+            $r('app.string.device_network_settings_safe_note'))
+            .fontSize(11)
+            .fontColor(this.connectionSettingsLocked ? $r('app.color.app_warning') :
+              $r('app.color.app_text_tertiary'))
+            .width('100%')
+          Row({ space: 10 }) {
+            Button($r('app.string.device_network_restore_default'))
+              .layoutWeight(1)
+              .height(42)
+              .fontSize(13)
+              .fontColor($r('app.color.app_text_primary'))
+              .backgroundColor($r('app.color.app_surface_secondary'))
+              .border({ width: 1, color: $r('app.color.app_divider') })
+              .borderRadius(21)
+              .enabled(!this.connectionSettingsLocked)
+              .onClick(this.onRestoreConnectionDefaults)
+            Button($r('app.string.device_network_save_apply'))
+              .layoutWeight(1)
+              .height(42)
+              .fontSize(13)
+              .fontWeight(FontWeight.Medium)
+              .fontColor($r('app.color.app_on_brand'))
+              .backgroundColor($r('app.color.app_brand'))
+              .borderRadius(21)
+              .enabled(!this.connectionSettingsLocked)
+              .onClick(this.onSaveConnectionSettings)
+          }.width('100%')
+        }
+        .width('100%')
+        .padding(14)
+        .backgroundColor($r('app.color.app_surface_secondary'))
+        .borderRadius($r('app.float.corner_small'))
+        .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
+      }
     }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.app_background_secondary'))
+    .border({ width: 1, color: $r('app.color.app_divider') })
+    .borderRadius($r('app.float.corner_card'))
+    .animation(MotionTokens.standard())
+  }
+
+  @Builder
+  private EndpointInput(label: ResourceStr, value: string, placeholder: ResourceStr,
+    numeric: boolean, onChange: (value: string) => void) {
+    Column({ space: 5 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor($r('app.color.app_text_secondary'))
+      TextInput({ placeholder: placeholder, text: value })
+        .width('100%')
+        .height(42)
+        .fontSize(14)
+        .fontColor($r('app.color.app_text_primary'))
+        .placeholderColor($r('app.color.app_text_tertiary'))
+        .backgroundColor($r('app.color.app_background_primary'))
+        .border({ width: 1, color: $r('app.color.app_divider') })
+        .borderRadius($r('app.float.corner_small'))
+        .type(numeric ? InputType.Number : InputType.Normal)
+        .enabled(!this.connectionSettingsLocked)
+        .onChange(onChange)
+    }.width('100%')
   }
 
   @Builder
@@ -549,6 +688,10 @@ export struct DeviceWorkspace {
     return this.gatewayDetail.length > 0 ? this.gatewayDetail : $r('app.string.device_gateway_endpoint');
   }
 
+  private mountSubtitle(): ResourceStr {
+    return this.mountDetail.length > 0 ? this.mountDetail : $r('app.string.device_mount_endpoint');
+  }
+
   private mountActionText(): ResourceStr {
     if (this.mountConnection === ConnectionState.CONNECTED) return $r('app.string.device_disconnect');
     if (this.mountConnection === ConnectionState.ERROR) return $r('app.string.device_reconnect');
@@ -600,7 +743,7 @@ export struct DeviceWorkspace {
     return {
       key: 'network',
       name: $r('app.string.device_check_network'),
-      detail: $r('app.string.device_mount_endpoint'),
+      detail: this.mountSubtitle(),
       state: this.connectionText(this.mountConnection),
       color: this.connectionColor(this.mountConnection)
     };

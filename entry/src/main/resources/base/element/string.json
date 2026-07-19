@@ -269,6 +269,62 @@
       "value": "10.42.0.1 · HTTP 8000"
     },
     {
+      "name": "device_network_settings_title",
+      "value": "设备网络地址"
+    },
+    {
+      "name": "device_network_settings_detail",
+      "value": "切换 Windows、安卓热点或路由器后，在连接前填写当前局域网 IP。"
+    },
+    {
+      "name": "device_network_settings_edit",
+      "value": "编辑地址"
+    },
+    {
+      "name": "device_network_settings_hide",
+      "value": "收起"
+    },
+    {
+      "name": "device_network_mount_ip",
+      "value": "OnStepX IP"
+    },
+    {
+      "name": "device_network_mount_port",
+      "value": "OnStepX TCP 端口"
+    },
+    {
+      "name": "device_network_gateway_ip",
+      "value": "Linux 网关 IP"
+    },
+    {
+      "name": "device_network_gateway_port",
+      "value": "网关 HTTP 端口"
+    },
+    {
+      "name": "device_network_ip_placeholder",
+      "value": "例如 192.168.137.20"
+    },
+    {
+      "name": "device_network_port_placeholder",
+      "value": "例如 9999"
+    },
+    {
+      "name": "device_network_settings_safe_note",
+      "value": "保存仅更新连接地址；不会自动连接、移动赤道仪或触发快门。"
+    },
+    {
+      "name": "device_network_settings_locked",
+      "value": "设备连接或会话进行中，地址已锁定。"
+    },
+    {
+      "name": "device_network_restore_default",
+      "value": "恢复默认"
+    },
+    {
+      "name": "device_network_save_apply",
+      "value": "保存并应用"
+    },
+    {
       "name": "device_connect_self_test",
       "value": "连接并自检"
     },

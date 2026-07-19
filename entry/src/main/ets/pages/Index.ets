@@ -36,6 +36,7 @@ import {
   HorizontalCoordinate,
   ImageFormat,
   GatewaySubtaskKind,
+  GatewayEndpointConfig,
   MountState,
   MountTargetCoordinate,
   NormalSkyScene,
@@ -97,11 +98,18 @@ import {
   CaptureWorkflowResumeState,
   CaptureWorkflowResult,
   DevicePoseService,
+  DeviceConnectionSettings,
+  DeviceConnectionSettingsStore,
   EphemerisService,
   GatewayFile,
   GestureInterpreter,
+  HandFrameSourceState,
   HandFrameSourceStatus,
+  HandLandmarkAnalyzer,
+  HandLandmarkAnalyzerState,
+  HandLandmarkAnalyzerStatus,
   HandLandmarkAnalysisResult,
+  MindSporeLiteHandLandmarkAnalyzer,
   NormalSkyGestureController,
   NormalSkyGestureUpdate,
   NormalSkyLayoutService,
@@ -140,6 +148,19 @@ const FEATURED_TARGET_IDS: string[] = [
   'star-vega', 'star-altair', 'star-deneb', 'messier-31', 'messier-8', 'solar-moon'
 ];
 const MAX_PLANNED_TARGETS: number = 8;
+
+/**
+ * EntryAbility 在加载页面前写入共享上下文；只有该上下文存在时才创建真实离线模型。
+ * 异常启动路径必须诚实降级为不可用分析器，不能生成占位关键点冒充识别结果。
+ */
+function createHandLandmarkAnalyzer(): HandLandmarkAnalyzer {
+  const context: common.UIAbilityContext | undefined =
+    AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
+  if (context === undefined) {
+    return new UnavailableHandLandmarkAnalyzer('应用上下文未就绪，无法加载离线手势模型');
+  }
+  return new MindSporeLiteHandLandmarkAnalyzer(context);
+}
 
 interface PreparedSessionTarget {
   target: CelestialObject;
@@ -202,7 +223,12 @@ struct Index {
   @State private selectedTargetId: string = 'star-vega';
   @State private targetSearch: string = '';
   @State private gestureEnabled: boolean = false;
-  @State private gestureStatus: string = '未安装手势模型';
+  @State private gestureStatus: string = '手势模型尚未预热';
+  @State private gestureModelLoading: boolean = false;
+  @State private gestureModelReady: boolean = false;
+  @State private gestureModelRunning: boolean = false;
+  @State private gestureModelError: string = '';
+  @State private gestureCameraActive: boolean = false;
   private normalViewState: NormalSkyViewState = NormalSkyViewStateService.defaultState();
   /**
    * Canvas 与控件只读取该快照；所有交互必须通过 normalViewState 更新四元数长期姿态。
@@ -272,7 +298,13 @@ struct Index {
   @State private mountSlewing: boolean = false;
   @State private mountUpdatedAtMs: number = 0;
   @State private gatewayUpdatedAtMs: number = 0;
+  @State private mountDetail: string = '10.42.0.20:9999';
   @State private gatewayDetail: string = '10.42.0.1:8000';
+  @State private connectionSettingsOpen: boolean = false;
+  @State private mountHostInput: string = '10.42.0.20';
+  @State private mountPortInput: string = '9999';
+  @State private gatewayHostInput: string = '10.42.0.1';
+  @State private gatewayPortInput: string = '8000';
   @State private gatewayServiceVersion: string = '';
   @State private deviceOperationMessage: string = '';
   @State private taskStage: string = '等待创建';
@@ -320,6 +352,10 @@ struct Index {
   private gatewayPollTimer: number = -1;
   private taskPollTimer: number = -1;
   private taskSessionStore: TaskSessionStore | undefined = undefined;
+  private deviceConnectionSettingsStore: DeviceConnectionSettingsStore | undefined = undefined;
+  // 输入框内容可能尚未保存；真正发起连接时只能读取这一份已应用配置，避免误把半输入的地址发到现场。
+  private deviceConnectionSettings: DeviceConnectionSettings = DeviceConnectionSettingsStore.defaults();
+  private deviceConnectionSettingsLoading: boolean = false;
   private readonly mountClient: OnStepLX200Client = new OnStepLX200Client();
   private readonly gatewayClient: RaspberryPiClient = new RaspberryPiClient();
   private readonly aiClient: AIEnhancementClient = new AIEnhancementClient();
@@ -334,13 +370,12 @@ struct Index {
   private readonly skyDomeSceneService: SkyDomeSceneService = new SkyDomeSceneService();
   private readonly gestureInterpreter: GestureInterpreter = new GestureInterpreter();
   private readonly normalSkyGestureController: NormalSkyGestureController = new NormalSkyGestureController();
+  private readonly handAnalyzer: HandLandmarkAnalyzer = createHandLandmarkAnalyzer();
   private readonly handFrameSource: CameraHandFrameSource = new CameraHandFrameSource(
-    new UnavailableHandLandmarkAnalyzer(),
+    this.handAnalyzer,
     (result: HandLandmarkAnalysisResult) => { this.applyHandLandmarks(result); },
     (status: HandFrameSourceStatus) => {
-      if (this.gestureEnabled) {
-        this.gestureStatus = status.message;
-      }
+      this.applyHandFrameSourceStatus(status);
     });
   private lastProjectionAtMs: number = 0;
   private domeCatalogStars: VisibleStar[] = [];
@@ -366,8 +401,16 @@ struct Index {
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
   private lastPanOffsetY: number = 0.0;
+  private gestureModelGeneration: number = 0;
+  private gestureSessionStartedAtMs: number = 0;
+  private lastAcceptedGestureFrameAtMs: number = 0;
+  private gestureSourceRunGeneration: number = 0;
+  private handTransformActive: boolean = false;
+  private pageVisible: boolean = false;
   aboutToAppear(): void {
+    this.pageVisible = true;
     this.initializeTaskSessions();
+    this.initializeDeviceConnectionSettings();
     const arCapability = ArEngineCapabilityService.inspect();
     this.huaweiArViewEnabled = arCapability.available;
     this.arTrackingText = arCapability.available ? 'AR Engine 初始化' : '传感器天穹';
@@ -394,11 +437,22 @@ struct Index {
     this.updateNormalScene();
     this.startNormalSceneTimer();
     this.updateProjectedTargets(true);
+    if (this.skyMode === 1) {
+      // 只加载离线模型，不挂载前摄组件，因此这里不会触发相机权限请求。
+      this.prewarmGestureModel();
+    }
     if (this.mountConnection === ConnectionState.CONNECTED) this.startMountPolling();
     if (this.gatewayServiceConnection === ConnectionState.CONNECTED) this.startGatewayPolling();
   }
 
   aboutToDisappear(): void {
+    this.pageVisible = false;
+    this.gestureModelGeneration++;
+    this.gestureCameraActive = false;
+    this.gestureModelLoading = false;
+    this.gestureModelReady = false;
+    this.gestureModelRunning = false;
+    this.invalidateGestureSession();
     this.poseService.stop();
     this.clearMountPolling();
     this.clearGatewayPolling();
@@ -458,7 +512,14 @@ struct Index {
         mountConnection: this.mountConnection,
         gatewayServiceConnection: this.gatewayServiceConnection,
         cameraConnection: this.gatewayConnection,
+        mountDetail: this.mountDetail,
         gatewayDetail: this.gatewayDetail,
+        connectionSettingsOpen: this.connectionSettingsOpen,
+        connectionSettingsLocked: this.connectionSettingsLocked(),
+        mountHostInput: this.mountHostInput,
+        mountPortInput: this.mountPortInput,
+        gatewayHostInput: this.gatewayHostInput,
+        gatewayPortInput: this.gatewayPortInput,
         mountHomed: this.mountHomed,
         coordinateModeCompatible: this.mountCoordinatesTopocentric,
         tracking: this.tracking,
@@ -475,6 +536,13 @@ struct Index {
         emergencyMessage: this.emergencyMessage,
         onToggleMount: (): void => { this.toggleMountConnection(); },
         onToggleGateway: (): void => { this.toggleGatewayConnection(); },
+        onToggleConnectionSettings: (): void => { this.toggleConnectionSettings(); },
+        onMountHostChange: (value: string): void => { this.mountHostInput = value; },
+        onMountPortChange: (value: string): void => { this.mountPortInput = value; },
+        onGatewayHostChange: (value: string): void => { this.gatewayHostInput = value; },
+        onGatewayPortChange: (value: string): void => { this.gatewayPortInput = value; },
+        onSaveConnectionSettings: (): void => { this.saveDeviceConnectionSettings(); },
+        onRestoreConnectionDefaults: (): void => { this.restoreDeviceConnectionDefaults(); },
         onHomeMount: (): void => { this.homeMount(); },
         onSyncObserver: (): void => { this.syncObserverToMount(); },
         onToggleTracking: (): void => { this.toggleTracking(); },
@@ -714,6 +782,7 @@ struct Index {
       arTrackingText: this.arTrackingText,
       domeRevealLevel: this.skyDomeRevealLevel,
       gestureEnabled: this.gestureEnabled,
+      gestureCameraActive: this.gestureCameraActive,
       normalViewport: this.normalViewport,
       normalOrientationSnapshot: this.normalScene.orientationSnapshot,
       skyCanvas: (): void => { this.SkyCanvas(); },
@@ -736,8 +805,10 @@ struct Index {
       },
       onOpenPanel: (panel: number): void => { this.openSkyPanel(panel); },
       onNavigate: (section: number): void => { this.navigateToSection(section); },
+      onImmersive: (): void => { this.navigateToImmersiveSky(); },
       onChromeVisibleChange: (visible: boolean): void => {
         this.getUIContext().animateTo(MotionTokens.standard(), () => { this.skyChromeVisible = visible; });
+        this.updateGestureCameraActivity();
         if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
       },
       onNoticeDismiss: (): void => {
@@ -1055,10 +1126,13 @@ struct Index {
             Row() {
               Column({ space: 2 }) {
                 Text('前摄手势').fontSize(14).fontColor($r('app.color.sky_text_secondary'))
-                Text(this.gestureModelAvailable() ? this.gestureStatus : '未安装手势模型')
+                Text(this.gestureCapabilityText())
                   .fontSize(10).fontColor($r('app.color.sky_text_tertiary'))
               }.alignItems(HorizontalAlign.Start)
               Blank()
+              if (this.gestureModelLoading) {
+                LoadingProgress().width(20).height(20).color($r('app.color.app_brand'))
+              }
               Toggle({ type: ToggleType.Switch, isOn: this.gestureEnabled })
                 .enabled(this.gestureModelAvailable())
                 .selectedColor('#57C995')
@@ -1371,7 +1445,9 @@ struct Index {
     this.changeActiveSection(section);
     if (section === 0) {
       this.skyChromeVisible = true;
+      this.updateGestureCameraActivity();
       if (this.skyMode === 0) this.updateProjectedTargets(true);
+      if (this.skyMode === 1) this.prewarmGestureModel();
     }
   }
 
@@ -1384,6 +1460,7 @@ struct Index {
       this.skyChromeVisible = true;
       this.skyOverlayPanel = panel;
     });
+    this.updateGestureCameraActivity();
     if (panel === 2) this.refreshPlanningAndWeather();
     if (this.skyMode === 0) this.updateProjectedTargets(true);
     if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
@@ -1396,6 +1473,7 @@ struct Index {
       this.skyOverlayPanel = 0;
       this.skyChromeVisible = false;
     });
+    this.updateGestureCameraActivity();
     if (this.skyMode === 0) this.updateProjectedTargets(true);
     if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
@@ -1407,6 +1485,7 @@ struct Index {
       this.skyChromeVisible = true;
       this.skyOverlayPanel = this.skyOverlayPanel === panel ? 0 : panel;
     });
+    this.updateGestureCameraActivity();
     if (this.skyOverlayPanel === 2) this.refreshPlanningAndWeather();
     if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
@@ -1418,6 +1497,7 @@ struct Index {
       this.skyChromeVisible = true;
       this.skyOverlayPanel = panel;
     });
+    this.updateGestureCameraActivity();
     if (panel === 2) this.refreshPlanningAndWeather();
     if (this.skyMode === 1) this.scheduleNormalSceneUpdate();
   }
@@ -1440,6 +1520,8 @@ struct Index {
       this.setGestureEnabled(false);
       this.updateProjectedTargets(true);
     } else {
+      this.prewarmGestureModel();
+      this.updateGestureCameraActivity();
       this.updateNormalScene();
     }
   }
@@ -1449,6 +1531,7 @@ struct Index {
     this.getUIContext().animateTo(MotionTokens.standard(), () => {
       this.showCapturePanel = visible;
     });
+    this.updateGestureCameraActivity();
   }
 
   /** 工作区顺序只决定视觉方向；硬件连接、轮询和任务生命周期不进入动画事务。 */
@@ -1458,24 +1541,153 @@ struct Index {
     this.getUIContext().animateTo(MotionTokens.standard(), () => {
       this.activeSection = section;
     });
+    this.updateGestureCameraActivity();
   }
 
   private setGestureEnabled(value: boolean): void {
-    const analyzerAvailable: boolean = this.gestureModelAvailable();
-    const enabled: boolean = value && this.skyMode === 1 && analyzerAvailable;
-    this.gestureEnabled = enabled;
-    if (value && !analyzerAvailable) {
-      this.gestureStatus = '未安装手势模型';
-      this.operationMessage = '手势控制未启动：当前版本未安装经过许可和精度验收的手部模型';
-    } else {
-      this.gestureStatus = enabled ? '正在启动前摄识别' : '未启用';
+    if (!value) {
+      this.gestureEnabled = false;
+      this.updateGestureCameraActivity();
+      this.gestureStatus = this.gestureModelReady ? '手势模型已就绪' : this.gestureCapabilityText();
+      return;
     }
-    if (!enabled) this.gestureInterpreter.reset();
+    // 相机输出或一次推理失败不代表模型文件失效；模型仍就绪时允许用户显式重试。
+    if (this.gestureModelReady) this.gestureModelError = '';
+    if (this.skyMode !== 1 || !this.gestureModelAvailable()) {
+      this.gestureEnabled = false;
+      this.updateGestureCameraActivity();
+      if (!this.gestureModelLoading) this.prewarmGestureModel();
+      this.operationMessage = this.gestureModelLoading ?
+        '手势模型正在预热，请稍后再开启' : `手势控制未启动：${this.gestureCapabilityText()}`;
+      return;
+    }
+    this.gestureEnabled = true;
+    this.gestureModelError = '';
+    this.updateGestureCameraActivity();
   }
 
   private gestureModelAvailable(): boolean {
-    return this.handFrameSource.getStatus().analyzer.available &&
-      this.handFrameSource.getStatus().analyzer.modelLoaded;
+    return this.gestureModelReady && !this.gestureModelLoading;
+  }
+
+  private gestureCapabilityText(): string {
+    if (this.gestureModelLoading) return '正在预热手势模型';
+    if (this.gestureModelError.length > 0) return this.gestureModelError;
+    if (this.gestureModelReady) return this.gestureStatus;
+    return '手势模型尚未就绪';
+  }
+
+  /**
+   * 模型预热只读取 HAP 内的离线模型并创建推理会话，不创建 CameraKit 会话，
+   * 因此进入普通星图不会提前弹出相机权限。用户明确开启手势后才挂载前摄组件。
+   */
+  private async prewarmGestureModel(): Promise<void> {
+    if (this.gestureModelReady || this.gestureModelLoading || !this.pageVisible) return;
+    const generation: number = ++this.gestureModelGeneration;
+    this.gestureModelLoading = true;
+    this.gestureModelError = '';
+    this.gestureStatus = '正在预热手势模型';
+    try {
+      const status: HandLandmarkAnalyzerStatus = await this.handFrameSource.prewarm();
+      if (!this.pageVisible || generation !== this.gestureModelGeneration) return;
+      const ready: boolean = status.available && status.modelLoaded &&
+        (status.state === HandLandmarkAnalyzerState.READY ||
+          status.state === HandLandmarkAnalyzerState.ANALYZING);
+      this.gestureModelReady = ready;
+      if (ready) {
+        this.gestureModelError = '';
+        this.gestureStatus = '手势模型已就绪';
+      } else {
+        this.gestureModelError = status.message.length > 0 ? status.message : '手势模型初始化失败';
+        this.gestureStatus = this.gestureModelError;
+        this.gestureEnabled = false;
+      }
+    } catch (error) {
+      if (!this.pageVisible || generation !== this.gestureModelGeneration) return;
+      this.gestureModelReady = false;
+      this.gestureEnabled = false;
+      this.gestureModelError = error instanceof Error && error.message.length > 0 ?
+        error.message : '手势模型初始化失败';
+      this.gestureStatus = this.gestureModelError;
+    } finally {
+      if (this.pageVisible && generation === this.gestureModelGeneration) {
+        this.gestureModelLoading = false;
+        this.updateGestureCameraActivity();
+      }
+    }
+  }
+
+  /**
+   * “模型已就绪”和“前摄正在运行”是两件事。抽屉、拍摄面板或其他工作区出现时，
+   * 保留用户开关但卸载前摄；恢复时建立新的帧时间边界，旧推理回调不能进入视口。
+   */
+  private updateGestureCameraActivity(): void {
+    const shouldRun: boolean = this.pageVisible && this.gestureEnabled && this.gestureModelAvailable() &&
+      this.activeSection === 0 && this.skyMode === 1 && this.skyOverlayPanel === 0 &&
+      this.skyChromeVisible && !this.showCapturePanel;
+    const activityChanged: boolean = shouldRun !== this.gestureCameraActive;
+    if (activityChanged) {
+      this.gestureCameraActive = shouldRun;
+      this.gestureModelRunning = false;
+      this.invalidateGestureSession();
+    }
+    if (shouldRun) {
+      if (activityChanged) {
+        this.gestureSessionStartedAtMs = Date.now();
+        this.gestureStatus = '正在启动前摄识别';
+      }
+    } else if (this.gestureEnabled && this.gestureModelReady) {
+      if (this.activeSection !== 0 || this.skyMode !== 1) {
+        this.gestureStatus = '已暂停：返回普通星图后恢复';
+      } else if (this.showCapturePanel) {
+        this.gestureStatus = '已暂停：关闭拍摄面板后恢复';
+      } else if (this.skyOverlayPanel !== 0) {
+        this.gestureStatus = '已暂停：关闭抽屉后恢复';
+      } else if (!this.skyChromeVisible) {
+        this.gestureStatus = '已暂停：显示界面控件后恢复';
+      } else {
+        this.gestureStatus = '手势模型已就绪';
+      }
+    }
+  }
+
+  private invalidateGestureSession(): void {
+    this.gestureSessionStartedAtMs = 0;
+    this.lastAcceptedGestureFrameAtMs = 0;
+    this.gestureSourceRunGeneration = 0;
+    this.handTransformActive = false;
+    this.gestureInterpreter.reset();
+    this.normalSkyGestureController.endHandTransform();
+  }
+
+  private applyHandFrameSourceStatus(status: HandFrameSourceStatus): void {
+    if (!this.pageVisible) return;
+    const analyzerReady: boolean = status.analyzer.available && status.analyzer.modelLoaded &&
+      (status.analyzer.state === HandLandmarkAnalyzerState.READY ||
+        status.analyzer.state === HandLandmarkAnalyzerState.ANALYZING);
+    this.gestureModelReady = analyzerReady;
+    this.gestureModelRunning = this.gestureCameraActive && status.state === HandFrameSourceState.RUNNING;
+    if (this.gestureCameraActive && (status.state === HandFrameSourceState.PREPARING ||
+      status.state === HandFrameSourceState.READY || status.state === HandFrameSourceState.RUNNING)) {
+      this.gestureSourceRunGeneration = status.runGeneration;
+    }
+    const failed: boolean = status.state === HandFrameSourceState.ERROR ||
+      status.analyzer.state === HandLandmarkAnalyzerState.ERROR ||
+      status.analyzer.state === HandLandmarkAnalyzerState.UNAVAILABLE;
+    if (failed) {
+      this.gestureModelError = status.message.length > 0 ? status.message : status.analyzer.message;
+      this.gestureStatus = this.gestureModelError;
+      this.gestureEnabled = false;
+      this.gestureCameraActive = false;
+      this.invalidateGestureSession();
+      return;
+    }
+    if (analyzerReady) this.gestureModelError = '';
+    if (this.gestureCameraActive) {
+      this.gestureStatus = status.message;
+    } else if (!this.gestureEnabled && analyzerReady) {
+      this.gestureStatus = '手势模型已就绪';
+    }
   }
 
   private selectedTarget(): CelestialObject {
@@ -1667,6 +1879,7 @@ struct Index {
       this.skyChromeVisible = true;
       this.skyOverlayPanel = 2;
     });
+    this.updateGestureCameraActivity();
   }
 
   private addActivePlanningTargetToPlan(): void {
@@ -2593,53 +2806,74 @@ struct Index {
   }
 
   private applyHandLandmarks(result: HandLandmarkAnalysisResult): void {
-    // 关闭开关或切换回 AR 后，丢弃已经在推理队列中的旧帧，避免异步回调继续移动普通星图。
-    if (!this.gestureEnabled || this.skyMode !== 1) {
-      this.gestureInterpreter.reset();
-      this.normalSkyGestureController.endHandTransform();
+    // 相机卸载前可能仍有一帧推理在途；会话起始时间和单调帧时间共同阻止旧回调修改视口。
+    if (!this.gestureCameraActive || !this.gestureModelRunning || !this.gestureEnabled ||
+      this.activeSection !== 0 ||
+      this.skyMode !== 1 || this.skyOverlayPanel !== 0 || !this.skyChromeVisible ||
+      this.showCapturePanel ||
+      this.gestureSourceRunGeneration <= 0 ||
+      result.runGeneration !== this.gestureSourceRunGeneration ||
+      !Number.isFinite(result.frameReceivedAtMs) ||
+      result.frameReceivedAtMs < this.gestureSessionStartedAtMs ||
+      result.frameReceivedAtMs <= this.lastAcceptedGestureFrameAtMs) {
       return;
     }
+    this.lastAcceptedGestureFrameAtMs = result.frameReceivedAtMs;
     const frame: GestureFrame = this.gestureInterpreter.interpret(
       result.hands, result.frameReceivedAtMs);
     let normalSkyChanged: boolean = false;
-    if (frame.gesture === HandGesture.DRAG) {
-      this.normalSkyGestureController.endHandTransform();
-      this.applyNormalViewState(NormalSkyViewStateService.pan(
-        this.normalViewState, this.normalSkySize(),
-        frame.deltaX * this.skyViewportWidth, frame.deltaY * this.skyViewportHeight));
-      normalSkyChanged = true;
-      this.gestureStatus = '单掌拖拽';
-    } else if (frame.gesture === HandGesture.ROTATE_SCALE) {
-      const anchorX: number = frame.selectX * this.skyViewportWidth;
-      const anchorY: number = frame.selectY * this.skyViewportHeight;
-      const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updateHandTransform(
-        this.normalViewState, this.normalSkySize(), frame.scale, frame.rotationDegrees, anchorX, anchorY);
-      if (update.changed) {
-        this.applyNormalViewState(update.viewState);
-        normalSkyChanged = true;
-      }
-      this.gestureStatus = '双掌旋转 / 缩放';
-    } else if (frame.gesture === HandGesture.PINCH_SELECT) {
-      this.normalSkyGestureController.endHandTransform();
+    // 选择和复位优先于张掌三轴变换，保持闭合期间不会继续拖动或缩放。
+    if (frame.gesture === HandGesture.PINCH_SELECT) {
+      this.endSingleHandTransform();
       this.selectNearestGestureTarget(
         frame.selectX * this.skyViewportWidth, frame.selectY * this.skyViewportHeight);
       this.gestureStatus = '捏合选择';
     } else if (frame.gesture === HandGesture.FIST_RESET) {
-      this.normalSkyGestureController.endHandTransform();
+      this.endSingleHandTransform();
       this.applyNormalViewState(NormalSkyViewStateService.home(
         this.normalObserver(this.normalTimeState.timestampMs), this.normalViewState.orientation));
       normalSkyChanged = true;
       this.gestureStatus = '握拳复位';
+    } else if (frame.gesture === HandGesture.SINGLE_HAND_TRANSFORM) {
+      const update: NormalSkyGestureUpdate =
+        this.normalSkyGestureController.updateSingleHandTransform(
+          this.normalViewState, this.normalSkySize(), frame.transform);
+      if (update.changed) {
+        if (!this.handTransformActive) {
+          // 手部接管视口时只终止旧的触控动画，不能调用 clearNormalMotion，
+          // 否则会把刚建立的单掌事务连同控制器状态一起重置。
+          this.stopNormalInertia();
+          this.stopNormalFly();
+          this.handTransformActive = true;
+        }
+        // 三个轴由控制器合成为一个候选姿态；本帧只写一次视口并只安排一次场景更新。
+        this.applyNormalViewState(update.viewState);
+        normalSkyChanged = true;
+      }
+      this.gestureStatus = this.singleHandTransformStatus(update);
     } else if (result.hands.length > 0) {
-      this.normalSkyGestureController.endHandTransform();
+      this.endSingleHandTransform();
       this.gestureStatus = '已检测手部';
     } else {
-      this.normalSkyGestureController.endHandTransform();
+      this.endSingleHandTransform();
       this.gestureStatus = '等待手部进入画面';
     }
     if (normalSkyChanged) {
       this.scheduleNormalSceneUpdate(true);
     }
+  }
+
+  private endSingleHandTransform(): void {
+    this.handTransformActive = false;
+    this.normalSkyGestureController.endHandTransform();
+  }
+
+  private singleHandTransformStatus(update: NormalSkyGestureUpdate): string {
+    const names: string[] = [];
+    if (update.translationChanged) names.push('平移');
+    if (update.rotationChanged) names.push('旋转');
+    if (update.scaleChanged) names.push('缩放');
+    return names.length > 0 ? `单掌${names.join(' / ')}` : '单掌已稳定';
   }
 
   private selectNearestGestureTarget(screenX: number, screenY: number): void {
@@ -2919,6 +3153,109 @@ struct Index {
     this.updateProjectedTargets(true);
   }
 
+  /**
+   * 启动时仅恢复用户上次明确保存的地址。此过程不连接 Socket、不查询网关，
+   * 因此应用重启后不会因为地址恢复而改变赤道仪或相机状态。
+   */
+  private async initializeDeviceConnectionSettings(): Promise<void> {
+    if (this.deviceConnectionSettingsStore !== undefined || this.deviceConnectionSettingsLoading) return;
+    this.deviceConnectionSettingsLoading = true;
+    try {
+      const context: common.Context | undefined = this.getUIContext().getHostContext();
+      if (context === undefined) throw new Error('无法取得设备地址存储上下文');
+      const store: DeviceConnectionSettingsStore = new DeviceConnectionSettingsStore(context);
+      const settings: DeviceConnectionSettings = await store.initialize();
+      this.deviceConnectionSettingsStore = store;
+      this.applyDeviceConnectionSettings(settings);
+    } catch (error) {
+      // 存储不可用不能影响离线星图；继续使用 StarScope 默认地址并把原因放入设备页反馈。
+      this.reportDeviceOperation(`设备地址存储不可用，已使用默认地址：${error}`);
+    } finally {
+      this.deviceConnectionSettingsLoading = false;
+    }
+  }
+
+  private connectionSettingsLocked(): boolean {
+    const mountBusy: boolean = this.mountConnection === ConnectionState.CONNECTED ||
+      this.mountConnection === ConnectionState.CONNECTING;
+    const gatewayBusy: boolean = this.gatewayServiceConnection === ConnectionState.CONNECTED ||
+      this.gatewayServiceConnection === ConnectionState.CONNECTING;
+    const taskActive: boolean = this.activeTaskSession !== undefined &&
+      !TaskSessionStore.isTerminal(this.activeTaskSession.status);
+    return mountBusy || gatewayBusy || this.operationBusy || taskActive;
+  }
+
+  private toggleConnectionSettings(): void {
+    if (this.connectionSettingsLocked()) {
+      this.reportDeviceOperation('请先断开设备并结束活动会话，再修改网络地址');
+      return;
+    }
+    this.connectionSettingsOpen = !this.connectionSettingsOpen;
+  }
+
+  private restoreDeviceConnectionDefaults(): void {
+    if (this.connectionSettingsLocked()) {
+      this.reportDeviceOperation('设备连接中，不能修改网络地址');
+      return;
+    }
+    const defaults: DeviceConnectionSettings = DeviceConnectionSettingsStore.defaults();
+    // 恢复默认只回填输入框；再次点击“保存并应用”前，当前现场连接地址不会改变。
+    this.mountHostInput = defaults.mountHost;
+    this.mountPortInput = defaults.mountPort.toString();
+    this.gatewayHostInput = defaults.gatewayHost;
+    this.gatewayPortInput = defaults.gatewayPort.toString();
+    this.reportDeviceOperation('已回填 StarScope 默认地址；保存后才会应用');
+  }
+
+  private async saveDeviceConnectionSettings(): Promise<void> {
+    if (this.connectionSettingsLocked()) {
+      this.reportDeviceOperation('设备连接中，不能修改网络地址');
+      return;
+    }
+    this.operationBusy = true;
+    try {
+      const settings: DeviceConnectionSettings = DeviceConnectionSettingsStore.createFromText(
+        this.mountHostInput, this.mountPortInput, this.gatewayHostInput, this.gatewayPortInput);
+      if (this.deviceConnectionSettingsStore === undefined) {
+        await this.initializeDeviceConnectionSettings();
+      }
+      const store: DeviceConnectionSettingsStore | undefined = this.deviceConnectionSettingsStore;
+      if (store === undefined) throw new Error('设备地址存储尚未准备好，请稍后重试');
+      await store.save(settings);
+      this.applyDeviceConnectionSettings(settings);
+      this.connectionSettingsOpen = false;
+      this.reportDeviceOperation(`已应用赤道仪 ${this.mountEndpointText()}，网关 ${this.gatewayEndpointText()}；请手动执行连接检测`);
+    } catch (error) {
+      this.reportDeviceOperation(`设备地址未保存：${error}`);
+    } finally {
+      this.operationBusy = false;
+    }
+  }
+
+  private applyDeviceConnectionSettings(settings: DeviceConnectionSettings): void {
+    this.deviceConnectionSettings = DeviceConnectionSettingsStore.copy(settings);
+    this.mountHostInput = this.deviceConnectionSettings.mountHost;
+    this.mountPortInput = this.deviceConnectionSettings.mountPort.toString();
+    this.gatewayHostInput = this.deviceConnectionSettings.gatewayHost;
+    this.gatewayPortInput = this.deviceConnectionSettings.gatewayPort.toString();
+    this.mountDetail = this.mountEndpointText();
+    this.gatewayDetail = this.gatewayEndpointText();
+    const gatewayEndpoint: GatewayEndpointConfig = {
+      baseUrl: `http://${this.deviceConnectionSettings.gatewayHost}:${this.deviceConnectionSettings.gatewayPort}`,
+      requestTimeoutMs: 5000,
+      readTimeoutMs: 30000
+    };
+    this.gatewayClient.setEndpoint(gatewayEndpoint);
+  }
+
+  private mountEndpointText(): string {
+    return `${this.deviceConnectionSettings.mountHost}:${this.deviceConnectionSettings.mountPort}`;
+  }
+
+  private gatewayEndpointText(): string {
+    return `${this.deviceConnectionSettings.gatewayHost}:${this.deviceConnectionSettings.gatewayPort}`;
+  }
+
   private async toggleMountConnection(): Promise<void> {
     if (this.operationBusy) {
       return;
@@ -2933,8 +3270,9 @@ struct Index {
         this.reportDeviceOperation('赤道仪已断开');
       } else {
         this.mountConnection = ConnectionState.CONNECTING;
-        this.reportDeviceOperation('正在连接 10.42.0.20:9999 并执行坐标模式自检');
-        await this.mountClient.connect();
+        this.reportDeviceOperation(`正在连接 ${this.mountEndpointText()} 并执行坐标模式自检`);
+        await this.mountClient.connect(this.deviceConnectionSettings.mountHost,
+          this.deviceConnectionSettings.mountPort);
         this.mountCoordinatesTopocentric = this.mountClient.isCoordinateModeCompatible();
         const state: MountState = await this.mountClient.refreshState();
         this.applyMountState(state);
@@ -2962,7 +3300,7 @@ struct Index {
       this.gatewayServiceConnection = ConnectionState.DISCONNECTED;
       this.gatewayConnection = ConnectionState.DISCONNECTED;
       this.cameraCapabilities = undefined;
-      this.gatewayDetail = '10.42.0.1:8000';
+      this.gatewayDetail = this.gatewayEndpointText();
       this.gatewayServiceVersion = '';
       this.gatewayUpdatedAtMs = 0;
       this.reportDeviceOperation('已停止相机网关与 EOS R7 状态检测');
@@ -2971,7 +3309,7 @@ struct Index {
     this.operationBusy = true;
     this.gatewayServiceConnection = ConnectionState.CONNECTING;
     this.gatewayConnection = ConnectionState.DISCONNECTED;
-    this.reportDeviceOperation('正在检测 10.42.0.1:8000 相机网关');
+    this.reportDeviceOperation(`正在检测 ${this.gatewayEndpointText()} 相机网关`);
     try {
       const health: GatewayHealth = await this.gatewayClient.health();
       if (!health.online) {
@@ -3000,7 +3338,7 @@ struct Index {
       this.gatewayServiceConnection = ConnectionState.ERROR;
       this.gatewayConnection = ConnectionState.DISCONNECTED;
       this.cameraCapabilities = undefined;
-      this.gatewayDetail = '10.42.0.1:8000';
+      this.gatewayDetail = this.gatewayEndpointText();
       this.gatewayServiceVersion = '';
       this.gatewayUpdatedAtMs = 0;
       this.reportDeviceOperation(`相机网关检测失败：${error}`);
@@ -3091,7 +3429,7 @@ struct Index {
       this.gatewayServiceConnection = ConnectionState.ERROR;
       this.gatewayConnection = ConnectionState.DISCONNECTED;
       this.cameraCapabilities = undefined;
-      this.gatewayDetail = '10.42.0.1:8000';
+      this.gatewayDetail = this.gatewayEndpointText();
       this.gatewayServiceVersion = '';
       this.gatewayUpdatedAtMs = 0;
       this.reportDeviceOperation(`相机网关连接已中断：${error}`);
@@ -3103,8 +3441,10 @@ struct Index {
     this.gatewayUpdatedAtMs = state.updatedAtMs;
     const serviceLabel: string = this.gatewayServiceVersion.length > 0 ?
       this.gatewayServiceVersion : 'StarFinding Gateway';
-    this.gatewayDetail = state.cameraModel.length > 0 ?
+    const deviceDetail: string = state.cameraModel.length > 0 ?
       `${state.cameraModel} · ${serviceLabel}` : serviceLabel;
+    // 保留实际网关地址，方便 Windows/安卓热点下现场排障，不能只显示相机型号而隐藏连接目标。
+    this.gatewayDetail = `${this.gatewayEndpointText()} · ${deviceDetail}`;
   }
 
   private resetMountUiState(connection: ConnectionState): void {
