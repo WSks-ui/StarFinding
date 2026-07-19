@@ -7,6 +7,7 @@ import {
   HandTensorSpecification
 } from '../main/ets/services/HandModelManifest';
 import {
+  HandPalmRefreshPolicy,
   HandPackedNv21Decoder,
   HandYuvPlaneSet
 } from '../main/ets/services/HandLandmarkAnalyzer';
@@ -77,6 +78,13 @@ export default function handModelRuntimeTest(): void {
     it('生成官方192输入对应的2016个掌心锚点', 0, () => {
       const pipeline: MediaPipeHandPipeline = new MediaPipeHandPipeline();
       expect(pipeline.getAnchorCount()).assertEqual(2016);
+    });
+
+    it('Palm首帧必跑并按12帧或500ms低频刷新', 0, () => {
+      expect(HandPalmRefreshPolicy.shouldRun(false, 0, -1.0, 1000.0)).assertTrue();
+      expect(HandPalmRefreshPolicy.shouldRun(true, 1, 1000.0, 1200.0)).assertFalse();
+      expect(HandPalmRefreshPolicy.shouldRun(true, 12, 1000.0, 1200.0)).assertTrue();
+      expect(HandPalmRefreshPolicy.shouldRun(true, 5, 1000.0, 1500.0)).assertTrue();
     });
 
     it('横屏输入的掌心结果会移除上下黑边并生成旋转ROI', 0, () => {
@@ -161,6 +169,19 @@ export default function handModelRuntimeTest(): void {
       expect(rgb[0] > 0.95 && rgb[0] <= 1.0).assertTrue();
       expect(Math.abs(rgb[0] - rgb[1]) < 0.001).assertTrue();
       expect(Math.abs(rgb[1] - rgb[2]) < 0.001).assertTrue();
+    });
+
+    it('预处理可以写入复用的 Float32Array，不重复分配模型输入', 0, () => {
+      const yBuffer: ArrayBuffer = new ArrayBuffer(16);
+      const uBuffer: ArrayBuffer = new ArrayBuffer(4);
+      const vBuffer: ArrayBuffer = new ArrayBuffer(4);
+      const reusable: Float32Array = new Float32Array(2 * 2 * 3);
+      const output: ArrayBuffer = buildPalmTensorBuffer(
+        yBuffer, 4, 1,
+        uBuffer, 2, 1,
+        vBuffer, 2, 1,
+        4, 4, 2, reusable);
+      expect(output === reusable.buffer).assertTrue();
     });
 
     it('packed NV21会跳过行填充并按VU顺序拆成三平面', 0, () => {

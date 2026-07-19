@@ -21,6 +21,7 @@ import deviceReadinessServiceTest from './DeviceReadinessService.test';
 import deviceConnectionSettingsStoreTest from './DeviceConnectionSettingsStore.test';
 import taskSessionStoreTest from './TaskSessionStore.test';
 import singleHandGestureAcceptanceTest from './SingleHandGestureAcceptance.test';
+import normalSkyInteractiveTransformServiceTest from './NormalSkyInteractiveTransformService.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -46,4 +47,5 @@ export default function testsuite() {
   deviceConnectionSettingsStoreTest();
   taskSessionStoreTest();
   singleHandGestureAcceptanceTest();
+  normalSkyInteractiveTransformServiceTest();
 }
