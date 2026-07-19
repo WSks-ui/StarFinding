@@ -55,6 +55,11 @@ export class NormalSkyInteractiveTransformService {
       translateX = projected.xPixels - width / 2.0;
       translateY = projected.yPixels - height / 2.0;
     }
+    // 恒等视口经过球面投影后可能产生约 1e-14 级浮点残差。
+    // 这类残差不代表真实的 Canvas 变换，统一归零可避免测试和渲染层
+    // 将恒等状态误判为存在平移，也能减少无意义的重绘。
+    if (Math.abs(translateX) < 0.000001) translateX = 0.0;
+    if (Math.abs(translateY) < 0.000001) translateY = 0.0;
     const active: boolean = Math.abs(translateX) > 0.25 ||
       Math.abs(translateY) > 0.25 || Math.abs(rotationDegrees) > 0.1 ||
       Math.abs(scale - 1.0) > 0.002;
