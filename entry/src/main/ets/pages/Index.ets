@@ -2922,9 +2922,11 @@ struct Index {
     const sourceStatus: HandFrameSourceStatus = this.handFrameSource.getStatus();
     const analyzerStatus: HandLandmarkAnalyzerStatus = sourceStatus.analyzer;
     const backend: string = this.gestureBackendText(analyzerStatus);
-    const average: string = analyzerStatus.averageInferenceMs.toFixed(0);
-    const p95: string = analyzerStatus.p95InferenceMs.toFixed(0);
-    const fps: string = analyzerStatus.inferenceFps.toFixed(1);
+    // 相机 imageArrival 与页面可能位于不同 ArkTS 运行时。耗时统计随结果快照传回，
+    // 不再从 UI 线程重新读取分析器内部计数，避免真机显示 0ms / 0fps 的假指标。
+    const average: string = result.averageInferenceMs.toFixed(0);
+    const p95: string = result.p95InferenceMs.toFixed(0);
+    const fps: string = result.inferenceFps.toFixed(1);
     this.gesturePerformanceText =
       `${backend} · ${average}ms / P95 ${p95}ms · ${fps}fps · 丢帧${result.droppedFrameCount}`;
   }

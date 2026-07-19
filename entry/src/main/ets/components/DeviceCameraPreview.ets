@@ -84,6 +84,8 @@ export struct DeviceCameraPreview {
   private analysisOutput?: camera.PreviewOutput;
   private captureSession?: camera.PhotoSession;
   private readonly sessionErrorCallback = (error: BusinessError): void => {
+    console.error(`[StarFindingCamera] session.error code=${error.code}, message=${error.message}, ` +
+      `front=${this.useFrontCamera}, started=${this.previewStarted}, activeLease=${this.activeLeaseHeld}`);
     if (!this.activeLeaseHeld || this.recoveryScheduled) {
       return;
     }
@@ -95,7 +97,7 @@ export struct DeviceCameraPreview {
     // 官方不允许在 error 回调栈内直接 off；延迟到下一事件循环再完成注销、释放和重启。
     setTimeout(() => {
       this.recoveryScheduled = false;
-      this.stopPreview();
+      this.stopPreview('CaptureSession error 回调');
     }, 0);
   };
   private readonly displayChangeCallback = (_displayId: number): void => {
@@ -110,6 +112,7 @@ export struct DeviceCameraPreview {
   aboutToAppear(): void {
     this.componentVisible = true;
     this.lifecycleGeneration++;
+    console.info(`[StarFindingCamera] aboutToAppear front=${this.useFrontCamera}, generation=${this.lifecycleGeneration}`);
     this.refreshDisplayRotation();
     if (!this.displaySubscribed) {
       try {
@@ -126,6 +129,7 @@ export struct DeviceCameraPreview {
     this.lifecycleGeneration++;
     this.restartRequested = false;
     this.surfaceId = '';
+    console.info(`[StarFindingCamera] aboutToDisappear generation=${this.lifecycleGeneration}`);
     if (this.displaySubscribed) {
       try {
         display.off('change', this.displayChangeCallback);
@@ -133,7 +137,7 @@ export struct DeviceCameraPreview {
       }
       this.displaySubscribed = false;
     }
-    this.stopPreview();
+    this.stopPreview('组件 aboutToDisappear');
   }
 
   build() {
@@ -154,7 +158,7 @@ export struct DeviceCameraPreview {
           // onLoad 后会以新的代次自动重启，避免旧会话继续向已销毁的 Surface 输出。
           this.lifecycleGeneration++;
           this.surfaceId = '';
-          this.stopPreview();
+          this.stopPreview('XComponent onDestroy');
         })
 
       if (!this.previewStarted) {
@@ -191,6 +195,8 @@ export struct DeviceCameraPreview {
         return;
       }
       this.surfaceId = this.controller.getXComponentSurfaceId();
+      console.info(`[StarFindingCamera] XComponent surface ready front=${this.useFrontCamera}, ` +
+        `surface=${this.surfaceId.length > 0 ? 'valid' : 'empty'}`);
       if (this.surfaceId.length === 0) {
         this.cameraStatus = '预览画面未就绪';
         return;
@@ -240,6 +246,7 @@ export struct DeviceCameraPreview {
     }
     this.starting = true;
     this.restartRequested = false;
+    console.info(`[StarFindingCamera] start begin front=${this.useFrontCamera}, generation=${generation}`);
     let input: camera.CameraInput | undefined = undefined;
     let output: camera.PreviewOutput | undefined = undefined;
     let analysisOutput: camera.PreviewOutput | undefined = undefined;
@@ -276,6 +283,7 @@ export struct DeviceCameraPreview {
         await this.rejectHandAnalysisStartup(this.cameraStatus);
         return;
       }
+      console.info(`[StarFindingCamera] capability previewProfiles=${capability.previewProfiles.length}`);
 
       this.cameraStatus = this.useFrontCamera ? '等待前摄资源' : '等待后摄资源';
       await CameraPreviewCoordinator.acquire(this.cameraOwnerId);
@@ -291,6 +299,8 @@ export struct DeviceCameraPreview {
       const displayProfile: camera.Profile = this.useFrontCamera ?
         this.selectDisplayPreviewProfile(capability.previewProfiles) :
         capability.previewProfiles[0];
+      console.info(`[StarFindingCamera] display profile ${displayProfile.size.width}x${displayProfile.size.height}, ` +
+        `format=${displayProfile.format}`);
       // 前摄同时承担用户预览与手势分析时，主预览使用中等规格即可；把最高规格留给
       // 相机服务会显著增加双路带宽和首帧延迟。后摄 AR 仍保留设备首选规格。
       output = cameraManager.createPreviewOutput(displayProfile, this.surfaceId);
@@ -299,6 +309,7 @@ export struct DeviceCameraPreview {
       session.beginConfig();
       session.addInput(input);
       session.addOutput(output);
+      console.info('[StarFindingCamera] primary preview output added');
       // 部分 HarmonyOS 6 真机只有在 PreviewOutput 绑定到 CaptureSession 后才能查询方向；
       // 提前调用会由 Camera Service 返回 session is nullptr，并导致 AR 与前摄同时无法启动。
       this.previewRotationDegrees = this.configurePreviewRotation(output);
@@ -309,12 +320,16 @@ export struct DeviceCameraPreview {
       if (this.useFrontCamera && this.handFrameSource !== undefined) {
         analysisOutput = await this.createHandAnalysisOutput(
           cameraManager, session, capability.previewProfiles, generation, this.previewRotationDegrees);
+        console.info('[StarFindingCamera] analysis preview output added');
       }
       if (!this.isCurrentGeneration(generation)) return;
+      console.info('[StarFindingCamera] commitConfig begin');
       await session.commitConfig();
       if (!this.isCurrentGeneration(generation)) return;
+      console.info('[StarFindingCamera] commitConfig success; start begin');
       await session.start();
       if (!this.isCurrentGeneration(generation)) return;
+      console.info('[StarFindingCamera] session.start success');
 
       // session.start() 成功后立即把资源移交给组件，再触发帧源状态回调。状态回调可能让
       // 上层关闭手势入口并同步卸载本组件；提前移交可保证 aboutToDisappear/stopPreview
@@ -329,6 +344,7 @@ export struct DeviceCameraPreview {
       this.cameraStatus = this.useFrontCamera ? '前摄运行中' : '后摄运行中';
 
       if (analysisOutput !== undefined && this.handFrameSource !== undefined) {
+        console.info('[StarFindingCamera] frame source start begin');
         this.handFrameSource.start();
         if (this.handFrameSource.getStatus().state !== HandFrameSourceState.RUNNING) {
           throw new Error(this.handFrameSource.getStatus().message);
@@ -337,8 +353,10 @@ export struct DeviceCameraPreview {
           // 状态回调已经触发组件卸载时，aboutToDisappear 会负责停止已移交的会话。
           return;
         }
+        console.info('[StarFindingCamera] frame source start success');
       }
     } catch (error) {
+      console.error(`[StarFindingCamera] start failed: ${this.errorMessage(error, 'unknown')}`);
       if (this.isCurrentGeneration(generation)) {
         this.cameraStatus = this.errorMessage(error,
           this.useFrontCamera && this.handFrameSource !== undefined ?
@@ -359,6 +377,8 @@ export struct DeviceCameraPreview {
       }
       this.starting = false;
       this.restartIfNeeded();
+      console.info(`[StarFindingCamera] start end transferred=${resourcesTransferred}, ` +
+        `previewStarted=${this.previewStarted}`);
     }
   }
 
@@ -399,13 +419,18 @@ export struct DeviceCameraPreview {
         previewHeight: this.previewHeight,
         qualityWarning: this.handAnalysisWarning
       };
+      console.info(`[StarFindingCamera] analysis profile ${profile.size.width}x${profile.size.height}, ` +
+        `format=${profile.format}, rotation=${rotationDegrees}`);
       const analysisSurfaceId: string = await source.prepare(frameProfile);
+      console.info(`[StarFindingCamera] analysis surface ready=${analysisSurfaceId.length > 0}`);
       if (!this.isCurrentGeneration(generation)) {
         await source.stop();
         throw new Error('前摄手势分析启动已取消');
       }
       output = cameraManager.createPreviewOutput(profile, analysisSurfaceId);
-      if (!session.canAddOutput(output)) {
+      const canAdd: boolean = session.canAddOutput(output);
+      console.info(`[StarFindingCamera] analysis canAddOutput=${canAdd}`);
+      if (!canAdd) {
         await output.release();
         output = undefined;
         throw new Error('当前设备不支持显示预览与手势分析双路输出');
@@ -509,10 +534,12 @@ export struct DeviceCameraPreview {
     return selected;
   }
 
-  private async stopPreview(): Promise<void> {
+  private async stopPreview(reason: string = '未标注释放'): Promise<void> {
     if (this.stopping) {
       return;
     }
+    console.info(`[StarFindingCamera] stop begin reason=${reason}, started=${this.previewStarted}, ` +
+      `hasSession=${this.captureSession !== undefined}, hasAnalysis=${this.analysisOutput !== undefined}`);
     const session = this.captureSession;
     const output = this.previewOutput;
     const analysisOutput = this.analysisOutput;
@@ -533,6 +560,7 @@ export struct DeviceCameraPreview {
       }
       this.stopping = false;
       this.restartIfNeeded();
+      console.info(`[StarFindingCamera] stop end reason=${reason}, restartRequested=${this.restartRequested}`);
     }
   }
 

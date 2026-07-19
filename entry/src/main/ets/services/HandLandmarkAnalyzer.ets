@@ -200,6 +200,10 @@ export interface HandLandmarkAnalysisResult {
   hands: HandLandmarks[];
   frameReceivedAtMs: number;
   inferenceDurationMs: number;
+  /** 与本帧同一推理运行时生成，避免 UI 线程读取到跨运行时未同步的统计字段。 */
+  averageInferenceMs: number;
+  p95InferenceMs: number;
+  inferenceFps: number;
   runGeneration: number;
   inferenceBackend: HandInferenceBackend;
   palmDetectionRan: boolean;
@@ -477,6 +481,8 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   private processingTask?: Promise<void>;
   private prewarmTask?: Promise<void>;
   private framePending: boolean = false;
+  private imageArrivalCount: number = 0;
+  private imageReadCount: number = 0;
 
   constructor(analyzer: HandLandmarkAnalyzer, resultListener?: HandLandmarkResultListener,
     statusListener?: HandFrameSourceStatusListener) {
@@ -510,6 +516,8 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   async prepare(profile: HandFrameSourceProfile): Promise<string> {
     this.active = false;
     const generation: number = ++this.runGeneration;
+    console.info(`[StarFindingHandFrame] prepare begin generation=${generation}, ` +
+      `${profile.width}x${profile.height}, cameraFormat=${profile.cameraFormat}`);
     await this.waitForProcessing();
     await this.releaseReceiver();
     this.state = HandFrameSourceState.PREPARING;
@@ -535,6 +543,8 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
     this.lastInferenceStartedAtMs = 0.0;
     try {
       this.receiver = this.createAnalysisReceiver(profile);
+      console.info(`[StarFindingHandFrame] ImageReceiver created format=${this.receiver.format}, ` +
+        `size=${this.receiver.size.width}x${this.receiver.size.height}`);
       const arrivalCallback = (): void => {
         this.onImageArrival(generation);
       };
@@ -549,9 +559,13 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
       }
       this.state = HandFrameSourceState.READY;
       this.message = '前摄分析帧入口已就绪';
+      this.imageArrivalCount = 0;
+      this.imageReadCount = 0;
+      console.info(`[StarFindingHandFrame] receiver surface ready generation=${generation}`);
       this.emitStatus();
       return surfaceId;
     } catch (error) {
+      console.error(`[StarFindingHandFrame] prepare failed: ${this.errorMessage(error, 'unknown')}`);
       await this.releaseReceiver();
       this.state = HandFrameSourceState.ERROR;
       this.message = this.errorMessage(error, '无法创建前摄分析帧入口');
@@ -603,6 +617,7 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
       throw new Error(this.message);
     }
     this.active = true;
+    console.info(`[StarFindingHandFrame] start generation=${this.runGeneration}`);
     this.state = HandFrameSourceState.RUNNING;
     const profile: HandFrameSourceProfile | undefined = this.profile;
     this.message = profile !== undefined && profile.qualityWarning.length > 0 ?
@@ -611,6 +626,7 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   }
 
   async rejectCameraOutput(reason: string): Promise<void> {
+    console.error(`[StarFindingHandFrame] reject camera output: ${reason}`);
     this.active = false;
     this.runGeneration++;
     await this.waitForProcessing();
@@ -621,6 +637,7 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   }
 
   async stop(): Promise<void> {
+    console.info(`[StarFindingHandFrame] stop generation=${this.runGeneration}`);
     this.active = false;
     this.runGeneration++;
     await this.waitForProcessing();
@@ -645,6 +662,7 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   }
 
   async close(): Promise<void> {
+    console.info(`[StarFindingHandFrame] close generation=${this.runGeneration}`);
     this.active = false;
     this.runGeneration++;
     await this.waitForProcessing();
@@ -658,6 +676,11 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   private onImageArrival(generation: number): void {
     if (!this.active || generation !== this.runGeneration) {
       return;
+    }
+    this.imageArrivalCount++;
+    if (this.imageArrivalCount <= 3 || this.imageArrivalCount % 30 === 0) {
+      console.info(`[StarFindingHandFrame] imageArrival count=${this.imageArrivalCount}, ` +
+        `processing=${this.processing}, pending=${this.framePending}`);
     }
     if (!this.processing && !HandFrameThrottlePolicy.shouldStartInference(
       Date.now(), this.lastInferenceStartedAtMs)) {
@@ -706,6 +729,11 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
     let frame: HandLandmarkFrame | undefined = undefined;
     try {
       cameraImage = await receiver.readLatestImage();
+      this.imageReadCount++;
+      if (this.imageReadCount <= 3 || this.imageReadCount % 30 === 0) {
+        console.info(`[StarFindingHandFrame] image read count=${this.imageReadCount}, ` +
+          `size=${cameraImage.size.width}x${cameraImage.size.height}, format=${cameraImage.format}`);
+      }
       const planes: HandYuvPlaneSet = await this.copyCameraYuvPlanes(cameraImage);
       const transform: HandLandmarkPreviewTransform =
         this.buildPreviewTransform(cameraImage.size.width, cameraImage.size.height, profile);
@@ -731,6 +759,8 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
         runGeneration: generation
       };
     } catch (error) {
+      console.error(`[StarFindingHandFrame] image read failed generation=${generation}: ` +
+        `${this.errorMessage(error, 'unknown')}`);
       this.failCurrentGeneration(generation, this.errorMessage(error, '无法读取前摄 YUV 帧'));
     } finally {
       if (cameraImage !== undefined) {
@@ -759,6 +789,9 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
           hands: result.hands,
           frameReceivedAtMs: result.frameReceivedAtMs,
           inferenceDurationMs: result.inferenceDurationMs,
+          averageInferenceMs: result.averageInferenceMs,
+          p95InferenceMs: result.p95InferenceMs,
+          inferenceFps: result.inferenceFps,
           runGeneration: result.runGeneration,
           inferenceBackend: result.inferenceBackend,
           palmDetectionRan: result.palmDetectionRan,
@@ -767,7 +800,11 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
         });
       }
     } catch (error) {
-      this.failCurrentGeneration(generation, this.errorMessage(error, '手部关键点推理失败'));
+      const reason: string = this.errorMessage(error, '手部关键点推理失败');
+      // 推理错误会让页面按诚实降级策略卸载前摄；必须在卸载前记录原始原因，
+      // 否则日志只会看到 aboutToDisappear，难以区分模型输出、NAPI 句柄或预处理故障。
+      console.error(`[StarFindingHandFrame] analyze failed generation=${generation}: ${reason}`);
+      this.failCurrentGeneration(generation, reason);
     }
   }
 
@@ -894,6 +931,7 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
     if (generation !== this.runGeneration) {
       return;
     }
+    console.error(`[StarFindingHandFrame] generation failed generation=${generation}, reason=${reason}`);
     this.state = HandFrameSourceState.ERROR;
     this.message = reason;
     this.active = false;

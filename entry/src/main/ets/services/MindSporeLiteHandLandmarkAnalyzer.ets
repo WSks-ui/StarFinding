@@ -115,15 +115,15 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
   private trackingFrameCount: number = 0;
   private lastPalmDetectionAtMs: number = -1;
   /**
-   * 模型输入张量在整个分析会话内复用。分析源保证 analyze 串行执行，
-   * 因而不会出现下一帧覆盖上一帧仍在 predict 的情况。
+   * 模型输入缓冲必须在当前前摄 runGeneration 的 ArkTS 运行时中创建。
+   *
+   * 组件实例字段会在页面运行时构造，而 imageArrival 可能进入另一套 NAPI 运行时；
+   * 直接跨运行时复用 Float32Array 会在真机抛出 TypedArray internal slot 错误。
+   * 因此这里只保存可替换引用，并在 bindToAnalysisRuntime() 成功后重新创建。
+   * 分析源保证 analyze 串行执行，同一会话内仍可安全复用，不会覆盖在途 predict。
    */
-  private readonly palmInputTensor: Float32Array =
-    new Float32Array(MediaPipeHandPipeline.PALM_INPUT_SIZE *
-      MediaPipeHandPipeline.PALM_INPUT_SIZE * 3);
-  private readonly landmarkInputTensor: Float32Array =
-    new Float32Array(MediaPipeHandPipeline.LANDMARK_INPUT_SIZE *
-      MediaPipeHandPipeline.LANDMARK_INPUT_SIZE * 3);
+  private palmInputTensor: Float32Array | undefined = undefined;
+  private landmarkInputTensor: Float32Array | undefined = undefined;
 
   constructor(context: common.Context) {
     this.context = context;
@@ -262,6 +262,8 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
         this.state = HandLandmarkAnalyzerState.ERROR;
         this.message = this.errorMessage(error, '手部关键点推理失败');
       }
+      console.error(`[StarFindingHandModel] analyze failed generation=${generation}, ` +
+        `runGeneration=${frame.runGeneration}, reason=${this.message}`);
       throw new Error(this.message);
     }
   }
@@ -315,6 +317,8 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     this.landmarkInputs = undefined;
     this.palmInputByteLength = 0;
     this.landmarkInputByteLength = 0;
+    this.palmInputTensor = undefined;
+    this.landmarkInputTensor = undefined;
     this.backend = HandInferenceBackend.UNAVAILABLE;
     this.backendDeviceName = '';
     this.clearTracking();
@@ -353,6 +357,8 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     this.landmarkInputs = undefined;
     this.palmInputByteLength = 0;
     this.landmarkInputByteLength = 0;
+    this.palmInputTensor = undefined;
+    this.landmarkInputTensor = undefined;
     this.state = HandLandmarkAnalyzerState.INITIALIZING;
     this.message = '正在将手部模型绑定到前摄分析线程';
     const task: Promise<void> = this.initializeInternal(generation);
@@ -360,6 +366,13 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     try {
       await task;
       this.ensureGeneration(generation);
+      // 必须在模型句柄完成运行时绑定后，于同一 imageArrival 运行时创建 TypedArray。
+      this.palmInputTensor = new Float32Array(
+        MediaPipeHandPipeline.PALM_INPUT_SIZE *
+        MediaPipeHandPipeline.PALM_INPUT_SIZE * 3);
+      this.landmarkInputTensor = new Float32Array(
+        MediaPipeHandPipeline.LANDMARK_INPUT_SIZE *
+        MediaPipeHandPipeline.LANDMARK_INPUT_SIZE * 3);
       this.boundRunGeneration = runGeneration;
     } catch (error) {
       if (generation === this.lifecycleGeneration && !this.isClosed()) {
@@ -756,18 +769,39 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     if (this.inferenceDurationsMs.length > 120) {
       this.inferenceDurationsMs.shift();
     }
+    const averageInferenceMs: number = this.analyzedFrames > 0 ?
+      this.totalInferenceDurationMs / this.analyzedFrames : 0.0;
+    const p95InferenceMs: number = this.inferenceP95Ms();
+    const inferenceFps: number = this.analyzedFrames > 1 &&
+      this.lastInferenceAtMs > this.firstInferenceAtMs ?
+      (this.analyzedFrames - 1) * 1000.0 /
+      (this.lastInferenceAtMs - this.firstInferenceAtMs) : 0.0;
     this.state = HandLandmarkAnalyzerState.READY;
     this.message = hands.length > 0 ? '已识别一只手' : '未检测到可靠手部';
     return {
       hands: hands,
       frameReceivedAtMs: frame.receivedAtMs,
       inferenceDurationMs: durationMs,
+      averageInferenceMs: averageInferenceMs,
+      p95InferenceMs: p95InferenceMs,
+      inferenceFps: inferenceFps,
       runGeneration: frame.runGeneration,
       inferenceBackend: this.backend,
       palmDetectionRan: palmDetectionRan,
       roiTrackingUsed: roiTrackingUsed,
       droppedFrameCount: 0
     };
+  }
+
+  private inferenceP95Ms(): number {
+    if (this.inferenceDurationsMs.length === 0) {
+      return 0.0;
+    }
+    const sorted: number[] = this.inferenceDurationsMs.slice().sort(
+      (left: number, right: number): number => left - right);
+    const index: number = Math.min(sorted.length - 1,
+      Math.floor((sorted.length - 1) * 0.95));
+    return sorted[index];
   }
 
   private shouldRefreshPalm(timestampMs: number): boolean {
