@@ -1525,6 +1525,13 @@ struct Index {
       this.operationMessage = 'AR 星图始终使用真实当前时间，已自动退出模拟时间';
     } else if (mode === 1 && this.normalTimeState.mode === NormalSkyTimeMode.REALTIME) {
       this.normalTimeState = NormalSkyTimeService.realtime(Date.now());
+      /*
+       * AR 能力检测属于 AR 页面上下文。此前在启动时记录的“设备不支持
+       * AR Engine”会一直挂在普通星图上，遮挡天体并让用户误以为普通星图
+       * 也不可用。切入普通星图时清理这类一次性提示；普通星图自身的
+       * 定位、星表或规划错误仍会在对应操作中重新显示。
+       */
+      this.operationMessage = '';
     }
     this.getUIContext().animateTo(MotionTokens.standard(), () => {
       this.skyMode = mode;
