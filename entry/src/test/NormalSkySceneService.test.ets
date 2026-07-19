@@ -95,7 +95,7 @@ export default function normalSkySceneServiceTest(): void {
       expect(interactive.horizonLines.length > 0).assertTrue();
       expect(interactive.horizonMask.length > 0 &&
         interactive.horizonMask.length < scene.horizonMask.length).assertTrue();
-      // 交互态只允许减少标签与遮罩采样，不能再次通过隐藏恒星或目录目标换取帧率。
+      // 交互态只减少标签与遮罩采样，不通过隐藏恒星或目录目标换取帧率。
       expect(interactive.staticObjects.length).assertEqual(scene.staticObjects.length);
       expect(service.getCacheStats().dynamicCatalogCacheHitCount).assertEqual(1);
     });

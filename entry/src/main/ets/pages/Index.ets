@@ -45,7 +45,6 @@ import {
   NormalSkyTimeState,
   NormalSkyViewState,
   NormalSkyViewport,
-  InteractiveSkyTransform,
   ObservationNightPeriod,
   ObservationNightSelection,
   ObservationPlanningConstraints,
@@ -61,7 +60,6 @@ import {
   SkyGuideInsets,
   SkyMapOrientation,
   SkyMapSize,
-  SkyScreenPoint,
   SolarSystemAppearance,
   SessionKind,
   SessionStatus,
@@ -120,7 +118,6 @@ import {
   NormalSkyCatalogService,
   NormalSkyProjectionService,
   NormalSkySceneService,
-  NormalSkyInteractiveTransformService,
   NormalSkyTimeService,
   NormalSkyViewStateService,
   ObserverLocationResult,
@@ -245,8 +242,6 @@ struct Index {
   private normalViewport: NormalSkyViewport = NormalSkyViewStateService.snapshot(
     NormalSkyViewStateService.defaultState());
   @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
-  @State private interactiveSkyTransform: InteractiveSkyTransform =
-    NormalSkyInteractiveTransformService.identity({ widthPixels: 600.0, heightPixels: 500.0 });
   @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
   @State private normalTimeState: NormalSkyTimeState = NormalSkyTimeService.realtime();
   @State private normalLayerPanelOpen: boolean = false;
@@ -405,7 +400,6 @@ struct Index {
     });
   private normalSceneSettleTimer: number = -1;
   private normalSceneInteractive: boolean = false;
-  private interactiveTransformRevision: number = 0;
   private normalInertiaTimer: number = -1;
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
@@ -874,7 +868,6 @@ struct Index {
       } else {
         NormalSkyMap({
           scene: this.normalScene,
-          interactiveTransform: this.interactiveSkyTransform,
           widthPixels: this.skyViewportWidth,
           heightPixels: this.skyViewportHeight,
           onObjectSelected: (objectId: string): void => {
@@ -946,7 +939,7 @@ struct Index {
             if (this.skyMode === 1) {
               const update: NormalSkyGestureUpdate = this.normalSkyGestureController.updatePointerRotation(
                 this.normalViewState, this.normalSkySize(), event.angle,
-                this.normalGestureAnchorX(event.pinchCenterX), this.normalGestureAnchorY(event.pinchCenterY));
+                this.normalRotationAnchorX(event), this.normalRotationAnchorY(event));
               if (update.changed) {
                 this.applyNormalViewState(update.viewState);
                 this.scheduleNormalSceneUpdate(true);
@@ -2500,22 +2493,13 @@ struct Index {
     if (interactive) {
       this.markNormalSceneInteractive();
       /*
-       * 交互期间不再把上一份场景做 Canvas affine 变换。
-       *
-       * 旧方案只加载当前视口内的恒星，然后在 Canvas 上平移/缩放/旋转这
-       * 一小批对象。用户一旦拖出原视口，新恒星并不存在，表现为星点成片
-       * 消失；宽视场下仿射近似还会让天极和双指锚点漂移。这里优先保证天球
-       * 几何正确：以约 32ms 的节流频率按当前四元数视口重新投影，手势结束
-       * 后再做一次非交互精确重建。这个频率仍低于触摸事件频率，不会形成
-       * 无限重建队列，同时保留固定 Canvas 渲染层的缓存机制。
+       * 恢复手势接入前验证过的稳定链路：每个显示帧最多重建一次交互场景。
+       * NormalSkySceneService 会在 interactive=true 时减少标签和地平遮罩采样，
+       * 但仍使用真实球面投影，因此拖动、旋转、缩放不会累积 Canvas 仿射误差。
        */
-      if (this.normalSceneUpdateTimer >= 0) return;
-      this.normalSceneUpdateTimer = setTimeout(() => {
-        this.normalSceneUpdateTimer = -1;
-        if (this.activeSection === 0 && this.skyMode === 1) {
-          this.rebuildNormalScene();
-        }
-      }, 32);
+      if (this.normalSceneFramePending) return;
+      this.normalSceneFramePending = true;
+      this.getUIContext().postFrameCallback(this.normalSceneFrameCallback);
       return;
     }
     if (this.normalSceneUpdateTimer >= 0) return;
@@ -2538,11 +2522,9 @@ struct Index {
     }
     this.normalSceneFramePending = false;
     this.lastNormalSceneFrameTimeNs = frameTimeInNano;
-    /*
-     * 兼容旧的 frame callback 入口，但不再更新 affine 变换。普通星图交互
-     * 统一走 scheduleNormalSceneUpdate(true) 的精确视口重建路径，避免上一
-     * 份场景中的星点集合与当前视口不一致。
-     */
+    if (this.activeSection === 0 && this.skyMode === 1) {
+      this.rebuildNormalScene();
+    }
   }
 
   private markNormalSceneInteractive(): void {
@@ -2583,23 +2565,7 @@ struct Index {
       interactive: this.normalSceneInteractive,
       showDirectionMarkers: NormalSkyLayoutService.showDirectionMarkers(
         this.useSkyBottomSheet(), this.skyOverlayPanel)
-    });
-    this.interactiveTransformRevision++;
-    this.interactiveSkyTransform = NormalSkyInteractiveTransformService.identity(
-      this.normalSkySize(), this.interactiveTransformRevision);
-  }
-
-  private updateInteractiveSkyTransform(): void {
-    if (!this.normalSceneInteractive || this.skyMode !== 1) {
-      return;
-    }
-    this.interactiveTransformRevision++;
-    this.interactiveSkyTransform =
-      NormalSkyInteractiveTransformService.fromViewports(
-        this.normalScene.viewportSnapshot,
-        this.normalViewport,
-        this.normalSkySize(),
-        this.interactiveTransformRevision);
+      });
   }
 
   private normalGestureAnchorX(value: number): number {
@@ -2612,6 +2578,37 @@ struct Index {
     const height: number = Math.max(1.0, this.skyViewportHeight);
     const safeValue: number = Number.isFinite(value) ? value : height / 2.0;
     return this.clamp(safeValue, 0.0, height);
+  }
+
+  /**
+   * RotationGestureEvent 没有 pinchCenterX/Y；旋转中心必须由当前参与手势的
+   * fingerList 计算。此前读取捏合事件专属字段会在真机上得到 0，导致整个
+   * 天球绕左上角而不是双指中心旋转。
+   */
+  private normalRotationAnchorX(event: GestureEvent): number {
+    let totalX: number = 0.0;
+    let validFingerCount: number = 0;
+    for (let index: number = 0; index < event.fingerList.length; index++) {
+      const localX: number = event.fingerList[index].localX;
+      if (!Number.isFinite(localX)) continue;
+      totalX += localX;
+      validFingerCount++;
+    }
+    if (validFingerCount < 2) return Math.max(1.0, this.skyViewportWidth) / 2.0;
+    return this.normalGestureAnchorX(totalX / validFingerCount);
+  }
+
+  private normalRotationAnchorY(event: GestureEvent): number {
+    let totalY: number = 0.0;
+    let validFingerCount: number = 0;
+    for (let index: number = 0; index < event.fingerList.length; index++) {
+      const localY: number = event.fingerList[index].localY;
+      if (!Number.isFinite(localY)) continue;
+      totalY += localY;
+      validFingerCount++;
+    }
+    if (validFingerCount < 2) return Math.max(1.0, this.skyViewportHeight) / 2.0;
+    return this.normalGestureAnchorY(totalY / validFingerCount);
   }
 
   private setNormalLayer(layer: number, enabled: boolean): void {
@@ -2968,36 +2965,11 @@ struct Index {
   }
 
   private selectNearestGestureTarget(screenX: number, screenY: number): void {
-    const mapped: SkyScreenPoint = this.inverseInteractiveScreenPoint(screenX, screenY);
     const nearest: ProjectedSkyObject | undefined = NormalSkyProjectionService.hitTest(
-      this.normalScene.objects, mapped.xPixels, mapped.yPixels, 18.0);
+      this.normalScene.objects, screenX, screenY, 18.0);
     if (nearest !== undefined) {
       this.selectNormalSkyObject(nearest.id);
     }
-  }
-
-  private inverseInteractiveScreenPoint(screenX: number, screenY: number): SkyScreenPoint {
-    const transform: InteractiveSkyTransform = this.interactiveSkyTransform;
-    const originX: number = transform.originXPixels > 0.0 ?
-      transform.originXPixels : this.skyViewportWidth / 2.0;
-    const originY: number = transform.originYPixels > 0.0 ?
-      transform.originYPixels : this.skyViewportHeight / 2.0;
-    const safeScale: number = Math.max(0.000001, Number.isFinite(transform.scale) ?
-      transform.scale : 1.0);
-    const radians: number = -(Number.isFinite(transform.rotationDegrees) ?
-      transform.rotationDegrees : 0.0) * Math.PI / 180.0;
-    const translatedX: number = screenX -
-      (Number.isFinite(transform.translateXPixels) ? transform.translateXPixels : 0.0) -
-      originX;
-    const translatedY: number = screenY -
-      (Number.isFinite(transform.translateYPixels) ? transform.translateYPixels : 0.0) -
-      originY;
-    const cosine: number = Math.cos(radians);
-    const sine: number = Math.sin(radians);
-    return {
-      xPixels: (translatedX * cosine - translatedY * sine) / safeScale + originX,
-      yPixels: (translatedX * sine + translatedY * cosine) / safeScale + originY
-    };
   }
 
   private async refreshLocation(): Promise<void> {
