@@ -45,6 +45,7 @@ import {
   NormalSkyTimeState,
   NormalSkyViewState,
   NormalSkyViewport,
+  InteractiveSkyTransform,
   ObservationNightPeriod,
   ObservationNightSelection,
   ObservationPlanningConstraints,
@@ -60,6 +61,7 @@ import {
   SkyGuideInsets,
   SkyMapOrientation,
   SkyMapSize,
+  SkyScreenPoint,
   SolarSystemAppearance,
   SessionKind,
   SessionStatus,
@@ -105,6 +107,7 @@ import {
   GestureInterpreter,
   HandFrameSourceState,
   HandFrameSourceStatus,
+  HandInferenceBackend,
   HandLandmarkAnalyzer,
   HandLandmarkAnalyzerState,
   HandLandmarkAnalyzerStatus,
@@ -117,6 +120,7 @@ import {
   NormalSkyCatalogService,
   NormalSkyProjectionService,
   NormalSkySceneService,
+  NormalSkyInteractiveTransformService,
   NormalSkyTimeService,
   NormalSkyViewStateService,
   ObserverLocationResult,
@@ -169,6 +173,7 @@ interface PreparedSessionTarget {
 
 function emptyNormalSkyScene(): NormalSkyScene {
   return {
+    viewportSnapshot: NormalSkyProjectionService.defaultViewport(),
     staticObjects: [],
     dynamicObjects: [],
     objects: [],
@@ -229,6 +234,7 @@ struct Index {
   @State private gestureModelRunning: boolean = false;
   @State private gestureModelError: string = '';
   @State private gestureCameraActive: boolean = false;
+  @State private gesturePerformanceText: string = '';
   private normalViewState: NormalSkyViewState = NormalSkyViewStateService.defaultState();
   /**
    * Canvas 与控件只读取该快照；所有交互必须通过 normalViewState 更新四元数长期姿态。
@@ -239,6 +245,8 @@ struct Index {
   private normalViewport: NormalSkyViewport = NormalSkyViewStateService.snapshot(
     NormalSkyViewStateService.defaultState());
   @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
+  @State private interactiveSkyTransform: InteractiveSkyTransform =
+    NormalSkyInteractiveTransformService.identity({ widthPixels: 600.0, heightPixels: 500.0 });
   @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
   @State private normalTimeState: NormalSkyTimeState = NormalSkyTimeService.realtime();
   @State private normalLayerPanelOpen: boolean = false;
@@ -397,6 +405,7 @@ struct Index {
     });
   private normalSceneSettleTimer: number = -1;
   private normalSceneInteractive: boolean = false;
+  private interactiveTransformRevision: number = 0;
   private normalInertiaTimer: number = -1;
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
@@ -406,6 +415,7 @@ struct Index {
   private lastAcceptedGestureFrameAtMs: number = 0;
   private gestureSourceRunGeneration: number = 0;
   private handTransformActive: boolean = false;
+  private lastGestureMetricsAtMs: number = 0;
   private pageVisible: boolean = false;
   aboutToAppear(): void {
     this.pageVisible = true;
@@ -864,6 +874,7 @@ struct Index {
       } else {
         NormalSkyMap({
           scene: this.normalScene,
+          interactiveTransform: this.interactiveSkyTransform,
           widthPixels: this.skyViewportWidth,
           heightPixels: this.skyViewportHeight,
           onObjectSelected: (objectId: string): void => {
@@ -1017,6 +1028,9 @@ struct Index {
         Column({ space: 4 }) {
           Text('手势').fontSize(11).fontWeight(FontWeight.Bold).fontColor('#FFFFFF')
           Text(this.gestureStatus).fontSize(10).fontColor('#72D3F5')
+          if (this.gesturePerformanceText.length > 0) {
+            Text(this.gesturePerformanceText).fontSize(9).fontColor('#9BB4C4')
+          }
         }
       }
     }
@@ -1577,6 +1591,21 @@ struct Index {
     return '手势模型尚未就绪';
   }
 
+  private gestureBackendText(status: HandLandmarkAnalyzerStatus): string {
+    if (status.inferenceBackend === HandInferenceBackend.NNRT_ACCELERATOR) {
+      return status.backendDeviceName.length > 0 ?
+        `NNRT Accelerator 已启用 · ${status.backendDeviceName}` : 'NNRT Accelerator 已启用';
+    }
+    if (status.inferenceBackend === HandInferenceBackend.NNRT_GPU) {
+      return status.backendDeviceName.length > 0 ?
+        `NNRT GPU 已启用 · ${status.backendDeviceName}` : 'NNRT GPU 已启用';
+    }
+    if (status.inferenceBackend === HandInferenceBackend.CPU_DIAGNOSTIC) {
+      return 'CPU 诊断模式（不建议实时使用）';
+    }
+    return '当前设备没有可用手势加速';
+  }
+
   /**
    * 模型预热只读取 HAP 内的离线模型并创建推理会话，不创建 CameraKit 会话，
    * 因此进入普通星图不会提前弹出相机权限。用户明确开启手势后才挂载前摄组件。
@@ -1596,7 +1625,7 @@ struct Index {
       this.gestureModelReady = ready;
       if (ready) {
         this.gestureModelError = '';
-        this.gestureStatus = '手势模型已就绪';
+        this.gestureStatus = this.gestureBackendText(status);
       } else {
         this.gestureModelError = status.message.length > 0 ? status.message : '手势模型初始化失败';
         this.gestureStatus = this.gestureModelError;
@@ -1646,7 +1675,7 @@ struct Index {
       } else if (!this.skyChromeVisible) {
         this.gestureStatus = '已暂停：显示界面控件后恢复';
       } else {
-        this.gestureStatus = '手势模型已就绪';
+        this.gestureStatus = this.gestureBackendText(this.handFrameSource.getStatus().analyzer);
       }
     }
   }
@@ -2489,7 +2518,11 @@ struct Index {
     this.normalSceneFramePending = false;
     this.lastNormalSceneFrameTimeNs = frameTimeInNano;
     if (this.activeSection === 0 && this.skyMode === 1) {
-      this.rebuildNormalScene();
+      /*
+       * 手势帧只更新 Canvas 的 affine 变换，不重新筛选/投影数千颗恒星。
+       * 停手后的 settle timer 会再执行一次完整球面投影。
+       */
+      this.updateInteractiveSkyTransform();
     }
   }
 
@@ -2532,6 +2565,22 @@ struct Index {
       showDirectionMarkers: NormalSkyLayoutService.showDirectionMarkers(
         this.useSkyBottomSheet(), this.skyOverlayPanel)
     });
+    this.interactiveTransformRevision++;
+    this.interactiveSkyTransform = NormalSkyInteractiveTransformService.identity(
+      this.normalSkySize(), this.interactiveTransformRevision);
+  }
+
+  private updateInteractiveSkyTransform(): void {
+    if (!this.normalSceneInteractive || this.skyMode !== 1) {
+      return;
+    }
+    this.interactiveTransformRevision++;
+    this.interactiveSkyTransform =
+      NormalSkyInteractiveTransformService.fromViewports(
+        this.normalScene.viewportSnapshot,
+        this.normalViewport,
+        this.normalSkySize(),
+        this.interactiveTransformRevision);
   }
 
   private normalGestureAnchorX(value: number): number {
@@ -2819,6 +2868,7 @@ struct Index {
       return;
     }
     this.lastAcceptedGestureFrameAtMs = result.frameReceivedAtMs;
+    this.updateGesturePerformanceText(result);
     const frame: GestureFrame = this.gestureInterpreter.interpret(
       result.hands, result.frameReceivedAtMs);
     let normalSkyChanged: boolean = false;
@@ -2863,6 +2913,22 @@ struct Index {
     }
   }
 
+  private updateGesturePerformanceText(result: HandLandmarkAnalysisResult): void {
+    const nowMs: number = Date.now();
+    if (nowMs - this.lastGestureMetricsAtMs < 500.0) {
+      return;
+    }
+    this.lastGestureMetricsAtMs = nowMs;
+    const sourceStatus: HandFrameSourceStatus = this.handFrameSource.getStatus();
+    const analyzerStatus: HandLandmarkAnalyzerStatus = sourceStatus.analyzer;
+    const backend: string = this.gestureBackendText(analyzerStatus);
+    const average: string = analyzerStatus.averageInferenceMs.toFixed(0);
+    const p95: string = analyzerStatus.p95InferenceMs.toFixed(0);
+    const fps: string = analyzerStatus.inferenceFps.toFixed(1);
+    this.gesturePerformanceText =
+      `${backend} · ${average}ms / P95 ${p95}ms · ${fps}fps · 丢帧${result.droppedFrameCount}`;
+  }
+
   private endSingleHandTransform(): void {
     this.handTransformActive = false;
     this.normalSkyGestureController.endHandTransform();
@@ -2877,11 +2943,36 @@ struct Index {
   }
 
   private selectNearestGestureTarget(screenX: number, screenY: number): void {
+    const mapped: SkyScreenPoint = this.inverseInteractiveScreenPoint(screenX, screenY);
     const nearest: ProjectedSkyObject | undefined = NormalSkyProjectionService.hitTest(
-      this.normalScene.objects, screenX, screenY, 18.0);
+      this.normalScene.objects, mapped.xPixels, mapped.yPixels, 18.0);
     if (nearest !== undefined) {
       this.selectNormalSkyObject(nearest.id);
     }
+  }
+
+  private inverseInteractiveScreenPoint(screenX: number, screenY: number): SkyScreenPoint {
+    const transform: InteractiveSkyTransform = this.interactiveSkyTransform;
+    const originX: number = transform.originXPixels > 0.0 ?
+      transform.originXPixels : this.skyViewportWidth / 2.0;
+    const originY: number = transform.originYPixels > 0.0 ?
+      transform.originYPixels : this.skyViewportHeight / 2.0;
+    const safeScale: number = Math.max(0.000001, Number.isFinite(transform.scale) ?
+      transform.scale : 1.0);
+    const radians: number = -(Number.isFinite(transform.rotationDegrees) ?
+      transform.rotationDegrees : 0.0) * Math.PI / 180.0;
+    const translatedX: number = screenX -
+      (Number.isFinite(transform.translateXPixels) ? transform.translateXPixels : 0.0) -
+      originX;
+    const translatedY: number = screenY -
+      (Number.isFinite(transform.translateYPixels) ? transform.translateYPixels : 0.0) -
+      originY;
+    const cosine: number = Math.cos(radians);
+    const sine: number = Math.sin(radians);
+    return {
+      xPixels: (translatedX * cosine - translatedY * sine) / safeScale + originX,
+      yPixels: (translatedX * sine + translatedY * cosine) / safeScale + originY
+    };
   }
 
   private async refreshLocation(): Promise<void> {

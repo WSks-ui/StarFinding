@@ -186,6 +186,8 @@ export interface ProjectedSkyObject {
 
 export interface NormalSkyScene {
   /** 固定目录层与动态天空层分开保存，Canvas 可独立决定是否重绘。 */
+  /** 生成该场景时的精确视口；交互期间 Canvas 使用它计算轻量变换。 */
+  viewportSnapshot: NormalSkyViewport;
   staticObjects: ProjectedSkyObject[];
   dynamicObjects: ProjectedSkyObject[];
   /** 命中测试使用的合并视图；顺序固定为目录层在前、动态层在后。 */
@@ -200,6 +202,23 @@ export interface NormalSkyScene {
   staticRevision: number;
   dynamicRevision: number;
   generatedAtMs: number;
+}
+
+/**
+ * 交互期间直接作用于两个 Canvas 图层的轻量变换。
+ *
+ * 它不是天球的长期姿态，只是“上一份精确场景 → 当前四元数姿态”的显示近似。
+ * 手势结束后会重新构建 NormalSkyScene 并恢复 identity，避免累积投影误差。
+ */
+export interface InteractiveSkyTransform {
+  revision: number;
+  active: boolean;
+  translateXPixels: number;
+  translateYPixels: number;
+  scale: number;
+  rotationDegrees: number;
+  originXPixels: number;
+  originYPixels: number;
 }
 
 export const DEFAULT_SKY_LAYERS: SkyLayerVisibility = {

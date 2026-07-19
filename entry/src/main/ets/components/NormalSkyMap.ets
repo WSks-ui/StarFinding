@@ -7,7 +7,8 @@ import {
   SkyObjectGlyphKind,
   SkyPolyline,
   SkyScreenPoint,
-  SkyScreenRect
+  SkyScreenRect,
+  InteractiveSkyTransform
 } from '../models/NormalSkyModels';
 import { NormalSkyProjectionService } from '../services/NormalSkyProjectionService';
 
@@ -30,6 +31,16 @@ const LABEL_BUCKET_COUNT: number = 6;
 @Component
 export struct NormalSkyMap {
   @Prop @Watch('onRenderInputChanged') scene: NormalSkyScene;
+  @Prop @Watch('onRenderInputChanged') interactiveTransform: InteractiveSkyTransform = {
+    revision: 0,
+    active: false,
+    translateXPixels: 0.0,
+    translateYPixels: 0.0,
+    scale: 1.0,
+    rotationDegrees: 0.0,
+    originXPixels: 0.0,
+    originYPixels: 0.0
+  };
   @Prop @Watch('onRenderInputChanged') widthPixels: number = 1.0;
   @Prop @Watch('onRenderInputChanged') heightPixels: number = 1.0;
   onObjectSelected: (objectId: string) => void = (_objectId: string): void => {};
@@ -41,6 +52,7 @@ export struct NormalSkyMap {
   private staticCanvasReady: boolean = false;
   private dynamicCanvasReady: boolean = false;
   private lastStaticRevision: number = -1;
+  private lastStaticTransformRevision: number = -1;
   private lastStaticWidth: number = 0.0;
   private lastStaticHeight: number = 0.0;
   private touchTracking: boolean = false;
@@ -102,9 +114,11 @@ export struct NormalSkyMap {
     const sizeChanged: boolean = Math.abs(width - this.lastStaticWidth) > 0.01 ||
       Math.abs(height - this.lastStaticHeight) > 0.01;
     if (this.staticCanvasReady &&
-      (sizeChanged || this.lastStaticRevision !== this.scene.staticRevision)) {
+      (sizeChanged || this.lastStaticRevision !== this.scene.staticRevision ||
+        this.lastStaticTransformRevision !== this.interactiveTransform.revision)) {
       this.drawStaticScene(width, height);
       this.lastStaticRevision = this.scene.staticRevision;
+      this.lastStaticTransformRevision = this.interactiveTransform.revision;
       this.lastStaticWidth = width;
       this.lastStaticHeight = height;
     }
@@ -116,10 +130,12 @@ export struct NormalSkyMap {
     this.context.fillStyle = '#050A10';
     this.context.globalAlpha = 1.0;
     this.context.fillRect(0.0, 0.0, width, height);
+    this.applyInteractiveTransform(width, height);
     this.drawPolylines(this.scene.gridLines, '#29404E', 0.48, 0.7);
     this.drawPolylines(this.scene.eclipticLines, '#B69955', 0.68, 1.0);
     this.drawPolylines(this.scene.constellationLines, '#426B82', 0.76, 1.1);
     this.drawObjects(this.scene.staticObjects, width, height);
+    this.context.restore();
     this.resetContextState();
   }
 
@@ -127,13 +143,41 @@ export struct NormalSkyMap {
     const staticContext: CanvasRenderingContext2D = this.context;
     this.context = this.dynamicContext;
     this.context.clearRect(0.0, 0.0, width, height);
+    this.applyInteractiveTransform(width, height);
     this.drawTrajectoryLines(this.scene.trajectoryLines);
     this.drawHorizonMask(this.scene.horizonMask);
     this.drawPolylines(this.scene.horizonLines, '#78C9C5', 0.88, 1.4);
     this.drawObjects(this.scene.dynamicObjects, width, height);
     this.drawDirectionMarkers(this.scene.orientationSnapshot.markers);
+    this.context.restore();
     this.resetContextState();
     this.context = staticContext;
+  }
+
+  /**
+   * 手势期间只变换已绘制的场景。背景在变换前填充，避免缩放/平移后出现透明
+   * 边缘；手势结束的精确重建会重新计算所有球面投影和可见性。
+   */
+  private applyInteractiveTransform(width: number, height: number): void {
+    const transform: InteractiveSkyTransform = this.interactiveTransform;
+    const originX: number = Number.isFinite(transform.originXPixels) &&
+      transform.originXPixels > 0.0 ? transform.originXPixels : width / 2.0;
+    const originY: number = Number.isFinite(transform.originYPixels) &&
+      transform.originYPixels > 0.0 ? transform.originYPixels : height / 2.0;
+    const scale: number = Number.isFinite(transform.scale) ?
+      this.clamp(transform.scale, 0.35, 3.0) : 1.0;
+    const rotationRadians: number = Number.isFinite(transform.rotationDegrees) ?
+      transform.rotationDegrees * Math.PI / 180.0 : 0.0;
+    const translateX: number = Number.isFinite(transform.translateXPixels) ?
+      transform.translateXPixels : 0.0;
+    const translateY: number = Number.isFinite(transform.translateYPixels) ?
+      transform.translateYPixels : 0.0;
+    this.context.save();
+    this.context.translate(translateX, translateY);
+    this.context.translate(originX, originY);
+    this.context.rotate(rotationRadians);
+    this.context.scale(scale, scale);
+    this.context.translate(-originX, -originY);
   }
 
   private drawPolylines(lines: SkyPolyline[], color: string, opacity: number, lineWidth: number): void {
@@ -832,11 +876,39 @@ export struct NormalSkyMap {
       TAP_MOVE_TOLERANCE_PIXELS * TAP_MOVE_TOLERANCE_PIXELS) {
       return;
     }
+    const mappedTouch: SkyScreenPoint = this.inverseInteractivePoint(touch.x, touch.y);
     const selected: ProjectedSkyObject | undefined = NormalSkyProjectionService.hitTest(
-      this.scene.objects, touch.x, touch.y, 18.0);
+      this.scene.objects, mappedTouch.xPixels, mappedTouch.yPixels, 18.0);
     if (selected !== undefined) {
       this.onObjectSelected(selected.id);
     }
+  }
+
+  /** 把当前 Canvas 坐标逆变换回精确场景坐标，保持交互期间命中区域可用。 */
+  private inverseInteractivePoint(xPixels: number, yPixels: number): SkyScreenPoint {
+    const transform: InteractiveSkyTransform = this.interactiveTransform;
+    const originX: number = transform.originXPixels > 0.0 ?
+      transform.originXPixels : this.widthPixels / 2.0;
+    const originY: number = transform.originYPixels > 0.0 ?
+      transform.originYPixels : this.heightPixels / 2.0;
+    const safeScale: number = Math.max(0.000001, Number.isFinite(transform.scale) ?
+      transform.scale : 1.0);
+    const radians: number = -(Number.isFinite(transform.rotationDegrees) ?
+      transform.rotationDegrees : 0.0) * Math.PI / 180.0;
+    const translatedX: number = xPixels -
+      (Number.isFinite(transform.translateXPixels) ? transform.translateXPixels : 0.0) -
+      originX;
+    const translatedY: number = yPixels -
+      (Number.isFinite(transform.translateYPixels) ? transform.translateYPixels : 0.0) -
+      originY;
+    const cosine: number = Math.cos(radians);
+    const sine: number = Math.sin(radians);
+    const rotatedX: number = translatedX * cosine - translatedY * sine;
+    const rotatedY: number = translatedX * sine + translatedY * cosine;
+    return {
+      xPixels: rotatedX / safeScale + originX,
+      yPixels: rotatedY / safeScale + originY
+    };
   }
 
   private roundedRectPath(x: number, y: number, width: number, height: number, radius: number): void {

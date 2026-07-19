@@ -137,6 +137,7 @@ export class NormalSkySceneService {
     this.dynamicRevision++;
     this.dynamicBuildCount++;
     return {
+      viewportSnapshot: query.viewport,
       staticObjects: staticLayer.objects,
       dynamicObjects: dynamicObjects,
       objects: objects,
