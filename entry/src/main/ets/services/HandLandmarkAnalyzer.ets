@@ -14,6 +14,16 @@ export enum HandLandmarkAnalyzerState {
   CLOSED = 'closed'
 }
 
+/**
+ * 手势推理后端。只有完成两个模型加载、预热和真实预测的后端才允许标记为可用。
+ */
+export enum HandInferenceBackend {
+  NNRT_ACCELERATOR = 'NNRT_ACCELERATOR',
+  NNRT_GPU = 'NNRT_GPU',
+  CPU_DIAGNOSTIC = 'CPU_DIAGNOSTIC',
+  UNAVAILABLE = 'UNAVAILABLE'
+}
+
 export interface HandLandmarkAnalyzerStatus {
   state: HandLandmarkAnalyzerState;
   available: boolean;
@@ -23,11 +33,15 @@ export interface HandLandmarkAnalyzerStatus {
   message: string;
   analyzedFrames: number;
   lastInferenceAtMs: number;
-  /** 真实运行时可报告 NNRT/CPU 等后端；不可用分析器可省略。 */
-  inferenceBackend?: string;
+  /** 真实运行时后端；禁止根据设备枚举结果伪报加速已启用。 */
+  inferenceBackend: HandInferenceBackend;
+  /** NNRT 设备名称，仅在实际完成模型预热后展示。 */
+  backendDeviceName: string;
   /** 用于真机性能诊断，不参与模型可用性判断。 */
-  averageInferenceMs?: number;
-  inferenceFps?: number;
+  averageInferenceMs: number;
+  p95InferenceMs: number;
+  inferenceFps: number;
+  droppedFrameCount: number;
 }
 
 /**
@@ -55,7 +69,7 @@ export interface HandYuvPlaneSet {
  */
 export class HandPackedNv21Decoder {
   static decode(buffer: ArrayBuffer, width: number, height: number,
-    rowStride: number): HandYuvPlaneSet {
+    rowStride: number, pool?: HandYuvBufferPool): HandYuvPlaneSet {
     if (width <= 0 || height <= 0 || width % 2 !== 0 || height % 2 !== 0) {
       throw new Error('NV21 分析帧必须使用正数偶数宽高');
     }
@@ -72,9 +86,11 @@ export class HandPackedNv21Decoder {
     }
 
     const source: Uint8Array = new Uint8Array(buffer);
-    const yBuffer: ArrayBuffer = new ArrayBuffer(width * height);
-    const uBuffer: ArrayBuffer = new ArrayBuffer(chromaWidth * chromaHeight);
-    const vBuffer: ArrayBuffer = new ArrayBuffer(chromaWidth * chromaHeight);
+    const target: HandYuvPlaneSet = pool === undefined ?
+      HandYuvBufferPool.allocate(width, height) : pool.acquire(width, height);
+    const yBuffer: ArrayBuffer = target.yPlane.buffer;
+    const uBuffer: ArrayBuffer = target.uPlane.buffer;
+    const vBuffer: ArrayBuffer = target.vPlane.buffer;
     const y: Uint8Array = new Uint8Array(yBuffer);
     const u: Uint8Array = new Uint8Array(uBuffer);
     const v: Uint8Array = new Uint8Array(vBuffer);
@@ -97,23 +113,44 @@ export class HandPackedNv21Decoder {
       }
     }
 
+    return target;
+  }
+}
+
+/**
+ * 相机分析帧只允许串行消费，因此可以安全复用最近一帧的 Y/U/V 自有缓冲。
+ * 分辨率变化时重新分配，稳定运行阶段不再为每帧创建约 1MiB 的临时平面。
+ */
+export class HandYuvBufferPool {
+  private width: number = 0;
+  private height: number = 0;
+  private planes?: HandYuvPlaneSet;
+
+  static allocate(width: number, height: number): HandYuvPlaneSet {
+    const chromaWidth: number = width / 2;
+    const chromaHeight: number = height / 2;
     return {
-      yPlane: {
-        buffer: yBuffer,
-        rowStride: width,
-        pixelStride: 1
-      },
+      yPlane: { buffer: new ArrayBuffer(width * height), rowStride: width, pixelStride: 1 },
       uPlane: {
-        buffer: uBuffer,
+        buffer: new ArrayBuffer(chromaWidth * chromaHeight),
         rowStride: chromaWidth,
         pixelStride: 1
       },
       vPlane: {
-        buffer: vBuffer,
+        buffer: new ArrayBuffer(chromaWidth * chromaHeight),
         rowStride: chromaWidth,
         pixelStride: 1
       }
     };
+  }
+
+  acquire(width: number, height: number): HandYuvPlaneSet {
+    if (this.planes === undefined || this.width !== width || this.height !== height) {
+      this.width = width;
+      this.height = height;
+      this.planes = HandYuvBufferPool.allocate(width, height);
+    }
+    return this.planes;
   }
 }
 
@@ -164,6 +201,10 @@ export interface HandLandmarkAnalysisResult {
   frameReceivedAtMs: number;
   inferenceDurationMs: number;
   runGeneration: number;
+  inferenceBackend: HandInferenceBackend;
+  palmDetectionRan: boolean;
+  roiTrackingUsed: boolean;
+  droppedFrameCount: number;
 }
 
 /**
@@ -303,7 +344,13 @@ export class UnavailableHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
       modelVersion: '',
       message: this.closed ? '手部关键点分析器已关闭' : this.reason,
       analyzedFrames: 0,
-      lastInferenceAtMs: 0
+      lastInferenceAtMs: 0,
+      inferenceBackend: HandInferenceBackend.UNAVAILABLE,
+      backendDeviceName: '',
+      averageInferenceMs: 0.0,
+      p95InferenceMs: 0.0,
+      inferenceFps: 0.0,
+      droppedFrameCount: 0
     };
   }
 
@@ -386,6 +433,26 @@ export class HandFrameThrottlePolicy {
 }
 
 /**
+ * 掌心检测刷新策略：首帧必须完整检测，稳定跟踪时每12帧或500ms重新校正一次。
+ * 作为纯函数公开，便于在没有相机和模型的 Hypium 环境验证边界。
+ */
+export class HandPalmRefreshPolicy {
+  static readonly DEFAULT_REFRESH_FRAMES: number = 12;
+  static readonly DEFAULT_REFRESH_INTERVAL_MS: number = 500.0;
+
+  static shouldRun(hasRoi: boolean, trackingFrameCount: number,
+    lastPalmDetectionAtMs: number, timestampMs: number,
+    refreshFrames: number = HandPalmRefreshPolicy.DEFAULT_REFRESH_FRAMES,
+    refreshIntervalMs: number = HandPalmRefreshPolicy.DEFAULT_REFRESH_INTERVAL_MS): boolean {
+    if (!hasRoi || trackingFrameCount <= 0 || lastPalmDetectionAtMs < 0.0) {
+      return true;
+    }
+    return trackingFrameCount >= Math.max(1, refreshFrames) ||
+      timestampMs - lastPalmDetectionAtMs >= Math.max(1.0, refreshIntervalMs);
+  }
+}
+
+/**
  * 将 CameraKit 的预览 Surface 转成 ImageReceiver 帧，再交给真实分析器。
  * API 22 的 PreviewOutput 只提供 frameStart/frameEnd 时序事件，不携带像素；
  * 因而这里使用受支持的 Surface + imageArrival 路径获取实际 YUV 数据。
@@ -394,6 +461,7 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
   private readonly analyzer: HandLandmarkAnalyzer;
   private readonly resultListener?: HandLandmarkResultListener;
   private readonly statusListener?: HandFrameSourceStatusListener;
+  private readonly yuvBufferPool: HandYuvBufferPool = new HandYuvBufferPool();
   private receiver?: image.ImageReceiver;
   private profile?: HandFrameSourceProfile;
   private receiverArrivalCallback?: () => void;
@@ -686,7 +754,17 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
         return;
       }
       if (this.resultListener !== undefined) {
-        this.resultListener(result);
+        // 将帧源的真实丢帧计数补到结果快照，页面不需要拼接两个异步状态。
+        this.resultListener({
+          hands: result.hands,
+          frameReceivedAtMs: result.frameReceivedAtMs,
+          inferenceDurationMs: result.inferenceDurationMs,
+          runGeneration: result.runGeneration,
+          inferenceBackend: result.inferenceBackend,
+          palmDetectionRan: result.palmDetectionRan,
+          roiTrackingUsed: result.roiTrackingUsed,
+          droppedFrameCount: this.droppedFrames
+        });
       }
     } catch (error) {
       this.failCurrentGeneration(generation, this.errorMessage(error, '手部关键点推理失败'));
@@ -703,7 +781,8 @@ export class CameraHandFrameSource implements HandLandmarkFrameSource {
         packed.byteBuffer,
         cameraImage.size.width,
         cameraImage.size.height,
-        packed.rowStride
+        packed.rowStride,
+        this.yuvBufferPool
       );
     } catch (error) {
       packedFailure = this.errorMessage(error, 'packed NV21 不可读');

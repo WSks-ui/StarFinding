@@ -77,8 +77,17 @@ export function buildPalmTensorBuffer(yPlaneBuffer: ArrayBuffer,
   yRowStride: number, yPixelStride: number,
   uPlaneBuffer: ArrayBuffer, uRowStride: number, uPixelStride: number,
   vPlaneBuffer: ArrayBuffer, vRowStride: number, vPixelStride: number,
-  sourceWidth: number, sourceHeight: number, outputSize: number): ArrayBuffer {
-  const output: Float32Array = new Float32Array(outputSize * outputSize * 3);
+  sourceWidth: number, sourceHeight: number, outputSize: number,
+  reusableOutput?: Float32Array): ArrayBuffer {
+  /*
+   * 相机稳定运行时由分析器传入固定 Float32Array；TaskPool 兼容入口不传该参数，
+   * 仍保留原有“返回新 ArrayBuffer”的纯函数行为。这样既不改变模型输入格式，
+   * 又避免每个掌心检测帧分配约 432 KiB 的临时张量。
+   */
+  const expectedLength: number = outputSize * outputSize * 3;
+  const output: Float32Array = reusableOutput !== undefined &&
+    reusableOutput.length === expectedLength ?
+    reusableOutput : new Float32Array(expectedLength);
   if (sourceWidth <= 0 || sourceHeight <= 0 || outputSize <= 0) {
     return output.buffer;
   }
@@ -112,8 +121,15 @@ export function buildLandmarkTensorBuffer(yPlaneBuffer: ArrayBuffer,
   vPlaneBuffer: ArrayBuffer, vRowStride: number, vPixelStride: number,
   sourceWidth: number, sourceHeight: number, outputSize: number,
   roiCenterX: number, roiCenterY: number, roiWidth: number, roiHeight: number,
-  roiRotationRadians: number): ArrayBuffer {
-  const output: Float32Array = new Float32Array(outputSize * outputSize * 3);
+  roiRotationRadians: number, reusableOutput?: Float32Array): ArrayBuffer {
+  /*
+   * Landmark 推理占比最高，复用固定输入张量可以减少 GC 抖动；每个像素都会被
+   * 覆盖写入，因此不需要在复用前清零。
+   */
+  const expectedLength: number = outputSize * outputSize * 3;
+  const output: Float32Array = reusableOutput !== undefined &&
+    reusableOutput.length === expectedLength ?
+    reusableOutput : new Float32Array(expectedLength);
   if (sourceWidth <= 0 || sourceHeight <= 0 || outputSize <= 0 ||
     roiWidth <= 0.0 || roiHeight <= 0.0) {
     return output.buffer;

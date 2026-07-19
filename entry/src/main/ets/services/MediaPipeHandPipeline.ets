@@ -173,6 +173,48 @@ export class MediaPipeHandPipeline {
     };
   }
 
+  /**
+   * 根据上一帧21点重建下一帧 ROI。跟踪阶段不重新运行 Palm Detection，
+   * 只扩大关键点包围盒并沿掌面方向旋转，避免手部移动后 ROI 逐帧漂出。
+   */
+  regionOfInterestFromLandmarks(hand: HandLandmarks,
+    sourceWidth: number, sourceHeight: number): HandRegionOfInterest | undefined {
+    if (sourceWidth <= 0 || sourceHeight <= 0 || hand.points.length < 21) {
+      return undefined;
+    }
+    let minimumX: number = 1.0;
+    let maximumX: number = 0.0;
+    let minimumY: number = 1.0;
+    let maximumY: number = 0.0;
+    for (let index: number = 0; index < hand.points.length; index++) {
+      const point: HandPoint = hand.points[index];
+      if (!Number.isFinite(point.x) || !Number.isFinite(point.y)) {
+        return undefined;
+      }
+      minimumX = Math.min(minimumX, point.x);
+      maximumX = Math.max(maximumX, point.x);
+      minimumY = Math.min(minimumY, point.y);
+      maximumY = Math.max(maximumY, point.y);
+    }
+    const rawWidth: number = Math.max(0.02, maximumX - minimumX);
+    const rawHeight: number = Math.max(0.02, maximumY - minimumY);
+    const roiWidth: number = Math.min(1.0, rawWidth * 1.5);
+    const roiHeight: number = Math.min(1.0, rawHeight * 1.5);
+    const wrist: HandPoint = hand.points[0];
+    const middleBase: HandPoint = hand.points[9];
+    const rotation: number = this.normalizeRadians(
+      Math.PI / 2.0 - Math.atan2(
+        -(middleBase.y - wrist.y) * sourceHeight,
+        (middleBase.x - wrist.x) * sourceWidth));
+    return {
+      centerX: this.clamp((minimumX + maximumX) / 2.0, roiWidth / 2.0, 1.0 - roiWidth / 2.0),
+      centerY: this.clamp((minimumY + maximumY) / 2.0, roiHeight / 2.0, 1.0 - roiHeight / 2.0),
+      width: roiWidth,
+      height: roiHeight,
+      rotationRadians: rotation
+    };
+  }
+
   decodeLandmarks(rawLandmarks: Float32Array, handPresenceScore: number,
     rawWorldLandmarks: Float32Array, roi: HandRegionOfInterest,
     trackingId: number, timestampMs: number): HandLandmarks | undefined {

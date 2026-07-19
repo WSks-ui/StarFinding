@@ -10,7 +10,9 @@ import {
   HandLandmarkAnalyzerStatus,
   HandLandmarkCoordinateMapper,
   HandLandmarkFrame,
-  HandLandmarkPreviewTransform
+  HandLandmarkPreviewTransform,
+  HandInferenceBackend,
+  HandPalmRefreshPolicy
 } from './HandLandmarkAnalyzer';
 import {
   HandModelArtifact,
@@ -41,6 +43,21 @@ interface LandmarkModelOutputs {
   worldLandmarks: Float32Array;
 }
 
+interface NnrtCandidate {
+  backend: HandInferenceBackend;
+  deviceId: bigint;
+  deviceName: string;
+}
+
+interface LoadedModelPair {
+  palmModel: mindSporeLite.Model;
+  landmarkModel: mindSporeLite.Model;
+  palmInputs: mindSporeLite.MSTensor[];
+  landmarkInputs: mindSporeLite.MSTensor[];
+  palmInputByteLength: number;
+  landmarkInputByteLength: number;
+}
+
 /**
  * 使用 HarmonyOS 内置 MindSpore Lite 执行官方 MediaPipe Hands Lite 两阶段模型。
  *
@@ -49,6 +66,9 @@ interface LandmarkModelOutputs {
  * 调用保持在同一 JS 线程；相机预览仍由 CameraKit 独立线程输出，不会阻塞取景。
  */
 export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
+  private static readonly PALM_REFRESH_FRAMES: number = 12;
+  private static readonly PALM_REFRESH_INTERVAL_MS: number = 500;
+  private static readonly ALLOW_CPU_DIAGNOSTIC: boolean = false;
   private readonly context: common.Context;
   private readonly manifest: HandModelManifest = HandModelManifestService.manifest();
   private readonly pipeline: MediaPipeHandPipeline = new MediaPipeHandPipeline();
@@ -86,8 +106,24 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
   private lastInferenceAtMs: number = 0;
   private firstInferenceAtMs: number = 0;
   private totalInferenceDurationMs: number = 0.0;
+  private readonly inferenceDurationsMs: number[] = [];
   private trackingId: number = 1;
   private lastHandSeenAtMs: number = -1;
+  private backend: HandInferenceBackend = HandInferenceBackend.UNAVAILABLE;
+  private backendDeviceName: string = '';
+  private trackingRoi?: HandRegionOfInterest;
+  private trackingFrameCount: number = 0;
+  private lastPalmDetectionAtMs: number = -1;
+  /**
+   * 模型输入张量在整个分析会话内复用。分析源保证 analyze 串行执行，
+   * 因而不会出现下一帧覆盖上一帧仍在 predict 的情况。
+   */
+  private readonly palmInputTensor: Float32Array =
+    new Float32Array(MediaPipeHandPipeline.PALM_INPUT_SIZE *
+      MediaPipeHandPipeline.PALM_INPUT_SIZE * 3);
+  private readonly landmarkInputTensor: Float32Array =
+    new Float32Array(MediaPipeHandPipeline.LANDMARK_INPUT_SIZE *
+      MediaPipeHandPipeline.LANDMARK_INPUT_SIZE * 3);
 
   constructor(context: common.Context) {
     this.context = context;
@@ -148,32 +184,43 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     this.state = HandLandmarkAnalyzerState.ANALYZING;
     this.message = '正在执行手部关键点推理';
     try {
-      const palmInputBuffer: ArrayBuffer = buildPalmTensorBuffer(
-        frame.yPlane.buffer, frame.yPlane.rowStride, frame.yPlane.pixelStride,
-        frame.uPlane.buffer, frame.uPlane.rowStride, frame.uPlane.pixelStride,
-        frame.vPlane.buffer, frame.vPlane.rowStride, frame.vPlane.pixelStride,
-        frame.width, frame.height, MediaPipeHandPipeline.PALM_INPUT_SIZE);
-      this.ensureGeneration(generation);
-      const palmOutputs: mindSporeLite.MSTensor[] =
-        await this.predict(palmModel, palmInputs, this.palmInputByteLength, palmInputBuffer);
-      const decodedPalmOutputs: PalmModelOutputs = this.palmOutputs(palmOutputs);
-      const detection: PalmDetection | undefined = this.pipeline.decodeBestPalm(
-        decodedPalmOutputs.boxes, decodedPalmOutputs.scores, frame.width, frame.height);
-      if (detection === undefined) {
-        return this.finishFrame([], frame, startedAtMs, generation);
+      const shouldRunPalm: boolean = this.shouldRefreshPalm(frame.receivedAtMs);
+      let roi: HandRegionOfInterest | undefined = this.trackingRoi;
+      if (shouldRunPalm) {
+        const palmInputBuffer: ArrayBuffer = buildPalmTensorBuffer(
+          frame.yPlane.buffer, frame.yPlane.rowStride, frame.yPlane.pixelStride,
+          frame.uPlane.buffer, frame.uPlane.rowStride, frame.uPlane.pixelStride,
+          frame.vPlane.buffer, frame.vPlane.rowStride, frame.vPlane.pixelStride,
+          frame.width, frame.height, MediaPipeHandPipeline.PALM_INPUT_SIZE,
+          this.palmInputTensor);
+        this.ensureGeneration(generation);
+        const palmOutputs: mindSporeLite.MSTensor[] =
+          await this.predict(palmModel, palmInputs, this.palmInputByteLength, palmInputBuffer);
+        const decodedPalmOutputs: PalmModelOutputs = this.palmOutputs(palmOutputs);
+        const detection: PalmDetection | undefined = this.pipeline.decodeBestPalm(
+          decodedPalmOutputs.boxes, decodedPalmOutputs.scores, frame.width, frame.height);
+        if (detection === undefined) {
+          this.clearTracking();
+          return this.finishFrame([], frame, startedAtMs, generation, true, false);
+        }
+        roi = this.pipeline.regionOfInterest(detection, frame.width, frame.height);
+        if (roi === undefined) {
+          this.clearTracking();
+          return this.finishFrame([], frame, startedAtMs, generation, true, false);
+        }
+        this.lastPalmDetectionAtMs = frame.receivedAtMs;
+        this.trackingFrameCount = 0;
       }
-
-      const roi: HandRegionOfInterest | undefined =
-        this.pipeline.regionOfInterest(detection, frame.width, frame.height);
       if (roi === undefined) {
-        return this.finishFrame([], frame, startedAtMs, generation);
+        return this.finishFrame([], frame, startedAtMs, generation, shouldRunPalm, false);
       }
       const landmarkInputBuffer: ArrayBuffer = buildLandmarkTensorBuffer(
         frame.yPlane.buffer, frame.yPlane.rowStride, frame.yPlane.pixelStride,
         frame.uPlane.buffer, frame.uPlane.rowStride, frame.uPlane.pixelStride,
         frame.vPlane.buffer, frame.vPlane.rowStride, frame.vPlane.pixelStride,
         frame.width, frame.height, MediaPipeHandPipeline.LANDMARK_INPUT_SIZE,
-        roi.centerX, roi.centerY, roi.width, roi.height, roi.rotationRadians);
+        roi.centerX, roi.centerY, roi.width, roi.height, roi.rotationRadians,
+        this.landmarkInputTensor);
       this.ensureGeneration(generation);
       const landmarkOutputs: mindSporeLite.MSTensor[] =
         await this.predict(landmarkModel, landmarkInputs, this.landmarkInputByteLength, landmarkInputBuffer);
@@ -186,8 +233,17 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
         decodedLandmarkOutputs.worldLandmarks,
         roi, this.trackingId, frame.receivedAtMs);
       if (hand === undefined) {
-        return this.finishFrame([], frame, startedAtMs, generation);
+        this.clearTracking();
+        return this.finishFrame([], frame, startedAtMs, generation, shouldRunPalm, !shouldRunPalm);
       }
+      const nextRoi: HandRegionOfInterest | undefined =
+        this.pipeline.regionOfInterestFromLandmarks(hand, frame.width, frame.height);
+      if (nextRoi === undefined) {
+        this.clearTracking();
+        return this.finishFrame([], frame, startedAtMs, generation, shouldRunPalm, !shouldRunPalm);
+      }
+      this.trackingRoi = nextRoi;
+      this.trackingFrameCount++;
       this.lastHandSeenAtMs = frame.receivedAtMs;
       const transform: HandLandmarkPreviewTransform = {
         mirrored: frame.mirrored,
@@ -200,7 +256,7 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
       };
       const mappedHands: HandLandmarks[] =
         HandLandmarkCoordinateMapper.mapHandsToPreview([hand], transform);
-      return this.finishFrame(mappedHands, frame, startedAtMs, generation);
+      return this.finishFrame(mappedHands, frame, startedAtMs, generation, shouldRunPalm, !shouldRunPalm);
     } catch (error) {
       if (generation === this.lifecycleGeneration && !this.isClosed()) {
         this.state = HandLandmarkAnalyzerState.ERROR;
@@ -224,6 +280,14 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
       inferenceFps = (this.analyzedFrames - 1) * 1000.0 /
         (this.lastInferenceAtMs - this.firstInferenceAtMs);
     }
+    let p95InferenceMs: number = 0.0;
+    if (this.inferenceDurationsMs.length > 0) {
+      const sorted: number[] = this.inferenceDurationsMs.slice().sort(
+        (left: number, right: number): number => left - right);
+      const index: number = Math.min(sorted.length - 1,
+        Math.floor((sorted.length - 1) * 0.95));
+      p95InferenceMs = sorted[index];
+    }
     return {
       state: this.state,
       available: available,
@@ -233,10 +297,12 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
       message: this.message,
       analyzedFrames: this.analyzedFrames,
       lastInferenceAtMs: this.lastInferenceAtMs,
-      // 官方 ArkTS 指南当前只支持 CPU target；NNRT 需另行通过 NDK/NAPI 接入，不能伪报已启用。
-      inferenceBackend: 'CPU',
+      inferenceBackend: this.backend,
+      backendDeviceName: this.backendDeviceName,
       averageInferenceMs: averageInferenceMs,
-      inferenceFps: inferenceFps
+      p95InferenceMs: p95InferenceMs,
+      inferenceFps: inferenceFps,
+      droppedFrameCount: 0
     };
   }
 
@@ -249,6 +315,9 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     this.landmarkInputs = undefined;
     this.palmInputByteLength = 0;
     this.landmarkInputByteLength = 0;
+    this.backend = HandInferenceBackend.UNAVAILABLE;
+    this.backendDeviceName = '';
+    this.clearTracking();
     this.state = HandLandmarkAnalyzerState.CLOSED;
     this.message = '手部关键点分析器已关闭';
   }
@@ -312,21 +381,94 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
       this.manifest.handLandmark, this.landmarkArtifactPath);
     this.ensureGeneration(generation);
 
-    const cpuDevice: mindSporeLite.CpuDevice = {
-      threadNum: 2,
-      threadAffinityMode: mindSporeLite.ThreadAffinityMode.BIG_CORES_FIRST
+    const candidates: NnrtCandidate[] = this.nnrtCandidates();
+    let loaded: LoadedModelPair | undefined = undefined;
+    let failureMessage: string = '当前设备没有可用的 NNRT Accelerator/GPU 后端';
+    for (let index: number = 0; index < candidates.length; index++) {
+      const candidate: NnrtCandidate = candidates[index];
+      try {
+        loaded = await this.loadModelPair(
+          palmBytes, landmarkBytes, this.nnrtContext(candidate.deviceId));
+        this.ensureGeneration(generation);
+        this.backend = candidate.backend;
+        this.backendDeviceName = candidate.deviceName;
+        break;
+      } catch (error) {
+        failureMessage = `${candidate.deviceName}：${this.errorMessage(error, '模型不支持')}`;
+      }
+    }
+
+    if (loaded === undefined && MindSporeLiteHandLandmarkAnalyzer.ALLOW_CPU_DIAGNOSTIC) {
+      const cpuDevice: mindSporeLite.CpuDevice = {
+        threadNum: 2,
+        threadAffinityMode: mindSporeLite.ThreadAffinityMode.BIG_CORES_FIRST
+      };
+      try {
+        loaded = await this.loadModelPair(
+          palmBytes, landmarkBytes, { target: ['cpu'], cpu: cpuDevice });
+        this.backend = HandInferenceBackend.CPU_DIAGNOSTIC;
+        this.backendDeviceName = 'CPU（开发诊断）';
+      } catch (error) {
+        failureMessage = this.errorMessage(error, failureMessage);
+      }
+    }
+
+    if (loaded === undefined) {
+      this.backend = HandInferenceBackend.UNAVAILABLE;
+      this.backendDeviceName = '';
+      throw new Error(`${failureMessage}；实时手势已关闭，触控操作仍可用`);
+    }
+    this.palmModel = loaded.palmModel;
+    this.landmarkModel = loaded.landmarkModel;
+    this.palmInputs = loaded.palmInputs;
+    this.landmarkInputs = loaded.landmarkInputs;
+    this.palmInputByteLength = loaded.palmInputByteLength;
+    this.landmarkInputByteLength = loaded.landmarkInputByteLength;
+    this.clearTracking();
+    this.state = HandLandmarkAnalyzerState.READY;
+    this.message = `${this.backendDeviceName}已加载两个模型并完成真实预热`;
+  }
+
+  private nnrtCandidates(): NnrtCandidate[] {
+    const descriptions: mindSporeLite.NNRTDeviceDescription[] =
+      mindSporeLite.getAllNNRTDeviceDescriptions();
+    const accelerators: NnrtCandidate[] = [];
+    const gpus: NnrtCandidate[] = [];
+    for (let index: number = 0; index < descriptions.length; index++) {
+      const description: mindSporeLite.NNRTDeviceDescription = descriptions[index];
+      const deviceType: mindSporeLite.NNRTDeviceType = description.deviceType();
+      const candidate: NnrtCandidate = {
+        backend: deviceType === mindSporeLite.NNRTDeviceType.NNRTDEVICE_ACCELERATOR ?
+          HandInferenceBackend.NNRT_ACCELERATOR : HandInferenceBackend.NNRT_GPU,
+        deviceId: description.deviceID(),
+        deviceName: description.deviceName()
+      };
+      if (deviceType === mindSporeLite.NNRTDeviceType.NNRTDEVICE_ACCELERATOR) {
+        accelerators.push(candidate);
+      } else if (deviceType === mindSporeLite.NNRTDeviceType.NNRTDEVICE_GPU) {
+        gpus.push(candidate);
+      }
+    }
+    return accelerators.concat(gpus);
+  }
+
+  private nnrtContext(deviceId: bigint): mindSporeLite.Context {
+    return {
+      target: ['nnrt'],
+      nnrt: {
+        deviceID: deviceId,
+        performanceMode: mindSporeLite.PerformanceMode.PERFORMANCE_HIGH,
+        priority: mindSporeLite.Priority.PRIORITY_HIGH
+      }
     };
-    const modelContext: mindSporeLite.Context = {
-      target: ['cpu'],
-      cpu: cpuDevice
-    };
+  }
+
+  private async loadModelPair(palmBytes: Uint8Array, landmarkBytes: Uint8Array,
+    modelContext: mindSporeLite.Context): Promise<LoadedModelPair> {
     const loadedPalmModel: mindSporeLite.Model = await mindSporeLite.loadModelFromBuffer(
       this.exactArrayBuffer(palmBytes), modelContext);
-    this.ensureGeneration(generation);
     const loadedLandmarkModel: mindSporeLite.Model = await mindSporeLite.loadModelFromBuffer(
       this.exactArrayBuffer(landmarkBytes), modelContext);
-    this.ensureGeneration(generation);
-
     const palmInputs: mindSporeLite.MSTensor[] = loadedPalmModel.getInputs();
     const landmarkInputs: mindSporeLite.MSTensor[] = loadedLandmarkModel.getInputs();
     const palmInput: HandTensorSpecification =
@@ -335,10 +477,8 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
       this.singleInputSpecification(landmarkInputs, '手部关键点');
     const palmWarmupOutputs: mindSporeLite.MSTensor[] =
       await this.warmupModel(loadedPalmModel, palmInputs, palmInput.elementNum);
-    this.ensureGeneration(generation);
     const landmarkWarmupOutputs: mindSporeLite.MSTensor[] =
       await this.warmupModel(loadedLandmarkModel, landmarkInputs, landmarkInput.elementNum);
-    this.ensureGeneration(generation);
     const readiness: HandModelReadinessResult = HandModelManifestService.evaluateReadiness(
       palmBytes.length > 0, landmarkBytes.length > 0,
       palmInput, landmarkInput,
@@ -347,14 +487,14 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     if (!readiness.available) {
       throw new Error(readiness.message);
     }
-    this.palmModel = loadedPalmModel;
-    this.landmarkModel = loadedLandmarkModel;
-    this.palmInputs = palmInputs;
-    this.landmarkInputs = landmarkInputs;
-    this.palmInputByteLength = palmInput.elementNum * 4;
-    this.landmarkInputByteLength = landmarkInput.elementNum * 4;
-    this.state = HandLandmarkAnalyzerState.READY;
-    this.message = '离线手部模型已加载并完成真实预热';
+    return {
+      palmModel: loadedPalmModel,
+      landmarkModel: loadedLandmarkModel,
+      palmInputs: palmInputs,
+      landmarkInputs: landmarkInputs,
+      palmInputByteLength: palmInput.elementNum * 4,
+      landmarkInputByteLength: landmarkInput.elementNum * 4
+    };
   }
 
   /**
@@ -601,7 +741,8 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
   }
 
   private finishFrame(hands: HandLandmarks[], frame: HandLandmarkFrame,
-    startedAtMs: number, generation: number): HandLandmarkAnalysisResult {
+    startedAtMs: number, generation: number, palmDetectionRan: boolean,
+    roiTrackingUsed: boolean): HandLandmarkAnalysisResult {
     this.ensureGeneration(generation);
     const completedAtMs: number = Date.now();
     const durationMs: number = Math.max(0.0, completedAtMs - startedAtMs);
@@ -611,14 +752,45 @@ export class MindSporeLiteHandLandmarkAnalyzer implements HandLandmarkAnalyzer {
     if (this.firstInferenceAtMs === 0) {
       this.firstInferenceAtMs = completedAtMs;
     }
+    this.inferenceDurationsMs.push(durationMs);
+    if (this.inferenceDurationsMs.length > 120) {
+      this.inferenceDurationsMs.shift();
+    }
     this.state = HandLandmarkAnalyzerState.READY;
     this.message = hands.length > 0 ? '已识别一只手' : '未检测到可靠手部';
     return {
       hands: hands,
       frameReceivedAtMs: frame.receivedAtMs,
       inferenceDurationMs: durationMs,
-      runGeneration: frame.runGeneration
+      runGeneration: frame.runGeneration,
+      inferenceBackend: this.backend,
+      palmDetectionRan: palmDetectionRan,
+      roiTrackingUsed: roiTrackingUsed,
+      droppedFrameCount: 0
     };
+  }
+
+  private shouldRefreshPalm(timestampMs: number): boolean {
+    return HandPalmRefreshPolicy.shouldRun(
+      this.trackingRoi !== undefined,
+      this.trackingFrameCount,
+      this.lastPalmDetectionAtMs,
+      timestampMs,
+      MindSporeLiteHandLandmarkAnalyzer.PALM_REFRESH_FRAMES,
+      MindSporeLiteHandLandmarkAnalyzer.PALM_REFRESH_INTERVAL_MS);
+  }
+
+  private clearTracking(): void {
+    if (this.trackingRoi !== undefined || this.lastHandSeenAtMs >= 0) {
+      this.trackingId++;
+      if (this.trackingId > 2147483640) {
+        this.trackingId = 1;
+      }
+    }
+    this.trackingRoi = undefined;
+    this.trackingFrameCount = 0;
+    this.lastPalmDetectionAtMs = -1;
+    this.lastHandSeenAtMs = -1;
   }
 
   private updateTrackingId(timestampMs: number): void {
