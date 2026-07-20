@@ -22,6 +22,11 @@ import deviceConnectionSettingsStoreTest from './DeviceConnectionSettingsStore.t
 import taskSessionStoreTest from './TaskSessionStore.test';
 import singleHandGestureAcceptanceTest from './SingleHandGestureAcceptance.test';
 import normalSkyInteractiveTransformServiceTest from './NormalSkyInteractiveTransformService.test';
+import harmonyFeatureCapabilityServiceTest from './HarmonyFeatureCapabilityService.test';
+import devicePairingServiceTest from './DevicePairingService.test';
+import digitalTwinReplayServiceTest from './DigitalTwinReplayService.test';
+import observationShareServiceTest from './ObservationShareService.test';
+import liveObservationServiceTest from './LiveObservationService.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -48,4 +53,9 @@ export default function testsuite() {
   taskSessionStoreTest();
   singleHandGestureAcceptanceTest();
   normalSkyInteractiveTransformServiceTest();
+  harmonyFeatureCapabilityServiceTest();
+  devicePairingServiceTest();
+  digitalTwinReplayServiceTest();
+  observationShareServiceTest();
+  liveObservationServiceTest();
 }
