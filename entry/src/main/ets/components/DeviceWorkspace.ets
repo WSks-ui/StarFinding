@@ -1,4 +1,12 @@
-import { ConnectionState } from '../models';
+import {
+  ConnectionState,
+  DevicePairingPreview,
+  HarmonyCapabilityReason,
+  HarmonyCapabilityState,
+  HarmonyFeatureCapability,
+  HarmonyFeatureSnapshot,
+  ObservationRunMode
+} from '../models';
 import {
   DeviceReadinessService,
   MountReadinessInput,
@@ -18,6 +26,10 @@ interface DeviceStatusLine {
 export struct DeviceWorkspace {
   @Prop compact: boolean = false;
   @Prop pageMargin: number = 18;
+  @Prop runMode: ObservationRunMode = ObservationRunMode.REAL;
+  @Prop digitalTwinPlaying: boolean = false;
+  @Prop digitalTwinPhaseText: string = '';
+  @Prop digitalTwinSourceText: string = '';
   @Prop mountConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @Prop gatewayServiceConnection: ConnectionState = ConnectionState.DISCONNECTED;
   @Prop cameraConnection: ConnectionState = ConnectionState.DISCONNECTED;
@@ -29,6 +41,10 @@ export struct DeviceWorkspace {
   @Prop mountPortInput: string = '';
   @Prop gatewayHostInput: string = '';
   @Prop gatewayPortInput: string = '';
+  @Prop scanKitAvailable: boolean = false;
+  @Prop pairingBusy: boolean = false;
+  @Prop pairingPreview: DevicePairingPreview | undefined = undefined;
+  @Prop harmonyFeatures: HarmonyFeatureSnapshot | undefined = undefined;
   @Prop mountHomed: boolean = false;
   @Prop coordinateModeCompatible: boolean = false;
   @Prop tracking: boolean = false;
@@ -44,9 +60,14 @@ export struct DeviceWorkspace {
   @Prop deviceMessage: string = '';
   @Prop emergencyMessage: string = '';
   @State private pressedAction: string = '';
+  @State private harmonyDiagnosticsOpen: boolean = false;
 
   onToggleMount: () => void = (): void => {};
   onToggleGateway: () => void = (): void => {};
+  onEnterSimulation: () => void = (): void => {};
+  onExitSimulation: () => void = (): void => {};
+  onToggleSimulationPlayback: () => void = (): void => {};
+  onRestartSimulation: () => void = (): void => {};
   onToggleConnectionSettings: () => void = (): void => {};
   onMountHostChange: (value: string) => void = (_value: string): void => {};
   onMountPortChange: (value: string) => void = (_value: string): void => {};
@@ -54,6 +75,10 @@ export struct DeviceWorkspace {
   onGatewayPortChange: (value: string) => void = (_value: string): void => {};
   onSaveConnectionSettings: () => void = (): void => {};
   onRestoreConnectionDefaults: () => void = (): void => {};
+  onScanDeviceCode: () => void = (): void => {};
+  onConfirmPairing: () => void = (): void => {};
+  onCancelPairing: () => void = (): void => {};
+  onRefreshHarmonyFeatures: () => void = (): void => {};
   onHomeMount: () => void = (): void => {};
   onSyncObserver: () => void = (): void => {};
   onToggleTracking: () => void = (): void => {};
@@ -63,6 +88,7 @@ export struct DeviceWorkspace {
     Column() {
       Scroll() {
         Column({ space: 16 }) {
+          this.RunModePanel()
           this.ConnectionSection()
           this.OperationFeedback()
           this.ReadinessPanel()
@@ -80,6 +106,97 @@ export struct DeviceWorkspace {
     // 主窗口使用沉浸式全屏，系统导航条会覆盖页面底部。由外层容器保留安全区，
     // 让内层 Scroll 的测量高度不包含系统导航条占用的 32vp。
     .padding({ bottom: 32 })
+  }
+
+  @Builder
+  private RunModePanel() {
+    Column({ space: 12 }) {
+      Row({ space: 12 }) {
+        Column({ space: 3 }) {
+          Text($r('app.string.digital_twin_mode_title'))
+            .fontSize(16)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.app_text_primary'))
+          Text(this.simulationActive() ? $r('app.string.digital_twin_mode_simulation_detail') :
+            $r('app.string.digital_twin_mode_real_detail'))
+            .fontSize(11)
+            .fontColor($r('app.color.app_text_secondary'))
+            .maxLines(2)
+        }.layoutWeight(1)
+        Row() {
+          Button($r('app.string.digital_twin_mode_real'))
+            .height(36)
+            .padding({ left: 13, right: 13 })
+            .fontSize(11)
+            .fontColor(!this.simulationActive() ? $r('app.color.app_on_brand') :
+              $r('app.color.app_text_secondary'))
+            .backgroundColor(!this.simulationActive() ? $r('app.color.app_brand') : 'transparent')
+            .borderRadius(18)
+            .onClick(this.onExitSimulation)
+          Button($r('app.string.digital_twin_mode_simulation'))
+            .height(36)
+            .padding({ left: 13, right: 13 })
+            .fontSize(11)
+            .fontColor(this.simulationActive() ? $r('app.color.app_on_brand') :
+              $r('app.color.app_text_secondary'))
+            .backgroundColor(this.simulationActive() ? $r('app.color.app_brand') : 'transparent')
+            .borderRadius(18)
+            .onClick(this.onEnterSimulation)
+        }
+        .padding(3)
+        .backgroundColor($r('app.color.app_surface_secondary'))
+        .borderRadius(21)
+      }.width('100%')
+
+      if (this.simulationActive()) {
+        Row({ space: 10 }) {
+          Column({ space: 3 }) {
+            Text(this.digitalTwinPhaseText.length > 0 ? this.digitalTwinPhaseText :
+              $r('app.string.digital_twin_waiting'))
+              .fontSize(13)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.app_brand'))
+            Text(this.digitalTwinSourceText.length > 0 ? this.digitalTwinSourceText :
+              $r('app.string.digital_twin_source_simulated'))
+              .fontSize(10)
+              .fontColor($r('app.color.app_warning'))
+          }.layoutWeight(1)
+          Button(this.digitalTwinPlaying ? $r('app.string.digital_twin_pause') :
+            $r('app.string.digital_twin_play'))
+            .height(38)
+            .padding({ left: 14, right: 14 })
+            .fontSize(11)
+            .fontColor($r('app.color.app_on_brand'))
+            .backgroundColor($r('app.color.app_brand'))
+            .borderRadius(19)
+            .onClick(this.onToggleSimulationPlayback)
+          Button($r('app.string.digital_twin_restart'))
+            .height(38)
+            .padding({ left: 14, right: 14 })
+            .fontSize(11)
+            .fontColor($r('app.color.app_text_primary'))
+            .backgroundColor($r('app.color.app_surface_secondary'))
+            .borderRadius(19)
+            .onClick(this.onRestartSimulation)
+        }
+        .width('100%')
+        .padding(12)
+        .backgroundColor($r('app.color.app_surface_primary'))
+        .borderRadius($r('app.float.corner_small'))
+
+        Text($r('app.string.digital_twin_safety_note'))
+          .fontSize(10)
+          .lineHeight(16)
+          .fontColor($r('app.color.app_warning'))
+          .width('100%')
+      }
+    }
+    .width('100%')
+    .padding(16)
+    .backgroundColor($r('app.color.app_background_secondary'))
+    .border({ width: 1, color: this.simulationActive() ?
+      $r('app.color.app_brand') : $r('app.color.app_divider') })
+    .borderRadius($r('app.float.corner_card'))
   }
 
   @Builder
@@ -134,6 +251,52 @@ export struct DeviceWorkspace {
           .enabled(!this.connectionSettingsLocked)
           .onClick(this.onToggleConnectionSettings)
       }.width('100%').alignItems(VerticalAlign.Top)
+
+      Row({ space: 10 }) {
+        Button(this.pairingBusy ? $r('app.string.device_pairing_scanning') :
+          $r('app.string.device_pairing_scan'))
+          .layoutWeight(1)
+          .height(42)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.scanKitAvailable ? $r('app.color.app_on_brand') :
+            $r('app.color.app_text_tertiary'))
+          .backgroundColor(this.scanKitAvailable ? $r('app.color.app_brand') :
+            $r('app.color.app_surface_secondary'))
+          .borderRadius(21)
+          .enabled(this.scanKitAvailable && !this.pairingBusy && !this.connectionSettingsLocked &&
+            !this.simulationActive())
+          .onClick(this.onScanDeviceCode)
+        Button($r('app.string.harmony_diagnostics_title'))
+          .layoutWeight(1)
+          .height(42)
+          .fontSize(13)
+          .fontColor($r('app.color.app_brand'))
+          .backgroundColor($r('app.color.app_surface_secondary'))
+          .border({ width: 1, color: $r('app.color.app_divider') })
+          .borderRadius(21)
+          .onClick(() => {
+            this.harmonyDiagnosticsOpen = !this.harmonyDiagnosticsOpen;
+            if (this.harmonyDiagnosticsOpen) {
+              this.onRefreshHarmonyFeatures();
+            }
+          })
+      }.width('100%')
+
+      if (!this.scanKitAvailable) {
+        Text($r('app.string.device_pairing_scan_unavailable'))
+          .fontSize(11)
+          .fontColor($r('app.color.app_warning'))
+          .width('100%')
+      }
+
+      if (this.pairingPreview !== undefined) {
+        this.PairingPreviewCard(this.pairingPreview)
+      }
+
+      if (this.harmonyDiagnosticsOpen) {
+        this.HarmonyDiagnosticsPanel()
+      }
 
       if (this.connectionSettingsOpen) {
         Column({ space: 10 }) {
@@ -209,6 +372,183 @@ export struct DeviceWorkspace {
   }
 
   @Builder
+  private PairingPreviewCard(preview: DevicePairingPreview) {
+    Column({ space: 12 }) {
+      Row({ space: 10 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          Circle()
+            .width(38)
+            .height(38)
+            .fill($r('app.color.app_surface_tertiary'))
+          SymbolGlyph($r('sys.symbol.qrcode'))
+            .fontSize(20)
+            .fontColor([$r('app.color.app_brand')])
+        }
+        Column({ space: 3 }) {
+          Text($r('app.string.device_pairing_preview_title'))
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.app_text_primary'))
+          Text(preview.deviceName)
+            .fontSize(12)
+            .fontColor($r('app.color.app_text_secondary'))
+            .maxLines(1)
+            .textOverflow({ overflow: TextOverflow.Ellipsis })
+        }.layoutWeight(1)
+        Text($r('app.string.device_pairing_verified'))
+          .fontSize(11)
+          .fontColor($r('app.color.app_success'))
+      }.width('100%')
+
+      this.PairingEndpointLine(
+        $r('app.string.device_pairing_mount_endpoint'),
+        `${preview.configuration.mountHost}:${preview.configuration.mountPort}`,
+        preview.mountChanged)
+      this.PairingEndpointLine(
+        $r('app.string.device_pairing_gateway_endpoint'),
+        `${preview.configuration.gatewayHost}:${preview.configuration.gatewayPort}`,
+        preview.gatewayChanged)
+
+      if (preview.tokenIncluded) {
+        Row({ space: 8 }) {
+          SymbolGlyph($r('sys.symbol.lock'))
+            .fontSize(14)
+            .fontColor([$r('app.color.app_text_tertiary')])
+          Text($r('app.string.device_pairing_token_hidden'))
+            .fontSize(11)
+            .fontColor($r('app.color.app_text_tertiary'))
+            .layoutWeight(1)
+        }.width('100%')
+      }
+
+      Text($r('app.string.device_pairing_confirm_note'))
+        .fontSize(11)
+        .fontColor($r('app.color.app_text_secondary'))
+        .width('100%')
+
+      Row({ space: 10 }) {
+        Button($r('app.string.device_pairing_cancel'))
+          .layoutWeight(1)
+          .height(40)
+          .fontSize(13)
+          .fontColor($r('app.color.app_text_primary'))
+          .backgroundColor($r('app.color.app_background_primary'))
+          .border({ width: 1, color: $r('app.color.app_divider') })
+          .borderRadius(20)
+          .enabled(!this.pairingBusy)
+          .onClick(this.onCancelPairing)
+        Button($r('app.string.device_pairing_confirm'))
+          .layoutWeight(1)
+          .height(40)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor($r('app.color.app_on_brand'))
+          .backgroundColor($r('app.color.app_brand'))
+          .borderRadius(20)
+          .enabled(!this.pairingBusy && !this.connectionSettingsLocked)
+          .onClick(this.onConfirmPairing)
+      }.width('100%')
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor($r('app.color.app_surface_secondary'))
+    .border({ width: 1, color: $r('app.color.app_brand') })
+    .borderRadius($r('app.float.corner_small'))
+    .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
+  }
+
+  @Builder
+  private PairingEndpointLine(label: ResourceStr, value: string, changed: boolean) {
+    Row({ space: 10 }) {
+      Text(label)
+        .fontSize(11)
+        .fontColor($r('app.color.app_text_secondary'))
+        .width(this.compact ? 86 : 112)
+      Text(value)
+        .fontSize(12)
+        .fontColor($r('app.color.app_text_primary'))
+        .layoutWeight(1)
+        .maxLines(1)
+        .textOverflow({ overflow: TextOverflow.Ellipsis })
+      Text(changed ? $r('app.string.device_pairing_will_update') :
+        $r('app.string.device_pairing_unchanged'))
+        .fontSize(10)
+        .fontColor(changed ? $r('app.color.app_brand') : $r('app.color.app_text_tertiary'))
+    }.width('100%')
+  }
+
+  @Builder
+  private HarmonyDiagnosticsPanel() {
+    Column({ space: 10 }) {
+      Row({ space: 10 }) {
+        Column({ space: 3 }) {
+          Text($r('app.string.harmony_diagnostics_title'))
+            .fontSize(15)
+            .fontWeight(FontWeight.Bold)
+            .fontColor($r('app.color.app_text_primary'))
+          Text(this.harmonyRuntimeDescription())
+            .fontSize(11)
+            .fontColor($r('app.color.app_text_secondary'))
+        }.layoutWeight(1)
+        Button($r('app.string.harmony_diagnostics_refresh'))
+          .height(32)
+          .padding({ left: 12, right: 12 })
+          .fontSize(11)
+          .fontColor($r('app.color.app_brand'))
+          .backgroundColor($r('app.color.app_background_primary'))
+          .borderRadius(16)
+          .onClick(this.onRefreshHarmonyFeatures)
+      }.width('100%')
+
+      if (this.harmonyFeatures !== undefined) {
+        this.HarmonyCapabilityLine($r('app.string.harmony_feature_scan_kit'),
+          this.harmonyFeatures.scanKit)
+        this.HarmonyCapabilityLine($r('app.string.harmony_feature_live_view'),
+          this.harmonyFeatures.liveView)
+        this.HarmonyCapabilityLine($r('app.string.harmony_feature_form_kit'),
+          this.harmonyFeatures.formKit)
+        this.HarmonyCapabilityLine($r('app.string.harmony_feature_system_share'),
+          this.harmonyFeatures.systemShare)
+        this.HarmonyCapabilityLine($r('app.string.harmony_feature_harmony_share'),
+          this.harmonyFeatures.harmonyShare)
+      }
+
+      Text($r('app.string.harmony_diagnostics_truth_note'))
+        .fontSize(10)
+        .fontColor($r('app.color.app_text_tertiary'))
+        .width('100%')
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor($r('app.color.app_surface_secondary'))
+    .border({ width: 1, color: $r('app.color.app_divider') })
+    .borderRadius($r('app.float.corner_small'))
+    .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
+  }
+
+  @Builder
+  private HarmonyCapabilityLine(label: ResourceStr, capability: HarmonyFeatureCapability) {
+    Row({ space: 10 }) {
+      Circle()
+        .width(8)
+        .height(8)
+        .fill(this.harmonyCapabilityColor(capability))
+      Text(label)
+        .fontSize(12)
+        .fontColor($r('app.color.app_text_primary'))
+        .width(this.compact ? 96 : 130)
+      Text(this.harmonyCapabilityText(capability))
+        .fontSize(11)
+        .fontColor(this.harmonyCapabilityColor(capability))
+        .layoutWeight(1)
+        .textAlign(TextAlign.End)
+        .maxLines(2)
+    }
+    .width('100%')
+    .constraintSize({ minHeight: 34 })
+  }
+
+  @Builder
   private EndpointInput(label: ResourceStr, value: string, placeholder: ResourceStr,
     numeric: boolean, onChange: (value: string) => void) {
     Column({ space: 5 }) {
@@ -277,7 +617,7 @@ export struct DeviceWorkspace {
           .fontColor($r('app.color.app_on_brand'))
           .backgroundColor($r('app.color.app_brand'))
           .borderRadius(22)
-          .enabled(state !== ConnectionState.CONNECTING)
+          .enabled(state !== ConnectionState.CONNECTING && !this.simulationActive())
           .onClick(action)
       }.alignItems(HorizontalAlign.End)
     }
@@ -630,10 +970,20 @@ export struct DeviceWorkspace {
   }
 
   private readinessStage(): MountReadinessStage {
+    if (this.simulationActive()) return MountReadinessStage.READY;
     return DeviceReadinessService.stage(this.readinessInput());
   }
 
   private workflowStepComplete(index: number): boolean {
+    if (this.simulationActive()) {
+      if (index === 0) {
+        return this.mountConnection === ConnectionState.SIMULATED &&
+          this.gatewayServiceConnection === ConnectionState.SIMULATED;
+      }
+      if (index === 1) return this.mountHomed;
+      if (index === 2) return this.locationSynced;
+      return this.tracking;
+    }
     const input: MountReadinessInput = this.readinessInput();
     if (index === 0) {
       return DeviceReadinessService.connectionReady(input) && input.coordinateModeCompatible;
@@ -661,20 +1011,24 @@ export struct DeviceWorkspace {
   }
 
   private canHome(): boolean {
+    if (this.simulationActive()) return false;
     return this.mountConnection === ConnectionState.CONNECTED && this.coordinateModeCompatible;
   }
 
   private canSync(): boolean {
+    if (this.simulationActive()) return false;
     return this.mountConnection === ConnectionState.CONNECTED && this.coordinateModeCompatible &&
       this.observerAvailable && !this.simulatedTimeActive;
   }
 
   private canTrack(): boolean {
+    if (this.simulationActive()) return false;
     return this.mountConnection === ConnectionState.CONNECTED && this.coordinateModeCompatible &&
       this.mountHomed && this.locationSynced;
   }
 
   private canPark(): boolean {
+    if (this.simulationActive()) return false;
     return this.mountConnection === ConnectionState.CONNECTED && this.mountHomed;
   }
 
@@ -750,6 +1104,17 @@ export struct DeviceWorkspace {
   }
 
   private coordinateLine(): DeviceStatusLine {
+    if (this.simulationActive()) {
+      return {
+        key: 'coordinate',
+        name: $r('app.string.device_check_coordinate'),
+        detail: $r('app.string.digital_twin_check_scripted'),
+        state: this.coordinateModeCompatible ? $r('app.string.device_status_topocentric') :
+          $r('app.string.device_status_unchecked'),
+        color: this.coordinateModeCompatible ? $r('app.color.app_brand') :
+          $r('app.color.app_text_tertiary')
+      };
+    }
     if (this.mountConnection !== ConnectionState.CONNECTED) {
       return {
         key: 'coordinate',
@@ -770,7 +1135,8 @@ export struct DeviceWorkspace {
   }
 
   private homeLine(): DeviceStatusLine {
-    const connected: boolean = this.mountConnection === ConnectionState.CONNECTED;
+    const connected: boolean = this.mountConnection === ConnectionState.CONNECTED ||
+      (this.simulationActive() && this.mountConnection === ConnectionState.SIMULATED);
     return {
       key: 'home',
       name: $r('app.string.device_check_home'),
@@ -783,6 +1149,17 @@ export struct DeviceWorkspace {
   }
 
   private locationLine(): DeviceStatusLine {
+    if (this.simulationActive()) {
+      return {
+        key: 'location',
+        name: $r('app.string.device_check_location'),
+        detail: $r('app.string.digital_twin_check_scripted'),
+        state: this.locationSynced ? $r('app.string.device_status_synced') :
+          $r('app.string.device_status_waiting_sync'),
+        color: this.locationSynced ? $r('app.color.app_brand') :
+          $r('app.color.app_text_tertiary')
+      };
+    }
     return {
       key: 'location',
       name: $r('app.string.device_check_location'),
@@ -796,6 +1173,15 @@ export struct DeviceWorkspace {
   }
 
   private cameraLine(): DeviceStatusLine {
+    if (this.simulationActive()) {
+      return {
+        key: 'camera',
+        name: $r('app.string.device_check_camera'),
+        detail: this.gatewayDetail,
+        state: $r('app.string.device_status_simulated_camera'),
+        color: $r('app.color.app_brand')
+      };
+    }
     if (this.gatewayServiceConnection !== ConnectionState.CONNECTED) {
       return {
         key: 'camera',
@@ -850,5 +1236,45 @@ export struct DeviceWorkspace {
 
   private pad2(value: number): string {
     return value < 10 ? `0${value}` : value.toString();
+  }
+
+  private harmonyRuntimeDescription(): string {
+    const snapshot: HarmonyFeatureSnapshot | undefined = this.harmonyFeatures;
+    if (snapshot === undefined) {
+      return '正在读取系统能力';
+    }
+    return `API ${snapshot.runtimeApiLevel} · ${snapshot.osFullName}`;
+  }
+
+  private harmonyCapabilityText(capability: HarmonyFeatureCapability): ResourceStr {
+    if (capability.state === HarmonyCapabilityState.AVAILABLE) {
+      return $r('app.string.harmony_status_available');
+    }
+    if (capability.state === HarmonyCapabilityState.RUNTIME_PROBE_REQUIRED) {
+      return capability.reason === HarmonyCapabilityReason.LIVE_VIEW_RIGHT_AND_SWITCH_REQUIRED ?
+        $r('app.string.harmony_status_right_probe') :
+        $r('app.string.harmony_status_device_probe');
+    }
+    if (capability.state === HarmonyCapabilityState.BUILD_NOT_CONFIGURED) {
+      return $r('app.string.harmony_status_not_configured');
+    }
+    if (capability.state === HarmonyCapabilityState.API_LEVEL_TOO_LOW) {
+      return $r('app.string.harmony_status_api_too_low');
+    }
+    return $r('app.string.harmony_status_unsupported');
+  }
+
+  private harmonyCapabilityColor(capability: HarmonyFeatureCapability): ResourceColor {
+    if (capability.state === HarmonyCapabilityState.AVAILABLE) {
+      return $r('app.color.app_success');
+    }
+    if (capability.state === HarmonyCapabilityState.RUNTIME_PROBE_REQUIRED) {
+      return $r('app.color.app_warning');
+    }
+    return $r('app.color.app_text_tertiary');
+  }
+
+  private simulationActive(): boolean {
+    return this.runMode === ObservationRunMode.SIMULATION;
   }
 }

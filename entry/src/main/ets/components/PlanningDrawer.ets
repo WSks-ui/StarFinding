@@ -68,6 +68,7 @@ export struct PlanningDrawer {
   onApplyManualLocation: () => void = (): void => {};
   onUseCurrentLocation: () => void = (): void => {};
   onRefreshWeather: () => void = (): void => {};
+  onSharePlan: () => void = (): void => {};
   onAddActiveTarget: () => void = (): void => {};
   onSelectTarget: (targetId: string) => void = (_targetId: string): void => {};
   onRemoveTarget: (targetId: string) => void = (_targetId: string): void => {};
@@ -138,6 +139,15 @@ export struct PlanningDrawer {
       if (this.busy) {
         LoadingProgress().width(18).height(18).color($r('app.color.app_brand'))
       }
+      Button($r('app.string.observation_share'))
+        .height(40)
+        .padding({ left: 14, right: 14 })
+        .fontSize(11)
+        .fontColor($r('app.color.sky_text_primary'))
+        .backgroundColor($r('app.color.app_surface_primary'))
+        .borderRadius(20)
+        .enabled(this.canSharePlan())
+        .onClick(this.onSharePlan)
       Button() {
         SymbolGlyph($r('sys.symbol.xmark'))
           .fontSize(20).fontColor([$r('app.color.sky_text_secondary')])
@@ -623,6 +633,12 @@ export struct PlanningDrawer {
     if (this.snapshot === undefined) return undefined;
     if (!PlanningSnapshotService.isConsistent(this.snapshot)) return undefined;
     return this.snapshot.result;
+  }
+
+  /** 只有当前原子快照通过日期、目标和天气时间范围校验时才允许调起系统分享。 */
+  private canSharePlan(): boolean {
+    return !this.busy && this.snapshot !== undefined &&
+      PlanningSnapshotService.isConsistent(this.snapshot);
   }
 
   private renderFrames(): PlanningRenderFrame[] {

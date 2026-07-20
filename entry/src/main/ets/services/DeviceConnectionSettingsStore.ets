@@ -64,14 +64,17 @@ export class DeviceConnectionSettingsStore {
   async save(settings: DeviceConnectionSettings): Promise<void> {
     this.requireInitialized();
     DeviceConnectionSettingsStore.validate(settings);
-    this.settings = DeviceConnectionSettingsStore.copy(settings);
+    const nextSettings: DeviceConnectionSettings = DeviceConnectionSettingsStore.copy(settings);
     const storage: preferences.Preferences | undefined = this.storage;
     if (storage === undefined) {
       throw new Error('设备地址存储尚未初始化');
     }
+    // 先完整写入并 flush，再替换内存中的已应用配置。这样存储失败时，页面仍可恢复
+    // 到上一份有效地址，不会出现“内存显示新地址、磁盘仍是旧地址”的半提交状态。
     await storage.put(DEVICE_CONNECTION_PREFERENCES_KEY,
-      DeviceConnectionSettingsStore.encode(this.settings));
+      DeviceConnectionSettingsStore.encode(nextSettings));
     await storage.flush();
+    this.settings = nextSettings;
   }
 
   static defaults(): DeviceConnectionSettings {

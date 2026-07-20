@@ -57,6 +57,114 @@
       "value": "Save and apply"
     },
     {
+      "name": "device_pairing_scan",
+      "value": "Scan StarScope code"
+    },
+    {
+      "name": "device_pairing_scanning",
+      "value": "Opening scanner"
+    },
+    {
+      "name": "device_pairing_scan_unavailable",
+      "value": "Scan Kit is unavailable on this device. Manual endpoint entry remains available."
+    },
+    {
+      "name": "device_pairing_preview_title",
+      "value": "Device configuration preview"
+    },
+    {
+      "name": "device_pairing_verified",
+      "value": "Verified"
+    },
+    {
+      "name": "device_pairing_mount_endpoint",
+      "value": "Mount"
+    },
+    {
+      "name": "device_pairing_gateway_endpoint",
+      "value": "Linux gateway"
+    },
+    {
+      "name": "device_pairing_will_update",
+      "value": "Will update"
+    },
+    {
+      "name": "device_pairing_unchanged",
+      "value": "Unchanged"
+    },
+    {
+      "name": "device_pairing_token_hidden",
+      "value": "The code contains a credential. Its value is never shown, logged, or shared."
+    },
+    {
+      "name": "device_pairing_confirm_note",
+      "value": "Confirmation only saves endpoints. It never connects, slews, syncs, tracks, or captures."
+    },
+    {
+      "name": "device_pairing_cancel",
+      "value": "Cancel"
+    },
+    {
+      "name": "device_pairing_confirm",
+      "value": "Confirm and save"
+    },
+    {
+      "name": "harmony_diagnostics_title",
+      "value": "Harmony capability diagnostics"
+    },
+    {
+      "name": "harmony_diagnostics_refresh",
+      "value": "Refresh"
+    },
+    {
+      "name": "harmony_diagnostics_truth_note",
+      "value": "A declared system capability does not prove service entitlement. Runtime probes remain explicitly pending."
+    },
+    {
+      "name": "harmony_feature_scan_kit",
+      "value": "Scan Kit"
+    },
+    {
+      "name": "harmony_feature_live_view",
+      "value": "Live View"
+    },
+    {
+      "name": "harmony_feature_form_kit",
+      "value": "Form Kit"
+    },
+    {
+      "name": "harmony_feature_system_share",
+      "value": "System Share"
+    },
+    {
+      "name": "harmony_feature_harmony_share",
+      "value": "Harmony Share"
+    },
+    {
+      "name": "harmony_status_available",
+      "value": "Available"
+    },
+    {
+      "name": "harmony_status_right_probe",
+      "value": "Entitlement probe required"
+    },
+    {
+      "name": "harmony_status_device_probe",
+      "value": "Device probe required"
+    },
+    {
+      "name": "harmony_status_not_configured",
+      "value": "Not configured"
+    },
+    {
+      "name": "harmony_status_api_too_low",
+      "value": "API level too low"
+    },
+    {
+      "name": "harmony_status_unsupported",
+      "value": "Unsupported"
+    },
+    {
       "name": "planning_recommended_capture_window",
       "value": "Recommended capture"
     },
@@ -75,6 +183,102 @@
     {
       "name": "planning_weather_details_hide",
       "value": "Hide details"
+    },
+    {
+      "name": "digital_twin_mode_title",
+      "value": "Observation run mode"
+    },
+    {
+      "name": "digital_twin_mode_real",
+      "value": "Real devices"
+    },
+    {
+      "name": "digital_twin_mode_simulation",
+      "value": "Digital twin"
+    },
+    {
+      "name": "digital_twin_mode_real_detail",
+      "value": "Connect OnStepX, the Linux gateway, and EOS R7 for a real observation."
+    },
+    {
+      "name": "digital_twin_mode_simulation_detail",
+      "value": "Rehearse the full workflow without hardware, with every state and asset source labeled."
+    },
+    {
+      "name": "digital_twin_waiting",
+      "value": "Waiting for replay script"
+    },
+    {
+      "name": "digital_twin_play",
+      "value": "Resume"
+    },
+    {
+      "name": "digital_twin_pause",
+      "value": "Pause"
+    },
+    {
+      "name": "digital_twin_restart",
+      "value": "Restart"
+    },
+    {
+      "name": "digital_twin_exit",
+      "value": "Exit replay"
+    },
+    {
+      "name": "digital_twin_watermark",
+      "value": "REHEARSAL · SIMULATED DATA"
+    },
+    {
+      "name": "digital_twin_safety_note",
+      "value": "Rehearsal never opens TCP, calls the gateway, slews, syncs, tracks, or triggers the shutter."
+    },
+    {
+      "name": "digital_twin_source_simulated",
+      "value": "Simulated asset · not captured on site"
+    },
+    {
+      "name": "digital_twin_source_real_history",
+      "value": "Real-device historical asset · not live"
+    },
+    {
+      "name": "digital_twin_data_source",
+      "value": "Data source"
+    },
+    {
+      "name": "digital_twin_task_not_persisted",
+      "value": "The rehearsal session stays in memory and is never written to the last ten real sessions."
+    },
+    {
+      "name": "digital_twin_ready_script",
+      "value": "Replay script"
+    },
+    {
+      "name": "digital_twin_no_gateway_request",
+      "value": "No gateway request sent"
+    },
+    {
+      "name": "digital_twin_assets_title",
+      "value": "Replay assets and provenance"
+    },
+    {
+      "name": "digital_twin_real_history_note",
+      "value": "The records below are real sessions; rehearsals never appear here"
+    },
+    {
+      "name": "digital_twin_check_scripted",
+      "value": "Scripted digital-twin state, not proof from real hardware"
+    },
+    {
+      "name": "observation_share",
+      "value": "Share"
+    },
+    {
+      "name": "observation_share_report",
+      "value": "Share observation report"
+    },
+    {
+      "name": "live_observation_in_app",
+      "value": "In-app live status · synced with task session"
     }
   ]
 }

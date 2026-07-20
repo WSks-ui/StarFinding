@@ -28,13 +28,22 @@ import {
   CapturePlan,
   CaptureProduct,
   DevicePose,
+  DevicePairingPreview,
+  DevicePairingScanResult,
+  DevicePairingScanState,
+  DevicePairingValidationResult,
+  DigitalTwinListener,
+  DigitalTwinPhase,
+  DigitalTwinSnapshot,
   EnhancementTask,
   EquatorialCoordinate,
   GestureFrame,
   GatewayHealth,
   HandGesture,
   HorizontalCoordinate,
+  HarmonyFeatureSnapshot,
   ImageFormat,
+  LiveObservationState,
   GatewaySubtaskKind,
   GatewayEndpointConfig,
   MountState,
@@ -47,6 +56,8 @@ import {
   NormalSkyViewport,
   ObservationNightPeriod,
   ObservationNightSelection,
+  ObservationShareResult,
+  ObservationRunMode,
   ObservationPlanningConstraints,
   ObservationPlanningResult,
   ObserverState,
@@ -56,6 +67,7 @@ import {
   PlanningTargetSummary,
   ProjectedSkyObject,
   RefractionMode,
+  ReplayAssetSource,
   SkyLayerVisibility,
   SkyGuideInsets,
   SkyMapOrientation,
@@ -100,9 +112,13 @@ import {
   DevicePoseService,
   DeviceConnectionSettings,
   DeviceConnectionSettingsStore,
+  DevicePairingScanner,
+  DevicePairingService,
+  DigitalTwinReplayService,
   EphemerisService,
   GatewayFile,
   GestureInterpreter,
+  HarmonyFeatureCapabilityService,
   HandFrameSourceState,
   HandFrameSourceStatus,
   HandInferenceBackend,
@@ -126,10 +142,15 @@ import {
   ObserverLocationService,
   OnStepLX200Client,
   ObservationExecutionPolicy,
+  ObservationShareService,
+  ObservationRunModePolicy,
   ObservationPlanningService,
   PlanningPeriodService,
   PlanningSnapshotService,
   RaspberryPiClient,
+  LiveObservationService,
+  SimulationEntryDecision,
+  SimulationEntryState,
   TaskSessionStore,
   TaskSessionPresentationService,
   VisibleStar,
@@ -221,6 +242,11 @@ class NormalSceneFrameCallback extends FrameCallback {
 struct Index {
   @State private activeSection: number = 0;
   @State private workspaceDirection: number = 1;
+  @State private observationRunMode: ObservationRunMode = ObservationRunMode.REAL;
+  @State private digitalTwinSnapshot: DigitalTwinSnapshot | undefined = undefined;
+  @State private digitalTwinPlaying: boolean = false;
+  @State private digitalTwinPhaseText: string = '';
+  @State private digitalTwinSourceText: string = '';
   @State private skyMode: number = 0;
   @State private selectedTargetId: string = 'star-vega';
   @State private targetSearch: string = '';
@@ -308,6 +334,10 @@ struct Index {
   @State private mountPortInput: string = '9999';
   @State private gatewayHostInput: string = '10.42.0.1';
   @State private gatewayPortInput: string = '8000';
+  @State private pairingBusy: boolean = false;
+  @State private pairingPreview: DevicePairingPreview | undefined = undefined;
+  @State private harmonyFeatureSnapshot: HarmonyFeatureSnapshot =
+    HarmonyFeatureCapabilityService.inspect();
   @State private gatewayServiceVersion: string = '';
   @State private deviceOperationMessage: string = '';
   @State private taskStage: string = '等待创建';
@@ -359,6 +389,11 @@ struct Index {
   // 输入框内容可能尚未保存；真正发起连接时只能读取这一份已应用配置，避免误把半输入的地址发到现场。
   private deviceConnectionSettings: DeviceConnectionSettings = DeviceConnectionSettingsStore.defaults();
   private deviceConnectionSettingsLoading: boolean = false;
+  private readonly devicePairingScanner: DevicePairingScanner = new DevicePairingScanner();
+  private readonly digitalTwinReplayService: DigitalTwinReplayService = new DigitalTwinReplayService();
+  private readonly digitalTwinListener: DigitalTwinListener = (snapshot: DigitalTwinSnapshot): void => {
+    this.applyDigitalTwinSnapshot(snapshot);
+  };
   private readonly mountClient: OnStepLX200Client = new OnStepLX200Client();
   private readonly gatewayClient: RaspberryPiClient = new RaspberryPiClient();
   private readonly aiClient: AIEnhancementClient = new AIEnhancementClient();
@@ -413,6 +448,7 @@ struct Index {
   private pageVisible: boolean = false;
   aboutToAppear(): void {
     this.pageVisible = true;
+    this.digitalTwinReplayService.subscribe(this.digitalTwinListener);
     this.initializeTaskSessions();
     this.initializeDeviceConnectionSettings();
     const arCapability = ArEngineCapabilityService.inspect();
@@ -451,6 +487,9 @@ struct Index {
 
   aboutToDisappear(): void {
     this.pageVisible = false;
+    this.digitalTwinReplayService.pause();
+    this.digitalTwinReplayService.unsubscribe(this.digitalTwinListener);
+    this.digitalTwinPlaying = false;
     this.gestureModelGeneration++;
     this.gestureCameraActive = false;
     this.gestureModelLoading = false;
@@ -494,6 +533,10 @@ struct Index {
       if (this.showCapturePanel) {
         this.CaptureOverlay()
       }
+
+      if (this.simulationActive()) {
+        this.DigitalTwinWatermark()
+      }
     }
     .width('100%')
     .height('100%')
@@ -507,12 +550,37 @@ struct Index {
   }
 
   @Builder
+  private DigitalTwinWatermark() {
+    Row({ space: 7 }) {
+      Circle().width(7).height(7).fill($r('app.color.app_brand'))
+      Text($r('app.string.digital_twin_watermark'))
+        .fontSize(11)
+        .fontWeight(FontWeight.Bold)
+        .fontColor($r('app.color.app_on_brand'))
+      Text(this.digitalTwinSourceText)
+        .fontSize(9)
+        .fontColor($r('app.color.app_on_brand'))
+        .opacity(0.82)
+    }
+    .height(34)
+    .padding({ left: 12, right: 12 })
+    .backgroundColor($r('app.color.app_brand'))
+    .borderRadius(17)
+    .position({ x: Math.max(8, this.contentViewportWidth - 236), y: 8 })
+    .zIndex(400)
+  }
+
+  @Builder
   private ActiveWorkspaceContent() {
     this.Header()
     if (this.activeSection === 1) {
       DeviceWorkspace({
         compact: this.contentViewportWidth < 900,
         pageMargin: this.workspacePageMargin(),
+        runMode: this.observationRunMode,
+        digitalTwinPlaying: this.digitalTwinPlaying,
+        digitalTwinPhaseText: this.digitalTwinPhaseText,
+        digitalTwinSourceText: this.digitalTwinSourceText,
         mountConnection: this.mountConnection,
         gatewayServiceConnection: this.gatewayServiceConnection,
         cameraConnection: this.gatewayConnection,
@@ -524,6 +592,10 @@ struct Index {
         mountPortInput: this.mountPortInput,
         gatewayHostInput: this.gatewayHostInput,
         gatewayPortInput: this.gatewayPortInput,
+        scanKitAvailable: this.harmonyFeatureSnapshot.scanKit.available,
+        pairingBusy: this.pairingBusy,
+        pairingPreview: this.pairingPreview,
+        harmonyFeatures: this.harmonyFeatureSnapshot,
         mountHomed: this.mountHomed,
         coordinateModeCompatible: this.mountCoordinatesTopocentric,
         tracking: this.tracking,
@@ -540,6 +612,10 @@ struct Index {
         emergencyMessage: this.emergencyMessage,
         onToggleMount: (): void => { this.toggleMountConnection(); },
         onToggleGateway: (): void => { this.toggleGatewayConnection(); },
+        onEnterSimulation: (): void => { this.enterDigitalTwinMode(); },
+        onExitSimulation: (): void => { this.exitDigitalTwinMode(); },
+        onToggleSimulationPlayback: (): void => { this.toggleDigitalTwinPlayback(); },
+        onRestartSimulation: (): void => { this.restartDigitalTwinPlayback(); },
         onToggleConnectionSettings: (): void => { this.toggleConnectionSettings(); },
         onMountHostChange: (value: string): void => { this.mountHostInput = value; },
         onMountPortChange: (value: string): void => { this.mountPortInput = value; },
@@ -547,6 +623,12 @@ struct Index {
         onGatewayPortChange: (value: string): void => { this.gatewayPortInput = value; },
         onSaveConnectionSettings: (): void => { this.saveDeviceConnectionSettings(); },
         onRestoreConnectionDefaults: (): void => { this.restoreDeviceConnectionDefaults(); },
+        onScanDeviceCode: (): void => { this.scanDevicePairingCode(); },
+        onConfirmPairing: (): void => { this.confirmDevicePairing(); },
+        onCancelPairing: (): void => { this.cancelDevicePairing(); },
+        onRefreshHarmonyFeatures: (): void => {
+          this.harmonyFeatureSnapshot = HarmonyFeatureCapabilityService.inspect();
+        },
         onHomeMount: (): void => { this.homeMount(); },
         onSyncObserver: (): void => { this.syncObserverToMount(); },
         onToggleTracking: (): void => { this.toggleTracking(); },
@@ -557,10 +639,14 @@ struct Index {
       TaskWorkspace({
         compact: TaskSessionPresentationService.resolveLayout(this.contentViewportWidth).compact,
         pageMargin: TaskSessionPresentationService.resolveLayout(this.contentViewportWidth).pageMargin,
-        activeSession: this.activeTaskSession,
+        runMode: this.observationRunMode,
+        replayManifest: this.digitalTwinSnapshot === undefined ? undefined :
+          this.digitalTwinSnapshot.assetManifest,
+        digitalTwinPlaying: this.digitalTwinPlaying,
+        activeSession: this.displayedTaskSession(),
         history: this.taskHistory,
-        storeReady: this.taskStoreReady,
-        storeWarning: this.taskStoreWarning,
+        storeReady: this.simulationActive() ? true : this.taskStoreReady,
+        storeWarning: this.simulationActive() ? '' : this.taskStoreWarning,
         stopRequested: this.taskStopRequested,
         mountConnection: this.mountConnection,
         cameraConnection: this.gatewayConnection,
@@ -568,13 +654,18 @@ struct Index {
         coordinateModeCompatible: this.mountCoordinatesTopocentric,
         locationSynced: this.locationSynced,
         preflight: this.cameraPreflightResult,
+        liveObservation: this.currentLiveObservation(),
         onGoToSky: (): void => { this.navigateToImmersiveSky(); },
         onRefresh: (): void => { this.refreshActiveTaskSession(); },
         onStop: (): void => { this.cancelActiveTask(); },
         onContinue: (): void => { this.continueActiveTaskSession(); },
         onArchive: (): void => { this.archiveInterruptedTaskSession(); },
         onEndObservation: (): void => { this.endObservationSession(); },
-        onOpenProducts: (): void => { this.navigateToSection(3); }
+        onOpenProducts: (): void => { this.navigateToSection(3); },
+        onToggleSimulationPlayback: (): void => { this.toggleDigitalTwinPlayback(); },
+        onRestartSimulation: (): void => { this.restartDigitalTwinPlayback(); },
+        onExitSimulation: (): void => { this.exitDigitalTwinMode(); },
+        onShareReport: (): void => { this.shareDisplayedTaskReport(); }
       })
         .transition(MotionTokens.page(this.workspaceDirection))
     } else {
@@ -1218,6 +1309,7 @@ struct Index {
       onApplyManualLocation: (): void => { this.applyManualPlanningLocation(); },
       onUseCurrentLocation: (): void => { this.refreshLocation(); },
       onRefreshWeather: (): void => { this.refreshWeatherForecast(); },
+      onSharePlan: (): void => { this.shareActivePlanningSnapshot(); },
       onAddActiveTarget: (): void => { this.addActivePlanningTargetToPlan(); },
       onSelectTarget: (targetId: string): void => { this.selectPlanningTarget(targetId); },
       onRemoveTarget: (targetId: string): void => { this.removePlannedTarget(targetId); }
@@ -2368,7 +2460,7 @@ struct Index {
   }
 
   private canStartCapture(): boolean {
-    if (!this.taskStoreReady || this.activeTaskSession !== undefined || this.operationBusy ||
+    if (this.simulationActive() || !this.taskStoreReady || this.activeTaskSession !== undefined || this.operationBusy ||
       this.mountConnection !== ConnectionState.CONNECTED ||
       !this.mountHomed || !this.mountCoordinatesTopocentric || !this.selectedTarget().gotoAllowed ||
       this.selectedTarget().id === 'solar-sun' ||
@@ -2383,6 +2475,7 @@ struct Index {
   }
 
   private captureReadinessText(): string {
+    if (this.simulationActive()) return '演练模式只播放数字孪生流程；退出后才能执行真实观测';
     if (!this.taskStoreReady) return '正在读取任务会话，请稍候';
     if (this.activeTaskSession !== undefined) return '已有进行中的会话，请先在任务中心结束或继续';
     if (this.operationBusy) return '正在执行设备操作，请稍候';
@@ -3241,6 +3334,268 @@ struct Index {
     this.updateProjectedTargets(true);
   }
 
+  private simulationActive(): boolean {
+    return this.observationRunMode === ObservationRunMode.SIMULATION;
+  }
+
+  private displayedTaskSession(): TaskSession | undefined {
+    if (this.simulationActive() && this.digitalTwinSnapshot !== undefined) {
+      return this.digitalTwinSnapshot.session;
+    }
+    return this.activeTaskSession;
+  }
+
+  /**
+   * 系统实况窗需要额外权益，因此比赛版先把 TaskSession 映射为可信的应用内实况状态。
+   * 数字孪生使用脚本 sequence；真实会话使用更新时间作为更新标识，两者都不会控制硬件。
+   */
+  private currentLiveObservation(): LiveObservationState | undefined {
+    const session: TaskSession | undefined = this.displayedTaskSession();
+    const sequence: number = this.simulationActive() && this.digitalTwinSnapshot !== undefined ?
+      this.digitalTwinSnapshot.sequence : (session === undefined ? 0 : session.updatedAtMs);
+    return LiveObservationService.fromSession(session, this.observationRunMode, sequence);
+  }
+
+  /** 分享当前规划原子快照，不读取或附带任何设备 IP、端口、令牌和调试日志。 */
+  private async shareActivePlanningSnapshot(): Promise<void> {
+    if (!this.harmonyFeatureSnapshot.systemShare.available) {
+      this.operationMessage = '当前设备没有可用的系统分享能力';
+      return;
+    }
+    const snapshot: PlanningSnapshot | undefined = this.activePlanningSnapshot;
+    if (snapshot === undefined || !PlanningSnapshotService.isConsistent(snapshot)) {
+      this.operationMessage = '规划结果仍在更新，暂时不能分享';
+      return;
+    }
+    const context: common.UIAbilityContext | undefined =
+      AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
+    if (context === undefined) {
+      this.operationMessage = '无法取得系统分享上下文';
+      return;
+    }
+    const target: CelestialObject = this.activePlanningTarget();
+    const result: ObservationShareResult = await ObservationShareService.share(context,
+      ObservationShareService.createPlanningPayload({
+        snapshot: snapshot,
+        targetName: target.nameZh,
+        designation: target.designation
+      }));
+    this.operationMessage = result.message;
+  }
+
+  /**
+   * 分享任务报告时只使用冻结会话与演练素材清单。
+   * 演练模式强制添加“模拟素材 · 非现场实拍”，避免比赛材料把脚本回放误写成现场实拍。
+   */
+  private async shareDisplayedTaskReport(): Promise<void> {
+    if (!this.harmonyFeatureSnapshot.systemShare.available) {
+      this.operationMessage = '当前设备没有可用的系统分享能力';
+      return;
+    }
+    const session: TaskSession | undefined = this.displayedTaskSession();
+    if (session === undefined) {
+      this.operationMessage = '当前没有可分享的观测会话';
+      return;
+    }
+    const context: common.UIAbilityContext | undefined =
+      AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
+    if (context === undefined) {
+      this.operationMessage = '无法取得系统分享上下文';
+      return;
+    }
+    const result: ObservationShareResult = await ObservationShareService.share(context,
+      ObservationShareService.createTaskReportPayload({
+        session: session,
+        replayManifest: this.simulationActive() && this.digitalTwinSnapshot !== undefined ?
+          this.digitalTwinSnapshot.assetManifest : undefined
+      }));
+    this.operationMessage = result.message;
+  }
+
+  /**
+   * 所有真实设备入口必须经过同一运行域检查。演练模式下即使 UI 状态误显示为可点击，
+   * 此处仍会阻断 TCP、HTTP、GOTO、同步、跟踪和快门链路。
+   */
+  private allowRealHardwareAction(actionName: string): boolean {
+    if (ObservationRunModePolicy.allowsHardwareAccess(this.observationRunMode)) return true;
+    this.reportDeviceOperation(`演练模式已阻止“${actionName}”；未访问任何真实设备`);
+    return false;
+  }
+
+  private enterDigitalTwinMode(): void {
+    if (this.simulationActive()) return;
+    const entryState: SimulationEntryState = {
+      mountDisconnected: this.mountConnection === ConnectionState.DISCONNECTED,
+      gatewayDisconnected: this.gatewayServiceConnection === ConnectionState.DISCONNECTED &&
+        this.gatewayConnection === ConnectionState.DISCONNECTED,
+      realSessionInactive: this.activeTaskSession === undefined,
+      operationIdle: !this.operationBusy
+    };
+    const decision: SimulationEntryDecision =
+      ObservationRunModePolicy.evaluateSimulationEntry(entryState);
+    if (!decision.allowed) {
+      this.reportDeviceOperation(decision.reason);
+      return;
+    }
+
+    this.clearMountPolling();
+    this.clearGatewayPolling();
+    this.clearTaskPolling();
+    this.captureRunGeneration++;
+    this.observationRunMode = ObservationRunMode.SIMULATION;
+    this.digitalTwinSnapshot = undefined;
+    this.digitalTwinPlaying = false;
+    this.cameraPreflightResult = undefined;
+    this.resetMountUiState(ConnectionState.DISCONNECTED);
+    this.gatewayServiceConnection = ConnectionState.DISCONNECTED;
+    this.gatewayConnection = ConnectionState.DISCONNECTED;
+    this.gatewayUpdatedAtMs = 0;
+    this.gatewayServiceVersion = '';
+
+    const target: CelestialObject = this.selectedTarget();
+    const targetSnapshot: TaskTargetSnapshot = {
+      id: target.id,
+      name: target.nameZh,
+      designation: target.designation,
+      type: target.type,
+      coordinate: target.coordinate,
+      precision: target.precision,
+      gotoAllowed: target.gotoAllowed
+    };
+    const plan: CapturePlan = this.buildDigitalTwinPlan(target);
+    this.digitalTwinReplayService.loadStandardDemo(plan, targetSnapshot);
+    this.digitalTwinReplayService.play(4.0);
+    this.digitalTwinPlaying = true;
+    this.changeActiveSection(1);
+    this.reportDeviceOperation('已进入数字孪生演练；当前状态、任务和素材均与真实设备隔离');
+  }
+
+  private exitDigitalTwinMode(): void {
+    if (!this.simulationActive()) return;
+    this.digitalTwinReplayService.pause();
+    this.digitalTwinPlaying = false;
+    this.digitalTwinSnapshot = undefined;
+    this.digitalTwinPhaseText = '';
+    this.digitalTwinSourceText = '';
+    this.observationRunMode = ObservationRunMode.REAL;
+    // 演练产生的回零、同步、跟踪和连接证明不能带回真实运行域。
+    this.resetMountUiState(ConnectionState.DISCONNECTED);
+    this.gatewayServiceConnection = ConnectionState.DISCONNECTED;
+    this.gatewayConnection = ConnectionState.DISCONNECTED;
+    this.gatewayUpdatedAtMs = 0;
+    this.gatewayServiceVersion = '';
+    this.mountDetail = this.mountEndpointText();
+    this.gatewayDetail = this.gatewayEndpointText();
+    this.taskStatus = TaskStatus.PENDING;
+    this.taskProgress = 0;
+    this.completedFrames = 0;
+    this.taskStage = '等待创建';
+    this.activeTaskId = '';
+    this.taskStopRequested = false;
+    this.emergencyMessage = '';
+    this.reportDeviceOperation('已退出演练模式；真实设备保持断开，需重新连接、自检、回零和同步');
+  }
+
+  private toggleDigitalTwinPlayback(): void {
+    if (!this.simulationActive()) return;
+    if (this.digitalTwinPlaying) {
+      this.digitalTwinReplayService.pause();
+      this.digitalTwinPlaying = false;
+      this.reportDeviceOperation('数字孪生演练已暂停');
+      return;
+    }
+    if (this.digitalTwinSnapshot !== undefined &&
+      (this.digitalTwinSnapshot.phase === DigitalTwinPhase.COMPLETE ||
+        this.digitalTwinSnapshot.phase === DigitalTwinPhase.STOPPED)) {
+      this.restartDigitalTwinPlayback();
+      return;
+    }
+    this.digitalTwinReplayService.play(4.0);
+    this.digitalTwinPlaying = true;
+    this.reportDeviceOperation('数字孪生演练继续播放');
+  }
+
+  private restartDigitalTwinPlayback(): void {
+    if (!this.simulationActive()) return;
+    // 清除上一轮序号后再从 sequence=1 开始，避免正常重播被误判为乱序快照。
+    this.digitalTwinSnapshot = undefined;
+    this.digitalTwinReplayService.restart(4.0);
+    this.digitalTwinPlaying = true;
+    this.reportDeviceOperation('数字孪生演练已从设备发现阶段重新开始');
+  }
+
+  private buildDigitalTwinPlan(target: CelestialObject): CapturePlan {
+    return {
+      id: `digital-twin-plan-${Date.now()}-${target.id}`,
+      mode: CaptureMode.SMART_LONG_EXPOSURE,
+      targetId: target.id,
+      targetName: target.nameZh,
+      exposureSeconds: Math.max(10, this.exposureSeconds),
+      frameCount: Math.max(8, this.frameCount),
+      intervalSeconds: Math.max(2, this.intervalSeconds),
+      iso: Math.max(800, this.iso),
+      aperture: 4.0,
+      imageFormat: ImageFormat.RAW_JPEG,
+      outputFps: 25,
+      enablePlateSolve: true,
+      enableDriftCorrection: true,
+      enableLocalStack: true,
+      enableCloudEnhancement: true,
+      recommendationReason: '数字孪生演练使用冻结参数展示完整观测状态机。',
+      warnings: ['演练计划不会发送到赤道仪、相机或 Linux 网关']
+    };
+  }
+
+  private applyDigitalTwinSnapshot(snapshot: DigitalTwinSnapshot): void {
+    if (!this.simulationActive()) return;
+    if (this.digitalTwinSnapshot !== undefined &&
+      snapshot.sequence < this.digitalTwinSnapshot.sequence) {
+      return;
+    }
+    this.digitalTwinSnapshot = snapshot;
+    this.digitalTwinPhaseText = snapshot.note;
+    this.digitalTwinSourceText = snapshot.dataSource === ReplayAssetSource.REAL_CAPTURE_REPLAY ?
+      '真实设备历史素材 · 非实时' : '模拟素材 · 非现场实拍';
+    this.mountConnection = snapshot.mount.connection;
+    this.gatewayServiceConnection = ConnectionState.SIMULATED;
+    this.gatewayConnection = snapshot.camera.connection;
+    this.mountHomed = snapshot.mount.homed;
+    this.mountCoordinatesTopocentric = snapshot.phase !== DigitalTwinPhase.DEVICE_DISCOVERY;
+    this.locationSynced = snapshot.phase !== DigitalTwinPhase.DEVICE_DISCOVERY &&
+      snapshot.phase !== DigitalTwinPhase.CAMERA_PREFLIGHT &&
+      snapshot.phase !== DigitalTwinPhase.GOTO;
+    this.tracking = snapshot.mount.trackingMode !== TrackingMode.STOPPED &&
+      snapshot.mount.trackingMode !== TrackingMode.UNKNOWN;
+    this.mountSlewing = snapshot.mount.slewing;
+    this.mountRaHours = snapshot.mount.rightAscensionHours;
+    this.mountDecDegrees = snapshot.mount.declinationDegrees;
+    this.mountUpdatedAtMs = snapshot.mount.updatedAtMs;
+    this.gatewayUpdatedAtMs = snapshot.camera.updatedAtMs;
+    this.mountDetail = '数字孪生脚本 · 未连接 OnStepX';
+    this.gatewayDetail = `${snapshot.camera.cameraModel} · 未访问 Linux 网关`;
+    this.taskProgress = snapshot.session.progressPercent;
+    this.completedFrames = snapshot.session.completedFrames;
+    this.taskStage = snapshot.session.statusDetail;
+    this.activeTaskId = snapshot.session.id;
+    this.taskStatus = this.digitalTwinTaskStatus(snapshot.session.status);
+    this.deviceOperationMessage = `${snapshot.note}；${snapshot.warning}`;
+    this.operationMessage = this.deviceOperationMessage;
+    if (snapshot.phase === DigitalTwinPhase.COMPLETE ||
+      snapshot.phase === DigitalTwinPhase.STOPPED) {
+      this.digitalTwinPlaying = false;
+    }
+  }
+
+  private digitalTwinTaskStatus(status: SessionStatus): TaskStatus {
+    if (status === SessionStatus.SUCCEEDED) return TaskStatus.SUCCEEDED;
+    if (status === SessionStatus.FAILED || status === SessionStatus.INTERRUPTED) {
+      return TaskStatus.FAILED;
+    }
+    if (status === SessionStatus.CANCELLED) return TaskStatus.CANCELLED;
+    if (status === SessionStatus.PREPARING) return TaskStatus.PENDING;
+    return TaskStatus.RUNNING;
+  }
+
   /**
    * 启动时仅恢复用户上次明确保存的地址。此过程不连接 Socket、不查询网关，
    * 因此应用重启后不会因为地址恢复而改变赤道仪或相机状态。
@@ -3264,6 +3619,7 @@ struct Index {
   }
 
   private connectionSettingsLocked(): boolean {
+    if (this.simulationActive()) return true;
     const mountBusy: boolean = this.mountConnection === ConnectionState.CONNECTED ||
       this.mountConnection === ConnectionState.CONNECTING;
     const gatewayBusy: boolean = this.gatewayServiceConnection === ConnectionState.CONNECTED ||
@@ -3295,7 +3651,96 @@ struct Index {
     this.reportDeviceOperation('已回填 StarScope 默认地址；保存后才会应用');
   }
 
+  /**
+   * 调起 Scan Kit 后只生成安全预览。二维码原文可能含 token，因此只在本方法的局部变量中
+   * 短暂存在，不写入 @State、不记录日志，也不会因为扫码成功而自动连接任何设备。
+   */
+  private async scanDevicePairingCode(): Promise<void> {
+    if (!this.allowRealHardwareAction('扫描并应用真实设备配置')) return;
+    if (this.connectionSettingsLocked()) {
+      this.reportDeviceOperation('请先断开设备并结束活动会话，再扫描设备码');
+      return;
+    }
+    if (!this.harmonyFeatureSnapshot.scanKit.available) {
+      this.reportDeviceOperation('当前设备不支持 Scan Kit，请使用手动地址配置');
+      return;
+    }
+    if (this.pairingBusy) return;
+    const context: common.Context | undefined = this.getUIContext().getHostContext();
+    if (context === undefined) {
+      this.reportDeviceOperation('无法取得扫码页面上下文，请使用手动地址配置');
+      return;
+    }
+    this.pairingBusy = true;
+    try {
+      const scanResult: DevicePairingScanResult = await this.devicePairingScanner.scan(context);
+      if (scanResult.state !== DevicePairingScanState.SUCCESS) {
+        if (scanResult.message.length > 0) {
+          this.reportDeviceOperation(scanResult.message);
+        }
+        return;
+      }
+      const validation: DevicePairingValidationResult = DevicePairingService.validateCode(
+        scanResult.originalValue, this.deviceConnectionSettings, Date.now());
+      if (!validation.success || validation.preview === undefined) {
+        this.pairingPreview = undefined;
+        this.reportDeviceOperation(`设备码未通过安全校验：${validation.message}`);
+        return;
+      }
+      this.pairingPreview = validation.preview;
+      this.reportDeviceOperation('设备码校验通过；确认保存前不会修改地址或连接硬件');
+    } finally {
+      this.pairingBusy = false;
+    }
+  }
+
+  private cancelDevicePairing(): void {
+    this.pairingPreview = undefined;
+    this.reportDeviceOperation('已取消设备码导入，当前连接配置保持不变');
+  }
+
+  /**
+   * 用户确认后才原子写入 Preferences。保存成功仅更新客户端终点，仍需要用户手动点击
+   * “连接并自检/检测网关”，从而保证扫码不会触发 GOTO、同步、跟踪或拍摄。
+   */
+  private async confirmDevicePairing(): Promise<void> {
+    if (!this.allowRealHardwareAction('保存真实设备配置')) return;
+    const preview: DevicePairingPreview | undefined = this.pairingPreview;
+    if (preview === undefined || this.pairingBusy) return;
+    if (this.connectionSettingsLocked()) {
+      this.reportDeviceOperation('设备连接或会话进行中，不能应用扫码配置');
+      return;
+    }
+    this.pairingBusy = true;
+    try {
+      if (this.deviceConnectionSettingsStore === undefined) {
+        await this.initializeDeviceConnectionSettings();
+      }
+      const store: DeviceConnectionSettingsStore | undefined = this.deviceConnectionSettingsStore;
+      if (store === undefined) {
+        throw new Error('设备地址存储尚未准备好，请稍后重试');
+      }
+      const settings: DeviceConnectionSettings = new DeviceConnectionSettings(
+        preview.configuration.mountHost,
+        preview.configuration.mountPort,
+        preview.configuration.gatewayHost,
+        preview.configuration.gatewayPort);
+      await store.save(settings);
+      this.applyDeviceConnectionSettings(settings);
+      this.pairingPreview = undefined;
+      this.connectionSettingsOpen = false;
+      this.reportDeviceOperation(
+        `已保存 ${preview.deviceName} 配置；请手动执行连接检测`);
+    } catch (error) {
+      // 保留预览以便用户重试，存储失败时 Store 仍保持上一份完整配置。
+      this.reportDeviceOperation(`扫码配置未保存：${error}`);
+    } finally {
+      this.pairingBusy = false;
+    }
+  }
+
   private async saveDeviceConnectionSettings(): Promise<void> {
+    if (!this.allowRealHardwareAction('保存真实设备地址')) return;
     if (this.connectionSettingsLocked()) {
       this.reportDeviceOperation('设备连接中，不能修改网络地址');
       return;
@@ -3345,6 +3790,7 @@ struct Index {
   }
 
   private async toggleMountConnection(): Promise<void> {
+    if (!this.allowRealHardwareAction('连接赤道仪')) return;
     if (this.operationBusy) {
       return;
     }
@@ -3380,6 +3826,7 @@ struct Index {
   }
 
   private async toggleGatewayConnection(): Promise<void> {
+    if (!this.allowRealHardwareAction('连接相机网关')) return;
     if (this.operationBusy) {
       return;
     }
@@ -3436,6 +3883,7 @@ struct Index {
   }
 
   private startMountPolling(): void {
+    if (!ObservationRunModePolicy.allowsHardwareAccess(this.observationRunMode)) return;
     this.clearMountPolling();
     this.mountPollTimer = setInterval(() => {
       this.pollMountState();
@@ -3450,6 +3898,7 @@ struct Index {
   }
 
   private async pollMountState(): Promise<void> {
+    if (!ObservationRunModePolicy.allowsHardwareAccess(this.observationRunMode)) return;
     if (this.mountConnection !== ConnectionState.CONNECTED) {
       return;
     }
@@ -3478,6 +3927,7 @@ struct Index {
   }
 
   private startGatewayPolling(): void {
+    if (!ObservationRunModePolicy.allowsHardwareAccess(this.observationRunMode)) return;
     this.clearGatewayPolling();
     this.gatewayPollTimer = setInterval(() => {
       this.pollGatewayState();
@@ -3492,6 +3942,7 @@ struct Index {
   }
 
   private async pollGatewayState(): Promise<void> {
+    if (!ObservationRunModePolicy.allowsHardwareAccess(this.observationRunMode)) return;
     if (this.gatewayServiceConnection !== ConnectionState.CONNECTED) return;
     try {
       const previousConnection: ConnectionState = this.gatewayConnection;
@@ -3553,6 +4004,7 @@ struct Index {
   }
 
   private async homeMount(): Promise<void> {
+    if (!this.allowRealHardwareAction('赤道仪回零')) return;
     if (this.operationBusy) return;
     if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountCoordinatesTopocentric) {
       this.reportDeviceOperation('请先连接赤道仪并通过 TOPOCENTRIC 坐标模式自检');
@@ -3571,6 +4023,7 @@ struct Index {
   }
 
   private async syncObserverToMount(): Promise<void> {
+    if (!this.allowRealHardwareAction('同步地点和时间')) return;
     if (this.operationBusy || this.observer === undefined) return;
     if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountCoordinatesTopocentric) {
       this.reportDeviceOperation('赤道仪尚未完成连接自检，不能同步地点和时间');
@@ -3601,6 +4054,7 @@ struct Index {
   }
 
   private async toggleTracking(): Promise<void> {
+    if (!this.allowRealHardwareAction('控制恒星时跟踪')) return;
     if (this.operationBusy) return;
     if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountCoordinatesTopocentric ||
       !this.mountHomed || !this.locationSynced) {
@@ -3625,6 +4079,7 @@ struct Index {
   }
 
   private async parkMount(): Promise<void> {
+    if (!this.allowRealHardwareAction('停放赤道仪')) return;
     if (this.operationBusy) return;
     if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountHomed) {
       this.reportDeviceOperation('赤道仪连接并完成回零后才能执行停放');
@@ -3871,6 +4326,7 @@ struct Index {
   }
 
   private async startCaptureTask(): Promise<void> {
+    if (!this.allowRealHardwareAction('创建真实观测会话')) return;
     if (this.simulatedDeviceTimeBlocked()) {
       this.operationMessage = '模拟时间只用于浏览和规划，未发送任何设备指令';
       return;
@@ -3920,6 +4376,9 @@ struct Index {
 
   private async prepareMountForSession(sessionId: string, target: CelestialObject,
     runGeneration: number): Promise<PreparedSessionTarget> {
+    if (!this.allowRealHardwareAction('准备赤道仪观测')) {
+      throw new Error('演练模式禁止准备真实赤道仪');
+    }
     if (this.observer === undefined) throw new Error('缺少真实观测地点');
     if (this.mountConnection !== ConnectionState.CONNECTED || !this.mountHomed ||
       !this.mountCoordinatesTopocentric) {
@@ -4147,6 +4606,7 @@ struct Index {
   }
 
   private async refreshActiveTaskSession(): Promise<void> {
+    if (!this.allowRealHardwareAction('刷新真实网关子任务')) return;
     const active: TaskSession | undefined = this.activeTaskSession;
     if (active === undefined) return;
     try {
@@ -4198,6 +4658,7 @@ struct Index {
   }
 
   private async continueActiveTaskSession(): Promise<void> {
+    if (!this.allowRealHardwareAction('继续真实观测会话')) return;
     const active: TaskSession | undefined = this.activeTaskSession;
     if (active === undefined || this.operationBusy) return;
     const target: CelestialObject = this.sessionTarget(active);
@@ -4326,6 +4787,7 @@ struct Index {
   }
 
   private async endObservationSession(): Promise<void> {
+    if (!this.allowRealHardwareAction('结束真实观测会话')) return;
     const active: TaskSession | undefined = this.activeTaskSession;
     if (active === undefined || active.kind !== SessionKind.OBSERVATION ||
       active.status !== SessionStatus.RUNNING || this.operationBusy) return;
@@ -4357,6 +4819,10 @@ struct Index {
   }
 
   private async archiveInterruptedTaskSession(): Promise<void> {
+    if (this.simulationActive()) {
+      this.reportDeviceOperation('演练会话不会写入真实历史，无需归档');
+      return;
+    }
     const active: TaskSession | undefined = this.activeTaskSession;
     if (active === undefined || (active.status !== SessionStatus.INTERRUPTED &&
       active.status !== SessionStatus.WAITING_FOR_USER) || this.operationBusy) return;
@@ -4372,6 +4838,7 @@ struct Index {
   }
 
   private async cancelActiveTask(): Promise<void> {
+    if (!this.allowRealHardwareAction('停止真实拍摄任务')) return;
     const active: TaskSession | undefined = this.activeTaskSession;
     if (active === undefined || active.kind === SessionKind.OBSERVATION ||
       (active.status !== SessionStatus.PREPARING && active.status !== SessionStatus.RUNNING) ||
@@ -4399,6 +4866,17 @@ struct Index {
   }
 
   private async triggerEmergencyStop(): Promise<void> {
+    if (this.simulationActive()) {
+      // 演练急停只能终止内存回放，绝不复用真实急停客户端。
+      this.digitalTwinReplayService.stop();
+      this.digitalTwinPlaying = false;
+      this.tracking = false;
+      this.mountSlewing = false;
+      this.emergencyMessage = '演练回放已停止；未向赤道仪、相机或网关发送急停指令';
+      this.deviceOperationMessage = this.emergencyMessage;
+      this.operationMessage = this.emergencyMessage;
+      return;
+    }
     // 先同步废止当前拍摄代次并触发两条链路，再分别等待结果；任一链路失败都不能阻止另一条急停。
     this.captureRunGeneration++;
     this.emergencyMessage = '正在发送软件急停；物理急停仍需人工确认';

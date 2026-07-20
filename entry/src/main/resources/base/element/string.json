@@ -325,6 +325,114 @@
       "value": "保存并应用"
     },
     {
+      "name": "device_pairing_scan",
+      "value": "扫描 StarScope 设备码"
+    },
+    {
+      "name": "device_pairing_scanning",
+      "value": "正在打开扫码"
+    },
+    {
+      "name": "device_pairing_scan_unavailable",
+      "value": "当前设备未声明 Scan Kit 能力，仍可使用下方手动地址配置。"
+    },
+    {
+      "name": "device_pairing_preview_title",
+      "value": "设备配置预览"
+    },
+    {
+      "name": "device_pairing_verified",
+      "value": "校验通过"
+    },
+    {
+      "name": "device_pairing_mount_endpoint",
+      "value": "赤道仪"
+    },
+    {
+      "name": "device_pairing_gateway_endpoint",
+      "value": "Linux 网关"
+    },
+    {
+      "name": "device_pairing_will_update",
+      "value": "将更新"
+    },
+    {
+      "name": "device_pairing_unchanged",
+      "value": "无变化"
+    },
+    {
+      "name": "device_pairing_token_hidden",
+      "value": "设备码包含安全凭证；内容不会显示、记录或分享。"
+    },
+    {
+      "name": "device_pairing_confirm_note",
+      "value": "确认仅保存网络地址，不会自动连接、GOTO、同步、跟踪或拍摄。"
+    },
+    {
+      "name": "device_pairing_cancel",
+      "value": "取消"
+    },
+    {
+      "name": "device_pairing_confirm",
+      "value": "确认保存"
+    },
+    {
+      "name": "harmony_diagnostics_title",
+      "value": "鸿蒙能力诊断"
+    },
+    {
+      "name": "harmony_diagnostics_refresh",
+      "value": "重新检测"
+    },
+    {
+      "name": "harmony_diagnostics_truth_note",
+      "value": "系统能力存在不等于服务已获权益；需运行时验证的能力不会标记为已启用。"
+    },
+    {
+      "name": "harmony_feature_scan_kit",
+      "value": "Scan Kit"
+    },
+    {
+      "name": "harmony_feature_live_view",
+      "value": "实况窗"
+    },
+    {
+      "name": "harmony_feature_form_kit",
+      "value": "服务卡片"
+    },
+    {
+      "name": "harmony_feature_system_share",
+      "value": "系统分享"
+    },
+    {
+      "name": "harmony_feature_harmony_share",
+      "value": "碰一碰分享"
+    },
+    {
+      "name": "harmony_status_available",
+      "value": "可用"
+    },
+    {
+      "name": "harmony_status_right_probe",
+      "value": "需权益与开关验证"
+    },
+    {
+      "name": "harmony_status_device_probe",
+      "value": "需真机运行验证"
+    },
+    {
+      "name": "harmony_status_not_configured",
+      "value": "构建未配置"
+    },
+    {
+      "name": "harmony_status_api_too_low",
+      "value": "系统版本过低"
+    },
+    {
+      "name": "harmony_status_unsupported",
+      "value": "设备不支持"
+    },
+    {
       "name": "device_connect_self_test",
       "value": "连接并自检"
     },
@@ -895,6 +1003,102 @@
     {
       "name": "task_archive_failed",
       "value": "结束并归档"
+    },
+    {
+      "name": "digital_twin_mode_title",
+      "value": "观测运行模式"
+    },
+    {
+      "name": "digital_twin_mode_real",
+      "value": "真实设备"
+    },
+    {
+      "name": "digital_twin_mode_simulation",
+      "value": "数字孪生"
+    },
+    {
+      "name": "digital_twin_mode_real_detail",
+      "value": "连接 OnStepX、Linux 网关和 EOS R7，执行真实观测。"
+    },
+    {
+      "name": "digital_twin_mode_simulation_detail",
+      "value": "无硬件演练完整工作流，所有状态和素材均明确标记来源。"
+    },
+    {
+      "name": "digital_twin_waiting",
+      "value": "等待演练脚本"
+    },
+    {
+      "name": "digital_twin_play",
+      "value": "继续演练"
+    },
+    {
+      "name": "digital_twin_pause",
+      "value": "暂停演练"
+    },
+    {
+      "name": "digital_twin_restart",
+      "value": "重新演练"
+    },
+    {
+      "name": "digital_twin_exit",
+      "value": "退出演练"
+    },
+    {
+      "name": "digital_twin_watermark",
+      "value": "演练模式 · 模拟数据"
+    },
+    {
+      "name": "digital_twin_safety_note",
+      "value": "演练模式不会连接 TCP、调用网关、执行 GOTO、同步、跟踪或触发快门。"
+    },
+    {
+      "name": "digital_twin_source_simulated",
+      "value": "模拟素材 · 非现场实拍"
+    },
+    {
+      "name": "digital_twin_source_real_history",
+      "value": "真实设备历史素材 · 非实时"
+    },
+    {
+      "name": "digital_twin_data_source",
+      "value": "数据来源"
+    },
+    {
+      "name": "digital_twin_task_not_persisted",
+      "value": "演练会话仅保存在内存中，不会写入最近 10 次真实任务历史。"
+    },
+    {
+      "name": "digital_twin_ready_script",
+      "value": "演练脚本"
+    },
+    {
+      "name": "digital_twin_no_gateway_request",
+      "value": "未发送网关请求"
+    },
+    {
+      "name": "digital_twin_assets_title",
+      "value": "演练素材与溯源"
+    },
+    {
+      "name": "digital_twin_real_history_note",
+      "value": "下列记录均来自真实会话；演练任务不会写入这里"
+    },
+    {
+      "name": "digital_twin_check_scripted",
+      "value": "数字孪生脚本状态，不代表真实硬件证明"
+    },
+    {
+      "name": "observation_share",
+      "value": "分享"
+    },
+    {
+      "name": "observation_share_report",
+      "value": "系统分享观测报告"
+    },
+    {
+      "name": "live_observation_in_app",
+      "value": "应用内实况 · 与任务会话同步"
     }
   ]
 }

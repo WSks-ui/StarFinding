@@ -2,3 +2,8 @@ export * from './DomainModels';
 export * from './ArSkyModels';
 export * from './NormalSkyModels';
 export * from './TaskSessionModels';
+export * from './HarmonyFeatureModels';
+export * from './DevicePairingModels';
+export * from './DigitalTwinModels';
+export * from './ObservationShareModels';
+export * from './LiveObservationModels';

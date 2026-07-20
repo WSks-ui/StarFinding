@@ -10,6 +10,13 @@ import {
   WorkflowStage,
   WorkflowStepState
 } from '../models/TaskSessionModels';
+import {
+  ObservationRunMode,
+  ReplayAsset,
+  ReplayAssetManifest,
+  ReplayAssetSource
+} from '../models/DigitalTwinModels';
+import { LiveObservationState } from '../models/LiveObservationModels';
 import { MotionTokens } from '../utils/MotionTokens';
 import { TaskSessionPresentationService } from '../services/TaskSessionPresentationService';
 
@@ -23,6 +30,9 @@ interface TaskPipelineStep {
 export struct TaskWorkspace {
   @Prop compact: boolean = false;
   @Prop pageMargin: number = 18;
+  @Prop runMode: ObservationRunMode = ObservationRunMode.REAL;
+  @Prop replayManifest: ReplayAssetManifest | undefined = undefined;
+  @Prop digitalTwinPlaying: boolean = false;
   @Prop activeSession: TaskSession | undefined = undefined;
   @Prop history: TaskSession[] = [];
   @Prop storeReady: boolean = false;
@@ -34,6 +44,7 @@ export struct TaskWorkspace {
   @Prop coordinateModeCompatible: boolean = false;
   @Prop locationSynced: boolean = false;
   @Prop preflight: CameraPreflightResult | undefined = undefined;
+  @Prop liveObservation: LiveObservationState | undefined = undefined;
   @State private inspectedHistoryId: string = '';
 
   onGoToSky: () => void = (): void => {};
@@ -43,10 +54,20 @@ export struct TaskWorkspace {
   onArchive: () => void = (): void => {};
   onEndObservation: () => void = (): void => {};
   onOpenProducts: () => void = (): void => {};
+  onToggleSimulationPlayback: () => void = (): void => {};
+  onRestartSimulation: () => void = (): void => {};
+  onExitSimulation: () => void = (): void => {};
+  onShareReport: () => void = (): void => {};
 
   build() {
     Scroll() {
       Column({ space: 18 }) {
+        if (this.simulationActive()) {
+          this.SimulationBanner()
+        }
+        if (this.liveObservation !== undefined) {
+          this.LiveObservationBanner(this.liveObservation)
+        }
         if (this.storeWarning.length > 0) {
           this.WarningBanner(this.storeWarning)
         }
@@ -64,6 +85,65 @@ export struct TaskWorkspace {
     .width('100%')
     .scrollBar(BarState.Auto)
     .edgeEffect(EdgeEffect.Spring)
+  }
+
+  @Builder
+  private SimulationBanner() {
+    Row({ space: 12 }) {
+      SymbolGlyph($r('sys.symbol.play_circle'))
+        .fontSize(22)
+        .fontColor([$r('app.color.app_brand')])
+      Column({ space: 3 }) {
+        Text($r('app.string.digital_twin_watermark'))
+          .fontSize(14)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.app_brand'))
+        Text(this.replaySourceText())
+          .fontSize(10)
+          .fontColor($r('app.color.app_warning'))
+      }.layoutWeight(1)
+      Button($r('app.string.digital_twin_exit'))
+        .height(36)
+        .padding({ left: 14, right: 14 })
+        .fontSize(11)
+        .fontColor($r('app.color.app_text_primary'))
+        .backgroundColor($r('app.color.app_surface_secondary'))
+        .borderRadius(18)
+        .onClick(this.onExitSimulation)
+    }
+    .width('100%')
+    .padding(14)
+    .backgroundColor($r('app.color.app_surface_primary'))
+    .border({ width: 1, color: $r('app.color.app_brand') })
+    .borderRadius($r('app.float.corner_control'))
+  }
+
+  @Builder
+  private LiveObservationBanner(state: LiveObservationState) {
+    Row({ space: 10 }) {
+      Circle()
+        .width(9)
+        .height(9)
+        .fill(this.liveObservationColor(state.status))
+      Column({ space: 3 }) {
+        Text($r('app.string.live_observation_in_app'))
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.app_text_primary'))
+        Text(state.statusText)
+          .fontSize(10)
+          .fontColor($r('app.color.app_text_secondary'))
+          .maxLines(2)
+      }
+      .layoutWeight(1)
+      Text(this.liveObservationTail(state))
+        .fontSize(10)
+        .fontColor($r('app.color.app_brand'))
+    }
+    .width('100%')
+    .padding({ left: 14, right: 14, top: 11, bottom: 11 })
+    .backgroundColor($r('app.color.app_surface_secondary'))
+    .borderRadius($r('app.float.corner_control'))
   }
 
   @Builder
@@ -143,7 +223,11 @@ export struct TaskWorkspace {
           this.WarningList(session.warnings)
         }
         if (session.products.length > 0) {
-          this.ProductEntrance(session)
+          if (this.simulationActive() && this.replayManifest !== undefined) {
+            this.ReplayAssetSection(this.replayManifest)
+          } else {
+            this.ProductEntrance(session)
+          }
         }
       }
       .width(this.compact ? '100%' : 320)
@@ -175,15 +259,20 @@ export struct TaskWorkspace {
         this.StatusBadge(this.statusText(session.status), this.statusColor(session.status))
       }
       Flex({ direction: FlexDirection.Row, wrap: FlexWrap.Wrap }) {
+        if (this.simulationActive()) {
+          this.InfoCapsule($r('app.string.digital_twin_data_source'), this.replaySourceText())
+        }
         this.InfoCapsule($r('app.string.task_device_time'), this.timeText(session.startedAtMs))
         this.InfoCapsule($r('app.string.task_completed_frames'),
           session.kind === SessionKind.OBSERVATION ? $r('app.string.task_not_applicable') :
             `${session.completedFrames} / ${session.plan.frameCount}`)
         this.ConnectionBadge($r('app.string.task_mount_short'),
-          this.mountConnection === ConnectionState.CONNECTED)
+          this.mountConnection === ConnectionState.CONNECTED ||
+            (this.simulationActive() && this.mountConnection === ConnectionState.SIMULATED))
         if (session.kind !== SessionKind.OBSERVATION) {
           this.ConnectionBadge($r('app.string.task_camera_short'),
-            this.cameraConnection === ConnectionState.CONNECTED)
+            this.cameraConnection === ConnectionState.CONNECTED ||
+              (this.simulationActive() && this.cameraConnection === ConnectionState.SIMULATED))
         }
       }
       .width('100%')
@@ -276,20 +365,10 @@ export struct TaskWorkspace {
   @Builder
   private SessionActions(session: TaskSession) {
     Column({ space: 8 }) {
-      Row({ space: 10 }) {
-        if (this.canRefresh(session)) {
-          Button($r('app.string.task_refresh'))
-            .layoutWeight(1)
-            .height(48)
-            .fontSize(14)
-            .fontColor($r('app.color.app_text_primary'))
-            .backgroundColor($r('app.color.app_surface_primary'))
-            .borderRadius(24)
-            .onClick(this.onRefresh)
-        }
-        if (session.status === SessionStatus.WAITING_FOR_USER ||
-          session.status === SessionStatus.INTERRUPTED) {
-          Button($r('app.string.task_continue'))
+      if (this.simulationActive()) {
+        Row({ space: 10 }) {
+          Button(this.digitalTwinPlaying ? $r('app.string.digital_twin_pause') :
+            $r('app.string.digital_twin_play'))
             .layoutWeight(1)
             .height(48)
             .fontSize(14)
@@ -297,52 +376,99 @@ export struct TaskWorkspace {
             .fontColor($r('app.color.app_on_brand'))
             .backgroundColor($r('app.color.app_brand'))
             .borderRadius(24)
-            .onClick(this.onContinue)
-          Button($r('app.string.task_archive_failed'))
+            .onClick(this.onToggleSimulationPlayback)
+          Button($r('app.string.digital_twin_restart'))
             .layoutWeight(1)
             .height(48)
             .fontSize(14)
             .fontColor($r('app.color.app_text_primary'))
             .backgroundColor($r('app.color.app_surface_primary'))
             .borderRadius(24)
-            .onClick(this.onArchive)
-        }
-        if (session.kind === SessionKind.OBSERVATION && session.status === SessionStatus.RUNNING) {
-          Button($r('app.string.task_end_observation'))
-            .layoutWeight(1)
-            .height(48)
-            .fontSize(14)
-            .fontColor($r('app.color.app_text_primary'))
-            .backgroundColor($r('app.color.app_surface_primary'))
-            .borderRadius(24)
-            .onClick(this.onEndObservation)
-        } else if (session.kind !== SessionKind.OBSERVATION && !this.stopRequested &&
-          (session.status === SessionStatus.PREPARING || session.status === SessionStatus.RUNNING)) {
-          Button($r('app.string.task_stop_later_frames'))
-            .layoutWeight(1)
-            .height(48)
-            .fontSize(14)
-            .fontColor($r('app.color.sky_text_primary'))
-            .backgroundColor($r('app.color.app_error_container'))
-            .borderRadius(24)
-            .onClick(this.onStop)
-        }
-      }
-      .width('100%')
-      if (session.status === SessionStatus.INTERRUPTED) {
-        Text($r('app.string.task_continue_safety_note'))
+            .onClick(this.onRestartSimulation)
+        }.width('100%')
+        Text($r('app.string.digital_twin_task_not_persisted'))
           .fontSize(11)
           .lineHeight(17)
           .fontColor($r('app.color.app_warning'))
           .width('100%')
+      } else {
+        Row({ space: 10 }) {
+          if (this.canRefresh(session)) {
+            Button($r('app.string.task_refresh'))
+              .layoutWeight(1)
+              .height(48)
+              .fontSize(14)
+              .fontColor($r('app.color.app_text_primary'))
+              .backgroundColor($r('app.color.app_surface_primary'))
+              .borderRadius(24)
+              .onClick(this.onRefresh)
+          }
+          if (session.status === SessionStatus.WAITING_FOR_USER ||
+            session.status === SessionStatus.INTERRUPTED) {
+            Button($r('app.string.task_continue'))
+              .layoutWeight(1)
+              .height(48)
+              .fontSize(14)
+              .fontWeight(FontWeight.Bold)
+              .fontColor($r('app.color.app_on_brand'))
+              .backgroundColor($r('app.color.app_brand'))
+              .borderRadius(24)
+              .onClick(this.onContinue)
+            Button($r('app.string.task_archive_failed'))
+              .layoutWeight(1)
+              .height(48)
+              .fontSize(14)
+              .fontColor($r('app.color.app_text_primary'))
+              .backgroundColor($r('app.color.app_surface_primary'))
+              .borderRadius(24)
+              .onClick(this.onArchive)
+          }
+          if (session.kind === SessionKind.OBSERVATION && session.status === SessionStatus.RUNNING) {
+            Button($r('app.string.task_end_observation'))
+              .layoutWeight(1)
+              .height(48)
+              .fontSize(14)
+              .fontColor($r('app.color.app_text_primary'))
+              .backgroundColor($r('app.color.app_surface_primary'))
+              .borderRadius(24)
+              .onClick(this.onEndObservation)
+          } else if (session.kind !== SessionKind.OBSERVATION && !this.stopRequested &&
+            (session.status === SessionStatus.PREPARING || session.status === SessionStatus.RUNNING)) {
+            Button($r('app.string.task_stop_later_frames'))
+              .layoutWeight(1)
+              .height(48)
+              .fontSize(14)
+              .fontColor($r('app.color.sky_text_primary'))
+              .backgroundColor($r('app.color.app_error_container'))
+              .borderRadius(24)
+              .onClick(this.onStop)
+          }
+        }
+        .width('100%')
+        if (session.status === SessionStatus.INTERRUPTED) {
+          Text($r('app.string.task_continue_safety_note'))
+            .fontSize(11)
+            .lineHeight(17)
+            .fontColor($r('app.color.app_warning'))
+            .width('100%')
+        }
+        if (this.stopRequested) {
+          Text($r('app.string.task_soft_cancel_pending'))
+            .fontSize(11)
+            .lineHeight(17)
+            .fontColor($r('app.color.app_warning'))
+            .width('100%')
+        }
       }
-      if (this.stopRequested) {
-        Text($r('app.string.task_soft_cancel_pending'))
-          .fontSize(11)
-          .lineHeight(17)
-          .fontColor($r('app.color.app_warning'))
-          .width('100%')
-      }
+      Button($r('app.string.observation_share_report'))
+        .width('100%')
+        .height(44)
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor($r('app.color.app_text_primary'))
+        .backgroundColor($r('app.color.app_surface_primary'))
+        .borderRadius(22)
+        .onClick(this.onShareReport)
     }
     .width('100%')
   }
@@ -351,11 +477,14 @@ export struct TaskWorkspace {
   private ReadinessSummary(short: boolean) {
     Flex({ direction: short && !this.compact ? FlexDirection.Row : FlexDirection.Column,
       wrap: FlexWrap.Wrap }) {
-      this.ReadinessItem($r('app.string.task_ready_mount'), this.mountConnection === ConnectionState.CONNECTED)
+      this.ReadinessItem(this.simulationActive() ? $r('app.string.digital_twin_ready_script') :
+        $r('app.string.task_ready_mount'), this.simulationActive() ||
+          this.mountConnection === ConnectionState.CONNECTED)
       this.ReadinessItem($r('app.string.task_ready_home'), this.mountHomed)
       this.ReadinessItem($r('app.string.task_ready_coordinate'), this.coordinateModeCompatible)
       this.ReadinessItem($r('app.string.task_ready_location'), this.locationSynced)
-      this.ReadinessItem($r('app.string.task_ready_camera'), this.cameraConnection === ConnectionState.CONNECTED)
+      this.ReadinessItem($r('app.string.task_ready_camera'), this.cameraConnection === ConnectionState.CONNECTED ||
+        (this.simulationActive() && this.cameraConnection === ConnectionState.SIMULATED))
     }
     .width('100%')
   }
@@ -377,9 +506,14 @@ export struct TaskWorkspace {
   private StageDetail(session: TaskSession) {
     Column({ space: 8 }) {
       this.DetailRow($r('app.string.task_stage'), this.stageTitle(session.stage))
-      this.DetailRow($r('app.string.task_child_task'),
-        session.checkpoint.childTaskId.length > 0 ? session.checkpoint.childTaskId.substring(0, 8) :
-          $r('app.string.task_no_child_task'))
+      if (this.simulationActive()) {
+        this.DetailRow($r('app.string.digital_twin_data_source'), this.replaySourceText())
+        this.DetailRow($r('app.string.task_child_task'), $r('app.string.digital_twin_no_gateway_request'))
+      } else {
+        this.DetailRow($r('app.string.task_child_task'),
+          session.checkpoint.childTaskId.length > 0 ? session.checkpoint.childTaskId.substring(0, 8) :
+            $r('app.string.task_no_child_task'))
+      }
       this.DetailRow($r('app.string.task_real_device_time'), this.timeText(Date.now()))
       if (session.errorMessage.length > 0) {
         Text(session.errorMessage)
@@ -468,9 +602,54 @@ export struct TaskWorkspace {
   }
 
   @Builder
+  private ReplayAssetSection(manifest: ReplayAssetManifest) {
+    Column({ space: 10 }) {
+      Row({ space: 8 }) {
+        SymbolGlyph($r('sys.symbol.list_bullet_square'))
+          .fontSize(17)
+          .fontColor([$r('app.color.app_brand')])
+        Text($r('app.string.digital_twin_assets_title'))
+          .fontSize(12)
+          .fontWeight(FontWeight.Bold)
+          .fontColor($r('app.color.app_text_primary'))
+          .layoutWeight(1)
+        Text(this.replaySourceText())
+          .fontSize(10)
+          .fontColor($r('app.color.app_warning'))
+      }.width('100%')
+      ForEach(manifest.files, (asset: ReplayAsset) => {
+        Row({ space: 8 }) {
+          Circle().width(6).height(6).fill($r('app.color.app_brand'))
+          Column({ space: 2 }) {
+            Text(asset.fileName)
+              .fontSize(10)
+              .fontColor($r('app.color.app_text_primary'))
+              .maxLines(1)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(asset.description)
+              .fontSize(9)
+              .fontColor($r('app.color.app_text_tertiary'))
+              .maxLines(1)
+          }.layoutWeight(1)
+        }.width('100%')
+      }, (asset: ReplayAsset): string => asset.id)
+      Text(manifest.note)
+        .fontSize(9)
+        .lineHeight(14)
+        .fontColor($r('app.color.app_warning'))
+        .width('100%')
+    }
+    .width('100%')
+    .padding(12)
+    .backgroundColor($r('app.color.app_surface_primary'))
+    .borderRadius($r('app.float.corner_control'))
+  }
+
+  @Builder
   private HistorySection() {
     Column({ space: 12 }) {
-      this.SectionTitle($r('app.string.task_history_title'), $r('app.string.task_history_subtitle'))
+      this.SectionTitle($r('app.string.task_history_title'), this.simulationActive() ?
+        $r('app.string.digital_twin_real_history_note') : $r('app.string.task_history_subtitle'))
       if (this.history.length === 0) {
         Text($r('app.string.task_history_empty'))
           .fontSize(12)
@@ -681,6 +860,21 @@ export struct TaskWorkspace {
     return $r('app.color.app_brand');
   }
 
+  private liveObservationColor(status: SessionStatus): ResourceColor {
+    if (status === SessionStatus.SUCCEEDED) return $r('app.color.app_success');
+    if (status === SessionStatus.FAILED) return $r('app.color.app_error');
+    if (status === SessionStatus.CANCELLED || status === SessionStatus.INTERRUPTED ||
+      status === SessionStatus.WAITING_FOR_USER) return $r('app.color.app_warning');
+    return $r('app.color.app_brand');
+  }
+
+  private liveObservationTail(state: LiveObservationState): string {
+    if (state.runMode === ObservationRunMode.SIMULATION) {
+      return `${Math.round(state.progressPercent)}% · #${state.sequence}`;
+    }
+    return `${Math.round(state.progressPercent)}% · ${this.timeText(state.updatedAtMs)}`;
+  }
+
   private stepColor(state: WorkflowStepState): ResourceColor {
     if (state === WorkflowStepState.SUCCEEDED) return $r('app.color.app_success');
     if (state === WorkflowStepState.FAILED) return $r('app.color.app_error');
@@ -734,5 +928,17 @@ export struct TaskWorkspace {
 
   private observationHistoryText(): ResourceStr {
     return $r('app.string.task_observation_history');
+  }
+
+  private replaySourceText(): ResourceStr {
+    if (this.replayManifest !== undefined &&
+      this.replayManifest.source === ReplayAssetSource.REAL_CAPTURE_REPLAY) {
+      return $r('app.string.digital_twin_source_real_history');
+    }
+    return $r('app.string.digital_twin_source_simulated');
+  }
+
+  private simulationActive(): boolean {
+    return this.runMode === ObservationRunMode.SIMULATION;
   }
 }
