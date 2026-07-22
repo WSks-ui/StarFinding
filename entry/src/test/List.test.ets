@@ -27,6 +27,7 @@ import devicePairingServiceTest from './DevicePairingService.test';
 import digitalTwinReplayServiceTest from './DigitalTwinReplayService.test';
 import observationShareServiceTest from './ObservationShareService.test';
 import liveObservationServiceTest from './LiveObservationService.test';
+import skySurveyBackdropMathTest from './SkySurveyBackdropMath.test';
 
 export default function testsuite() {
   starFindingCoreTest();
@@ -58,4 +59,5 @@ export default function testsuite() {
   digitalTwinReplayServiceTest();
   observationShareServiceTest();
   liveObservationServiceTest();
+  skySurveyBackdropMathTest();
 }

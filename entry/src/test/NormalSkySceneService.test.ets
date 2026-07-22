@@ -61,6 +61,53 @@ export default function normalSkySceneServiceTest(): void {
       expect(selected !== undefined && selected.id === 'messier-31' && selected.selected).assertTrue();
     });
 
+    it('银河平面辅助线按真实天球投影生成且支持关闭图层', 0, () => {
+      const viewport: NormalSkyViewport = {
+        centerRaHours: 18.0,
+        centerDecDegrees: -24.0,
+        fieldOfViewDegrees: 90.0,
+        rotationDegrees: 0.0,
+        orientation: SkyMapOrientation.EQUATORIAL_NORTH_UP
+      };
+      const service: NormalSkySceneService = new NormalSkySceneService(
+        new VisibleStarCatalogService(), new NormalSkyCatalogService());
+      const visibleScene: NormalSkyScene = service.build({
+        viewport: viewport,
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: {
+          galacticPlane: true,
+          constellationLines: DEFAULT_SKY_LAYERS.constellationLines,
+          equatorialGrid: DEFAULT_SKY_LAYERS.equatorialGrid,
+          ecliptic: DEFAULT_SKY_LAYERS.ecliptic,
+          horizon: DEFAULT_SKY_LAYERS.horizon,
+          deepSky: DEFAULT_SKY_LAYERS.deepSky,
+          solarSystem: DEFAULT_SKY_LAYERS.solarSystem,
+          directionGuides: DEFAULT_SKY_LAYERS.directionGuides
+        },
+        selectedTargetId: 'messier-8',
+        timestampMs: Date.UTC(2026, 6, 22, 12, 0, 0)
+      });
+      expect(visibleScene.galacticPlaneLines.length > 0).assertTrue();
+
+      const hiddenScene: NormalSkyScene = service.build({
+        viewport: viewport,
+        size: { widthPixels: 800.0, heightPixels: 600.0 },
+        layers: {
+          galacticPlane: false,
+          constellationLines: DEFAULT_SKY_LAYERS.constellationLines,
+          equatorialGrid: DEFAULT_SKY_LAYERS.equatorialGrid,
+          ecliptic: DEFAULT_SKY_LAYERS.ecliptic,
+          horizon: DEFAULT_SKY_LAYERS.horizon,
+          deepSky: DEFAULT_SKY_LAYERS.deepSky,
+          solarSystem: DEFAULT_SKY_LAYERS.solarSystem,
+          directionGuides: DEFAULT_SKY_LAYERS.directionGuides
+        },
+        selectedTargetId: 'messier-8',
+        timestampMs: Date.UTC(2026, 6, 22, 12, 0, 0)
+      });
+      expect(hiddenScene.galacticPlaneLines.length === 0).assertTrue();
+    });
+
     it('有观测地点时生成地平遮罩和地平线', 0, () => {
       const observer: ObserverState = {
         latitudeDegrees: 34.75,
