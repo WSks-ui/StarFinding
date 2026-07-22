@@ -32,6 +32,7 @@ export struct NormalSkyMap {
   @Prop @Watch('onRenderInputChanged') scene: NormalSkyScene;
   @Prop @Watch('onRenderInputChanged') widthPixels: number = 1.0;
   @Prop @Watch('onRenderInputChanged') heightPixels: number = 1.0;
+  @Prop @Watch('onBackdropVisibilityChanged') photographyBackdropVisible: boolean = false;
   onObjectSelected: (objectId: string) => void = (_objectId: string): void => {};
 
   private settings: RenderingContextSettings = new RenderingContextSettings(true);
@@ -95,6 +96,15 @@ export struct NormalSkyMap {
     this.drawScene();
   }
 
+  /**
+   * 摄影底图与目录场景拥有独立修订号。纹理从“正在加载”切换到“已就绪”时，
+   * 即使星表没有变化，也必须重画静态 Canvas 的夜视遮罩和目录恒星层。
+   */
+  private onBackdropVisibilityChanged(): void {
+    this.lastStaticRevision = -1;
+    this.drawScene();
+  }
+
   private drawScene(): void {
     if (!this.staticCanvasReady && !this.dynamicCanvasReady) return;
     const width: number = Math.max(1.0, this.widthPixels);
@@ -113,14 +123,61 @@ export struct NormalSkyMap {
 
   private drawStaticScene(width: number, height: number): void {
     this.context.clearRect(0.0, 0.0, width, height);
-    this.context.fillStyle = '#050A10';
-    this.context.globalAlpha = 1.0;
-    this.context.fillRect(0.0, 0.0, width, height);
-    this.drawPolylines(this.scene.gridLines, '#29404E', 0.48, 0.7);
+    this.drawSkyBackground(width, height);
+    this.drawGalacticPlane(this.scene.galacticPlaneLines);
+    this.drawPolylines(this.scene.gridLines, '#29404E', 0.38, 0.7);
     this.drawPolylines(this.scene.eclipticLines, '#B69955', 0.68, 1.0);
-    this.drawPolylines(this.scene.constellationLines, '#426B82', 0.76, 1.1);
-    this.drawObjects(this.scene.staticObjects, width, height);
+    const constellationOpacity: number =
+      this.scene.viewportSnapshot.fieldOfViewDegrees >= 100.0 ? 0.52 : 0.70;
+    this.drawPolylines(this.scene.constellationLines, '#426B82', constellationOpacity, 1.0);
+    this.drawObjects(this.scene.staticObjects, width, height, this.photographyBackdropVisible);
     this.resetContextState();
+  }
+
+  /**
+   * 摄影底图由页面层的独立 @State PixelMap 绘制在普通星图下方。
+   *
+   * API 23 真机会丢失封装在对象 @Prop 内的原生 PixelMap 纹理句柄，因此这里必须保持
+   * Canvas 透明，只叠加星座线、标签和目录图符。导航模式仍绘制完整深色背景。
+   */
+  private drawSkyBackground(width: number, height: number): void {
+    if (this.photographyBackdropVisible) {
+      return;
+    }
+    const gradient: CanvasGradient = this.context.createRadialGradient(
+      width * 0.52, height * 0.44, Math.min(width, height) * 0.06,
+      width * 0.52, height * 0.44, Math.sqrt(width * width + height * height) * 0.66);
+    gradient.addColorStop(0.0, '#08131E');
+    gradient.addColorStop(0.56, '#050C14');
+    gradient.addColorStop(1.0, '#02060B');
+    this.context.globalAlpha = 1.0;
+    this.context.fillStyle = gradient;
+    this.context.fillRect(0.0, 0.0, width, height);
+  }
+
+  private drawGalacticPlane(lines: SkyPolyline[]): void {
+    if (lines.length === 0) {
+      return;
+    }
+    this.context.save();
+    this.context.strokeStyle = '#9B86C7';
+    this.context.globalAlpha = 0.62;
+    this.context.lineWidth = 1.0;
+    this.context.setLineDash([4.0, 4.0]);
+    this.context.beginPath();
+    for (let index: number = 0; index < lines.length; index++) {
+      const points: SkyScreenPoint[] = lines[index].points;
+      if (points.length < 2) {
+        continue;
+      }
+      this.context.moveTo(points[0].xPixels, points[0].yPixels);
+      for (let pointIndex: number = 1; pointIndex < points.length; pointIndex++) {
+        this.context.lineTo(points[pointIndex].xPixels, points[pointIndex].yPixels);
+      }
+    }
+    this.context.stroke();
+    this.context.setLineDash([]);
+    this.context.restore();
   }
 
   private drawDynamicScene(width: number, height: number): void {
@@ -197,11 +254,12 @@ export struct NormalSkyMap {
     this.context.restore();
   }
 
-  private drawObjects(objects: ProjectedSkyObject[], width: number, height: number): void {
+  private drawObjects(objects: ProjectedSkyObject[], width: number, height: number,
+    suppressCatalogStars: boolean = false): void {
     const occupied: SkyLabelBox[] = [];
     let selectedObject: ProjectedSkyObject | undefined = undefined;
     this.context.save();
-    this.prepareObjectBuckets(objects, width, height);
+    this.prepareObjectBuckets(objects, width, height, suppressCatalogStars);
     this.drawStarDiscBuckets();
     for (let index: number = 0; index < objects.length; index++) {
       const object: ProjectedSkyObject = objects[index];
@@ -235,7 +293,8 @@ export struct NormalSkyMap {
     this.context.restore();
   }
 
-  private prepareObjectBuckets(objects: ProjectedSkyObject[], width: number, height: number): void {
+  private prepareObjectBuckets(objects: ProjectedSkyObject[], width: number, height: number,
+    suppressCatalogStars: boolean = false): void {
     this.clearObjectBuckets();
     for (let index: number = 0; index < objects.length; index++) {
       const object: ProjectedSkyObject = objects[index];
@@ -245,7 +304,11 @@ export struct NormalSkyMap {
       if (object.label.length > 0) {
         this.labelBuckets[this.labelBucketIndex(object)].push(object);
       }
-      if (object.glyphKind !== SkyObjectGlyphKind.STAR || object.selected) {
+      /*
+       * 摄影模式的底图已经保留了大尺度恒星云和可见光星野。这里不再叠加 HYG
+       * 普通星点及其高光，避免亮星出现双影；名称、命中对象和被选中的星仍完整保留。
+       */
+      if (object.glyphKind !== SkyObjectGlyphKind.STAR || object.selected || suppressCatalogStars) {
         continue;
       }
       const dimmed: boolean = object.aboveHorizon === false;

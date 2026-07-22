@@ -1,5 +1,6 @@
 import { common } from '@kit.AbilityKit';
 import { FrameCallback } from '@kit.ArkUI';
+import { image } from '@kit.ImageKit';
 import { ArSkyDome } from '../components/ArSkyDome';
 import { DeviceCameraPreview } from '../components/DeviceCameraPreview';
 import { DeviceWorkspace } from '../components/DeviceWorkspace';
@@ -151,6 +152,10 @@ import {
   LiveObservationService,
   SimulationEntryDecision,
   SimulationEntryState,
+  SkyBackdropMode,
+  SkySurveyBackdropFrame,
+  SkySurveyBackdropService,
+  SkySurveyBackdropStatus,
   TaskSessionStore,
   TaskSessionPresentationService,
   VisibleStar,
@@ -198,6 +203,7 @@ function emptyNormalSkyScene(): NormalSkyScene {
     constellationLines: [],
     gridLines: [],
     eclipticLines: [],
+    galacticPlaneLines: [],
     horizonLines: [],
     trajectoryLines: [],
     horizonMask: [],
@@ -269,6 +275,16 @@ struct Index {
     NormalSkyViewStateService.defaultState());
   @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
   @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
+  @State private normalBackdropMode: SkyBackdropMode = SkyBackdropMode.NAVIGATION;
+  @State private skySurveyBackdropFrame: SkySurveyBackdropFrame =
+    SkySurveyBackdropService.emptyFrame();
+  /**
+   * PixelMap 必须作为页面直属状态绑定 Image。
+   *
+   * API 23 真机不能可靠渲染封装在 SkySurveyBackdropFrame 后再传入子组件的原生纹理句柄；
+   * 独立状态与官方 PixelMap 示例一致，同时让普通星图 Canvas 保持纯透明叠加层。
+   */
+  @State private skySurveyBackdropPixelMap: image.PixelMap | undefined = undefined;
   @State private normalTimeState: NormalSkyTimeState = NormalSkyTimeService.realtime();
   @State private normalLayerPanelOpen: boolean = false;
   @State private skyViewportWidth: number = 600;
@@ -405,6 +421,11 @@ struct Index {
   private readonly normalSkyCatalog: NormalSkyCatalogService = new NormalSkyCatalogService();
   private readonly normalSkySceneService: NormalSkySceneService =
     new NormalSkySceneService(this.visibleStarCatalog, this.normalSkyCatalog);
+  /**
+   * 摄影底图与目录场景分离：停止交互后才异步重投影纹理，不能进入每个触摸帧的场景构建。
+   */
+  private readonly skySurveyBackdropService: SkySurveyBackdropService =
+    new SkySurveyBackdropService();
   private readonly skyDomeSceneService: SkyDomeSceneService = new SkyDomeSceneService();
   private readonly gestureInterpreter: GestureInterpreter = new GestureInterpreter();
   private readonly normalSkyGestureController: NormalSkyGestureController = new NormalSkyGestureController();
@@ -435,6 +456,10 @@ struct Index {
     });
   private normalSceneSettleTimer: number = -1;
   private normalSceneInteractive: boolean = false;
+  private skySurveyBackdropGeneration: number = 0;
+  private skySurveyBackdropTimer: number = -1;
+  private skySurveyBackdropRenderedKey: string = '';
+  private skySurveyBackdropPendingKey: string = '';
   private normalInertiaTimer: number = -1;
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
@@ -502,6 +527,7 @@ struct Index {
     this.clearTaskPolling();
     this.clearNormalMotion();
     this.clearNormalSceneTimer();
+    this.clearSkySurveyBackdrop(true);
     this.visibleStarCatalog.clear();
     this.normalSkyCatalog.clear();
     this.domeCatalogStars = [];
@@ -957,14 +983,30 @@ struct Index {
         .height('100%')
         .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       } else {
-        NormalSkyMap({
-          scene: this.normalScene,
-          widthPixels: this.skyViewportWidth,
-          heightPixels: this.skyViewportHeight,
-          onObjectSelected: (objectId: string): void => {
-            this.selectNormalSkyObject(objectId);
+        Stack() {
+          if (this.skySurveyBackdropPixelMap !== undefined &&
+            (this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.READY ||
+              this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.LOADING) &&
+            this.skySurveyBackdropFrame.opacity > 0.0) {
+            Image(this.skySurveyBackdropPixelMap)
+              .width('100%')
+              .height('100%')
+              .objectFit(ImageFit.Fill)
+              .opacity(this.skySurveyBackdropFrame.opacity)
+              .hitTestBehavior(HitTestMode.None)
           }
-        })
+          NormalSkyMap({
+            scene: this.normalScene,
+            widthPixels: this.skyViewportWidth,
+            heightPixels: this.skyViewportHeight,
+            photographyBackdropVisible: this.hasVisibleSkySurveyBackdrop(),
+            onObjectSelected: (objectId: string): void => {
+              this.selectNormalSkyObject(objectId);
+            }
+          })
+          .width('100%')
+          .height('100%')
+        }
         .width('100%')
         .height('100%')
         .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
@@ -1047,6 +1089,8 @@ struct Index {
     NormalSkyControls({
       viewport: this.normalViewport,
       layers: this.normalLayers,
+      backdropMode: this.normalBackdropMode,
+      backdropStatus: this.skySurveyBackdropFrame.status,
       panelOpen: this.normalLayerPanelOpen,
       viewportWidth: this.skyViewportWidth,
       viewportHeight: this.skyViewportHeight,
@@ -1064,7 +1108,10 @@ struct Index {
       onFieldOfViewChange: (fieldOfViewDegrees: number): void => {
         this.setNormalSkyFieldOfView(fieldOfViewDegrees);
       },
-      onLayerChange: (layer: number, enabled: boolean): void => { this.setNormalLayer(layer, enabled); }
+      onLayerChange: (layer: number, enabled: boolean): void => { this.setNormalLayer(layer, enabled); },
+      onBackdropModeChange: (mode: SkyBackdropMode): void => {
+        this.setNormalSkyBackdropMode(mode);
+      }
     })
   }
 
@@ -1623,6 +1670,7 @@ struct Index {
     });
     if (mode === 0) {
       this.clearNormalMotion();
+      this.clearSkySurveyBackdrop(false);
       this.setGestureEnabled(false);
       this.updateProjectedTargets(true);
     } else {
@@ -2621,6 +2669,11 @@ struct Index {
   }
 
   private markNormalSceneInteractive(): void {
+    if (!this.normalSceneInteractive) {
+      // 已在后台排队的像素重投影不能在手指刚接触屏幕时抢占主线程；
+      // 代次失效后仍会安全释放过期 PixelMap，当前可见底图保持不动。
+      this.invalidateSkySurveyBackdropRequest();
+    }
     this.normalSceneInteractive = true;
     if (this.normalSceneSettleTimer >= 0) {
       clearTimeout(this.normalSceneSettleTimer);
@@ -2659,6 +2712,145 @@ struct Index {
       showDirectionMarkers: NormalSkyLayoutService.showDirectionMarkers(
         this.useSkyBottomSheet(), this.skyOverlayPanel)
       });
+    this.scheduleSkySurveyBackdropRefresh();
+  }
+
+  /**
+   * 摄影纹理只在普通星图稳定后刷新。交互时保留上一帧正确纹理，目录对象仍以实时
+   * 球面投影响应触控；因此不会把昂贵像素反投影塞进拖动、缩放或旋转的显示帧。
+   */
+  private scheduleSkySurveyBackdropRefresh(): void {
+    if (!this.isPhotographyBackdropActive() || this.normalSceneInteractive) {
+      return;
+    }
+    const requestKey: string = this.skySurveyBackdropKey();
+    if (this.normalViewport.fieldOfViewDegrees <= 20.0) {
+      if (requestKey === this.skySurveyBackdropRenderedKey &&
+        this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.DISABLED) {
+        return;
+      }
+      this.invalidateSkySurveyBackdropRequest();
+      this.skySurveyBackdropRenderedKey = requestKey;
+      this.replaceSkySurveyBackdropFrame(SkySurveyBackdropService.emptyFrame(
+        '摄影底图仅在 20° 以上视场显示'));
+      return;
+    }
+    if (requestKey === this.skySurveyBackdropRenderedKey &&
+      (this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.READY ||
+        this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.FAILED)) {
+      return;
+    }
+    if (requestKey === this.skySurveyBackdropPendingKey) {
+      return;
+    }
+    this.invalidateSkySurveyBackdropRequest();
+    const generation: number = this.skySurveyBackdropGeneration;
+    this.skySurveyBackdropPendingKey = requestKey;
+    const previousFrame: SkySurveyBackdropFrame = this.skySurveyBackdropFrame;
+    // 保留上一张有效 PixelMap，直到同一代次的精确投影完成，避免底图在停手后闪黑。
+    this.skySurveyBackdropFrame = {
+      status: SkySurveyBackdropStatus.LOADING,
+      pixelMap: previousFrame.pixelMap,
+      widthPixels: previousFrame.widthPixels,
+      heightPixels: previousFrame.heightPixels,
+      opacity: previousFrame.opacity,
+      generation: generation,
+      message: '正在校准摄影底图'
+    };
+    this.skySurveyBackdropTimer = setTimeout(() => {
+      this.skySurveyBackdropTimer = -1;
+      this.renderSkySurveyBackdrop(generation, requestKey);
+    }, 150);
+  }
+
+  private async renderSkySurveyBackdrop(generation: number, requestKey: string): Promise<void> {
+    const context: common.UIAbilityContext | undefined =
+      AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
+    let frame: SkySurveyBackdropFrame;
+    if (context === undefined) {
+      frame = {
+        status: SkySurveyBackdropStatus.FAILED,
+        pixelMap: undefined,
+        widthPixels: 0,
+        heightPixels: 0,
+        opacity: 0.0,
+        generation: generation,
+        message: '应用上下文未就绪'
+      };
+    } else {
+      frame = await this.skySurveyBackdropService.render(
+        context, this.normalViewport, this.normalSkySize(), generation);
+    }
+    /*
+     * 新一次拖动、模式切换或离开页面都会递增 generation。过期结果即使已创建
+     * PixelMap 也只能释放，绝不能覆盖当前视口对应的纹理。
+     */
+    if (generation !== this.skySurveyBackdropGeneration || requestKey !== this.skySurveyBackdropKey() ||
+      !this.isPhotographyBackdropActive()) {
+      this.skySurveyBackdropService.release(frame);
+      return;
+    }
+    this.skySurveyBackdropPendingKey = '';
+    this.skySurveyBackdropRenderedKey = requestKey;
+    this.replaceSkySurveyBackdropFrame(frame);
+  }
+
+  private isPhotographyBackdropActive(): boolean {
+    return this.pageVisible && this.activeSection === 0 && this.skyMode === 1 &&
+      this.normalBackdropMode === SkyBackdropMode.VISIBLE_PHOTOGRAPHY;
+  }
+
+  /**
+   * 子 Canvas 只需要知道是否应保持透明和隐藏重复 HYG 星点，不能接收 PixelMap。
+   * API 23 的原生纹理句柄始终由页面直属 Image 持有，避免经过对象 @Prop 再次封装。
+   */
+  private hasVisibleSkySurveyBackdrop(): boolean {
+    return this.skySurveyBackdropPixelMap !== undefined &&
+      (this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.READY ||
+        this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.LOADING) &&
+      this.skySurveyBackdropFrame.opacity > 0.0;
+  }
+
+  /**
+   * 纹理的重投影键只包含真正影响球面采样的几何状态；模拟时间、标签和动态行星变化
+   * 不会触发重算，因为可见光银河参考图固定在 ICRS/Galactic 坐标中。
+   */
+  private skySurveyBackdropKey(): string {
+    return `${this.normalViewport.centerRaHours.toFixed(4)}|` +
+      `${this.normalViewport.centerDecDegrees.toFixed(4)}|` +
+      `${this.normalViewport.fieldOfViewDegrees.toFixed(3)}|` +
+      `${this.normalViewport.rotationDegrees.toFixed(3)}|` +
+      `${Math.round(this.skyViewportWidth)}|${Math.round(this.skyViewportHeight)}`;
+  }
+
+  private invalidateSkySurveyBackdropRequest(): void {
+    this.skySurveyBackdropGeneration++;
+    this.skySurveyBackdropPendingKey = '';
+    if (this.skySurveyBackdropTimer >= 0) {
+      clearTimeout(this.skySurveyBackdropTimer);
+      this.skySurveyBackdropTimer = -1;
+    }
+  }
+
+  private clearSkySurveyBackdrop(releaseSource: boolean): void {
+    this.invalidateSkySurveyBackdropRequest();
+    this.skySurveyBackdropRenderedKey = '';
+    const previousFrame: SkySurveyBackdropFrame = this.skySurveyBackdropFrame;
+    this.skySurveyBackdropPixelMap = undefined;
+    this.skySurveyBackdropFrame = SkySurveyBackdropService.emptyFrame();
+    this.skySurveyBackdropService.release(previousFrame);
+    if (releaseSource) {
+      this.skySurveyBackdropService.clear();
+    }
+  }
+
+  private replaceSkySurveyBackdropFrame(frame: SkySurveyBackdropFrame): void {
+    const previousFrame: SkySurveyBackdropFrame = this.skySurveyBackdropFrame;
+    this.skySurveyBackdropPixelMap = frame.pixelMap;
+    this.skySurveyBackdropFrame = frame;
+    if (previousFrame.pixelMap !== undefined) {
+      this.skySurveyBackdropService.release(previousFrame);
+    }
   }
 
   private normalGestureAnchorX(value: number): number {
@@ -2706,6 +2898,7 @@ struct Index {
 
   private setNormalLayer(layer: number, enabled: boolean): void {
     const next: SkyLayerVisibility = {
+      galacticPlane: this.normalLayers.galacticPlane,
       constellationLines: this.normalLayers.constellationLines,
       equatorialGrid: this.normalLayers.equatorialGrid,
       ecliptic: this.normalLayers.ecliptic,
@@ -2714,14 +2907,29 @@ struct Index {
       solarSystem: this.normalLayers.solarSystem,
       directionGuides: this.normalLayers.directionGuides
     };
-    if (layer === 0) next.constellationLines = enabled;
-    if (layer === 1) next.equatorialGrid = enabled;
-    if (layer === 2) next.ecliptic = enabled;
-    if (layer === 3) next.horizon = enabled;
-    if (layer === 4) next.deepSky = enabled;
-    if (layer === 5) next.solarSystem = enabled;
-    if (layer === 6) next.directionGuides = enabled;
+    if (layer === 0) next.galacticPlane = enabled;
+    if (layer === 1) next.constellationLines = enabled;
+    if (layer === 2) next.equatorialGrid = enabled;
+    if (layer === 3) next.ecliptic = enabled;
+    if (layer === 4) next.horizon = enabled;
+    if (layer === 5) next.deepSky = enabled;
+    if (layer === 6) next.solarSystem = enabled;
+    if (layer === 7) next.directionGuides = enabled;
     this.normalLayers = next;
+    this.updateNormalScene();
+  }
+
+  private setNormalSkyBackdropMode(mode: SkyBackdropMode): void {
+    if (mode === this.normalBackdropMode) {
+      return;
+    }
+    this.normalBackdropMode = mode;
+    if (mode === SkyBackdropMode.NAVIGATION) {
+      this.clearSkySurveyBackdrop(false);
+      this.operationMessage = '已切换为导航星图';
+    } else {
+      this.operationMessage = '已切换为摄影底图；仅作视觉参考，不参与定位或设备控制';
+    }
     this.updateNormalScene();
   }
 

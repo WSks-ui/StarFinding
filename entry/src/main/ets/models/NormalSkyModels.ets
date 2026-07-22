@@ -83,6 +83,8 @@ export interface NormalSkyProjection {
 }
 
 export interface SkyLayerVisibility {
+  /** 仅作为坐标辅助的银河平面细线，不承载真实星云、尘埃或恒星纹理。 */
+  galacticPlane: boolean;
   constellationLines: boolean;
   equatorialGrid: boolean;
   ecliptic: boolean;
@@ -127,6 +129,7 @@ export enum SkyPolylineKind {
   CONSTELLATION = 'constellation',
   GRID = 'grid',
   ECLIPTIC = 'ecliptic',
+  GALACTIC = 'galactic',
   HORIZON = 'horizon',
   TRAJECTORY = 'trajectory'
 }
@@ -195,6 +198,7 @@ export interface NormalSkyScene {
   constellationLines: SkyPolyline[];
   gridLines: SkyPolyline[];
   eclipticLines: SkyPolyline[];
+  galacticPlaneLines: SkyPolyline[];
   horizonLines: SkyPolyline[];
   trajectoryLines: SkyPolyline[];
   horizonMask: SkyScreenRect[];
@@ -222,6 +226,7 @@ export interface InteractiveSkyTransform {
 }
 
 export const DEFAULT_SKY_LAYERS: SkyLayerVisibility = {
+  galacticPlane: false,
   constellationLines: true,
   equatorialGrid: false,
   ecliptic: false,

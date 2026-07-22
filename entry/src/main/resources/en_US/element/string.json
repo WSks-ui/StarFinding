@@ -1,6 +1,34 @@
 {
   "string": [
     {
+      "name": "normal_sky_galactic_plane",
+      "value": "Galactic plane"
+    },
+    {
+      "name": "normal_sky_backdrop_navigation",
+      "value": "Navigation"
+    },
+    {
+      "name": "normal_sky_backdrop_photography",
+      "value": "Photo"
+    },
+    {
+      "name": "normal_sky_backdrop_loading",
+      "value": "Calibrating photo backdrop…"
+    },
+    {
+      "name": "normal_sky_backdrop_reference",
+      "value": "ESO visible-light reference · visual only"
+    },
+    {
+      "name": "normal_sky_backdrop_unavailable",
+      "value": "Photo backdrop unavailable; navigation sky remains available"
+    },
+    {
+      "name": "normal_sky_backdrop_deep_view",
+      "value": "Photo backdrop is shown above a 20° field of view"
+    },
+    {
       "name": "device_network_settings_title",
       "value": "Device network addresses"
     },

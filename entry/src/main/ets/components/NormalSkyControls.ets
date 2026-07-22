@@ -3,6 +3,10 @@ import {
   SkyLayerVisibility,
   SkyMapOrientation
 } from '../models/NormalSkyModels';
+import {
+  SkyBackdropMode,
+  SkySurveyBackdropStatus
+} from '../services/SkySurveyBackdropService';
 import { MotionTokens } from '../utils/MotionTokens';
 import { NormalSkyLayoutService } from '../services/NormalSkyLayoutService';
 
@@ -11,6 +15,8 @@ import { NormalSkyLayoutService } from '../services/NormalSkyLayoutService';
 export struct NormalSkyControls {
   @Prop viewport: NormalSkyViewport;
   @Prop layers: SkyLayerVisibility;
+  @Prop backdropMode: SkyBackdropMode = SkyBackdropMode.NAVIGATION;
+  @Prop backdropStatus: SkySurveyBackdropStatus = SkySurveyBackdropStatus.DISABLED;
   @Prop panelOpen: boolean = false;
   @Prop viewportWidth: number = 600.0;
   @Prop viewportHeight: number = 500.0;
@@ -27,6 +33,8 @@ export struct NormalSkyControls {
     (_fieldOfViewDegrees: number): void => {};
   onLayerChange: (layer: number, enabled: boolean) => void =
     (_layer: number, _enabled: boolean): void => {};
+  onBackdropModeChange: (mode: SkyBackdropMode) => void =
+    (_mode: SkyBackdropMode): void => {};
 
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
@@ -39,6 +47,40 @@ export struct NormalSkyControls {
             Text(`${this.viewport.fieldOfViewDegrees.toFixed(0)}°`)
               .fontSize(12).fontColor($r('app.color.app_brand'))
           }.width('100%')
+          Row({ space: 5 }) {
+            Button($r('app.string.normal_sky_backdrop_navigation'))
+              .layoutWeight(1).height(30).fontSize(11).fontWeight(FontWeight.Medium)
+              .fontColor(this.backdropMode === SkyBackdropMode.NAVIGATION ?
+                $r('app.color.sky_text_primary') : $r('app.color.sky_text_secondary'))
+              .backgroundColor(this.backdropMode === SkyBackdropMode.NAVIGATION ?
+                $r('app.color.app_brand') : $r('app.color.sky_surface_soft'))
+              .borderRadius(15)
+              .onClick(() => { this.onBackdropModeChange(SkyBackdropMode.NAVIGATION); })
+            Button($r('app.string.normal_sky_backdrop_photography'))
+              .layoutWeight(1).height(30).fontSize(11).fontWeight(FontWeight.Medium)
+              .fontColor(this.backdropMode === SkyBackdropMode.VISIBLE_PHOTOGRAPHY ?
+                $r('app.color.sky_text_primary') : $r('app.color.sky_text_secondary'))
+              .backgroundColor(this.backdropMode === SkyBackdropMode.VISIBLE_PHOTOGRAPHY ?
+                $r('app.color.app_brand') : $r('app.color.sky_surface_soft'))
+              .borderRadius(15)
+              .onClick(() => { this.onBackdropModeChange(SkyBackdropMode.VISIBLE_PHOTOGRAPHY); })
+          }
+          .width('100%')
+          if (this.backdropMode === SkyBackdropMode.VISIBLE_PHOTOGRAPHY) {
+            if (this.backdropStatus === SkySurveyBackdropStatus.LOADING) {
+              Text($r('app.string.normal_sky_backdrop_loading'))
+                .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).width('100%')
+            } else if (this.backdropStatus === SkySurveyBackdropStatus.FAILED) {
+              Text($r('app.string.normal_sky_backdrop_unavailable'))
+                .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).width('100%')
+            } else if (this.backdropStatus === SkySurveyBackdropStatus.DISABLED) {
+              Text($r('app.string.normal_sky_backdrop_deep_view'))
+                .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).width('100%')
+            } else {
+              Text($r('app.string.normal_sky_backdrop_reference'))
+                .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).width('100%')
+            }
+          }
           Column({ space: 4 }) {
             Row() {
               Text($r('app.string.normal_sky_field_of_view')).fontSize(11)
@@ -55,13 +97,14 @@ export struct NormalSkyControls {
           }.width('100%')
           Scroll() {
             Column({ space: 3 }) {
-              this.LayerToggle('星座连线', 0, this.layers.constellationLines)
-              this.LayerToggle('赤道网格', 1, this.layers.equatorialGrid)
-              this.LayerToggle('黄道', 2, this.layers.ecliptic)
-              this.LayerToggle('地平线', 3, this.layers.horizon)
-              this.LayerToggle('深空天体', 4, this.layers.deepSky)
-              this.LayerToggle('太阳系', 5, this.layers.solarSystem)
-              this.LayerToggle($r('app.string.normal_sky_direction_guides'), 6, this.layers.directionGuides)
+              this.LayerToggle($r('app.string.normal_sky_galactic_plane'), 0, this.layers.galacticPlane)
+              this.LayerToggle('星座连线', 1, this.layers.constellationLines)
+              this.LayerToggle('赤道网格', 2, this.layers.equatorialGrid)
+              this.LayerToggle('黄道', 3, this.layers.ecliptic)
+              this.LayerToggle('地平线', 4, this.layers.horizon)
+              this.LayerToggle('深空天体', 5, this.layers.deepSky)
+              this.LayerToggle('太阳系', 6, this.layers.solarSystem)
+              this.LayerToggle($r('app.string.normal_sky_direction_guides'), 7, this.layers.directionGuides)
               Text(`${this.catalogStatus} · ${this.lineCatalogStatus}`)
                 .fontSize(10).fontColor($r('app.color.sky_text_tertiary')).maxLines(2)
                 .width('100%').padding({ top: 4, bottom: 4 })

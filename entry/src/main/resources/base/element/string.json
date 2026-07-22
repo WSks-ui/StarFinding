@@ -41,6 +41,34 @@
       "value": "方位辅助"
     },
     {
+      "name": "normal_sky_galactic_plane",
+      "value": "银河平面"
+    },
+    {
+      "name": "normal_sky_backdrop_navigation",
+      "value": "导航"
+    },
+    {
+      "name": "normal_sky_backdrop_photography",
+      "value": "摄影"
+    },
+    {
+      "name": "normal_sky_backdrop_loading",
+      "value": "正在校准摄影底图…"
+    },
+    {
+      "name": "normal_sky_backdrop_reference",
+      "value": "ESO 可见光参考影像 · 仅视觉参考"
+    },
+    {
+      "name": "normal_sky_backdrop_unavailable",
+      "value": "摄影底图暂不可用，已保留导航星图"
+    },
+    {
+      "name": "normal_sky_backdrop_deep_view",
+      "value": "摄影底图仅在 20° 以上视场显示"
+    },
+    {
       "name": "normal_sky_field_of_view",
       "value": "视场范围"
     },

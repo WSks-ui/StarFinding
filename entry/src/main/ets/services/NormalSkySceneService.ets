@@ -56,6 +56,7 @@ interface NormalSkyStaticCache {
   key: string;
   revision: number;
   objects: ProjectedSkyObject[];
+  galacticPlaneLines: SkyPolyline[];
   constellationLines: SkyPolyline[];
   gridLines: SkyPolyline[];
   eclipticLines: SkyPolyline[];
@@ -141,6 +142,7 @@ export class NormalSkySceneService {
       staticObjects: staticLayer.objects,
       dynamicObjects: dynamicObjects,
       objects: objects,
+      galacticPlaneLines: staticLayer.galacticPlaneLines,
       constellationLines: staticLayer.constellationLines,
       gridLines: staticLayer.gridLines,
       eclipticLines: staticLayer.eclipticLines,
@@ -207,6 +209,8 @@ export class NormalSkySceneService {
       key: key,
       revision: this.staticRevision,
       objects: objects,
+      galacticPlaneLines: query.layers.galacticPlane ?
+        this.buildGalacticPlaneLines(query, prepared) : [],
       constellationLines: query.layers.constellationLines ?
         this.buildConstellationLines(query, prepared) : [],
       gridLines: query.layers.equatorialGrid ? this.buildEquatorialGrid(query, prepared) : [],
@@ -483,6 +487,50 @@ export class NormalSkySceneService {
     return result;
   }
 
+  /**
+   * 使用 IAU J2000 Galactic -> Equatorial 旋转矩阵生成银河平面辅助线。
+   *
+   * 真实银河纹理由独立摄影底图服务提供；这里故意只保留细线，避免把人为绘制的宽带
+   * 误解为星云、尘埃或当前拍摄效果。
+   */
+  private buildGalacticPlaneLines(query: NormalSkySceneQuery,
+    prepared: NormalSkyPreparedProjection): SkyPolyline[] {
+    const coordinates: EquatorialCoordinate[] = [];
+    // 窄视场下粗采样会让宽笔触显出折线转角，因此固定使用 1° 采样；
+    // 361 个投影点相对恒星目录查询开销很小，并且只进入静态场景缓存。
+    for (let longitudeDegrees: number = 0.0;
+      longitudeDegrees <= 360.0; longitudeDegrees += 1.0) {
+      coordinates.push(this.galacticToEquatorial(longitudeDegrees, 0.0));
+    }
+    const projected: SkyPolyline[] = [];
+    this.appendProjectedLine(
+      projected, 'galactic-plane', SkyPolylineKind.GALACTIC, coordinates, query, prepared);
+    return projected;
+  }
+
+  private galacticToEquatorial(longitudeDegrees: number,
+    latitudeDegrees: number): EquatorialCoordinate {
+    const longitude: number = longitudeDegrees * Math.PI / 180.0;
+    const latitude: number = latitudeDegrees * Math.PI / 180.0;
+    const latitudeCosine: number = Math.cos(latitude);
+    const galacticX: number = latitudeCosine * Math.cos(longitude);
+    const galacticY: number = latitudeCosine * Math.sin(longitude);
+    const galacticZ: number = Math.sin(latitude);
+    // 标准 J2000 Galactic -> Equatorial 旋转矩阵（Equatorial -> Galactic 的转置）。
+    const equatorialX: number = -0.0548755604 * galacticX +
+      0.4941094279 * galacticY - 0.8676661490 * galacticZ;
+    const equatorialY: number = -0.8734370902 * galacticX -
+      0.4448296300 * galacticY - 0.1980763734 * galacticZ;
+    const equatorialZ: number = -0.4838350155 * galacticX +
+      0.7469822445 * galacticY + 0.4559837762 * galacticZ;
+    return {
+      raHours: AstronomyService.normalizeHours(
+        Math.atan2(equatorialY, equatorialX) * 12.0 / Math.PI),
+      decDegrees: Math.asin(Math.max(-1.0, Math.min(1.0, equatorialZ))) * 180.0 / Math.PI,
+      frame: EquatorialFrame.ICRS_J2000
+    };
+  }
+
   private buildHorizon(query: NormalSkySceneQuery,
     prepared: NormalSkyPreparedProjection): SkyPolyline[] {
     const observer: ObserverState | undefined = query.observer;
@@ -552,7 +600,8 @@ export class NormalSkySceneService {
     const selectedKey: string = selectedTarget !== undefined &&
       selectedTarget.precision === CatalogPrecision.DYNAMIC ? '' : query.selectedTargetId;
     return `${this.projectionCacheKey(query)}|${selectedKey}|` +
-      `${query.layers.constellationLines ? 1 : 0}${query.layers.equatorialGrid ? 1 : 0}` +
+      `${query.layers.galacticPlane ? 1 : 0}${query.layers.constellationLines ? 1 : 0}` +
+      `${query.layers.equatorialGrid ? 1 : 0}` +
       `${query.layers.ecliptic ? 1 : 0}${query.layers.deepSky ? 1 : 0}|` +
       `${this.visibleStars.isLoaded() ? 1 : 0}${this.lineCatalog.isLoaded() ? 1 : 0}|` +
       `${query.interactive === true ? 1 : 0}`;

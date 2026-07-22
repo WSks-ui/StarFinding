@@ -42,3 +42,5 @@ export * from './ObservationRunModePolicy';
 export * from './DigitalTwinReplayService';
 export * from './ObservationShareService';
 export * from './LiveObservationService';
+export * from './SkySurveyBackdropMath';
+export * from './SkySurveyBackdropService';
