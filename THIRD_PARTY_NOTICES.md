@@ -32,18 +32,20 @@ The complete license text is retained beside the vendored source as `LICENSE.txt
 ## ESO/S. Brunier visible-light all-sky image
 
 The optional photography backdrop in
-`entry/src/main/resources/rawfile/sky_survey_eso_visible_diffuse.rgb` is derived from
+`entry/src/main/resources/rawfile/sky_survey_eso_visible_6000x3000.png` is derived from
 [The Milky Way Panorama](https://www.eso.org/public/images/eso0932a/) by ESO/S. Brunier.
 The source image is used under the Creative Commons Attribution 4.0 International License
 (CC BY 4.0).
 
 - Official 6000×3000 source SHA-256:
   `60400C92C54B7C1BD12299C69E83B16E5B6256E7DABACC478C021758ECD28179`.
-- Derived 1536×768 raw RGB resource SHA-256:
-  `10BB62C22FB9305DB70898BF62A18F1ADD41AC9A20FE1AE98BFBDA15CAD5391A`.
+- Packaged 6000×3000 lossless PNG resource SHA-256:
+  `4BFCCC9F6C1619B58A6949D0AEDBA146D8E00A4E0A519861B989320B3CF3925A`.
 
 The reproducible build tool is `tools/build_sky_survey_backdrop.py`. It verifies the source hash,
-resizes the image, suppresses point sources and historical moving-object residuals with median and
-Gaussian filtering, then writes the offline resource. The application never downloads imagery at
-runtime. This backdrop is a visual reference only; coordinate calculations, observation planning,
+preserves the complete 6000×3000 image without destructive resizing or blur, and only applies a
+narrow periodic blend at the left/right all-sky seam before writing a lossless offline PNG.
+Photography mode hides the duplicate HYG point layer while dynamic solar-system objects continue to
+come from the application ephemeris. The application never downloads imagery at runtime. This
+backdrop is a visual reference only; coordinate calculations, observation planning,
 plate solving and device control continue to use their own astronomical data sources.
