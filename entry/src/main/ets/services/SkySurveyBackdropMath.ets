@@ -92,6 +92,44 @@ export class SkySurveyBackdropMath {
     };
   }
 
+  /**
+   * 将全天纹理的均匀 UV 顶点转换为赤道 J2000 单位方向。
+   *
+   * drawPixelMapMesh 会把纹理均匀分配到网格，因此网格顶点必须从源图 UV 正向恢复
+   * 银河方向，再使用 IAU J2000 旋转矩阵的转置变换到赤道坐标。u=0 与 u=1 都对应
+   * 银河经度 ±180° 的同一子午面，这是全天纹理几何闭合的基础。
+   */
+  static galacticEquirectangularDirection(u: number, v: number): SkySurveyDirection {
+    const safeU: number = SkySurveyBackdropMath.clamp(
+      SkySurveyBackdropMath.finiteOr(u, 0.5), 0.0, 1.0);
+    const safeV: number = SkySurveyBackdropMath.clamp(
+      SkySurveyBackdropMath.finiteOr(v, 0.5), 0.0, 1.0);
+    const longitudeRadians: number = (0.5 - safeU) * Math.PI * 2.0;
+    const latitudeRadians: number = (0.5 - safeV) * Math.PI;
+    const latitudeCosine: number = Math.cos(latitudeRadians);
+    return SkySurveyBackdropMath.galacticDirectionToEquatorial(
+      latitudeCosine * Math.cos(longitudeRadians),
+      latitudeCosine * Math.sin(longitudeRadians),
+      Math.sin(latitudeRadians));
+  }
+
+  /**
+   * IAU J2000 银河 -> 赤道旋转。该矩阵是上方赤道 -> 银河正交矩阵的转置，
+   * 所以不会引入拟合误差，也能与现有目录和星座线使用同一 ICRS/J2000 天球。
+   */
+  static galacticDirectionToEquatorial(directionX: number, directionY: number,
+    directionZ: number): SkySurveyDirection {
+    const direction: SkySurveyDirection = SkySurveyBackdropMath.normalizeDirection(
+      directionX, directionY, directionZ);
+    return SkySurveyBackdropMath.normalizeDirection(
+      -0.0548755604 * direction.x + 0.4941094279 * direction.y -
+        0.8676661490 * direction.z,
+      -0.8734370902 * direction.x - 0.4448296300 * direction.y -
+        0.1980763734 * direction.z,
+      -0.4838350155 * direction.x + 0.7469822445 * direction.y +
+        0.4559837762 * direction.z);
+  }
+
   /** 赤道 J2000 单位方向到全天摄影底图 UV 的快捷链路。 */
   static equatorialDirectionToEquirectangularUv(directionX: number, directionY: number,
     directionZ: number): SkySurveyEquirectangularUv {

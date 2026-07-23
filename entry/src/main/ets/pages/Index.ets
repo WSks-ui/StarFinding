@@ -1,6 +1,5 @@
 import { common } from '@kit.AbilityKit';
 import { FrameCallback } from '@kit.ArkUI';
-import { image } from '@kit.ImageKit';
 import { ArSkyDome } from '../components/ArSkyDome';
 import { DeviceCameraPreview } from '../components/DeviceCameraPreview';
 import { DeviceWorkspace } from '../components/DeviceWorkspace';
@@ -11,6 +10,10 @@ import { NormalSkyOrientationOverlay } from '../components/NormalSkyOrientationO
 import { NormalSkyTimeControls } from '../components/NormalSkyTimeControls';
 import { PlanningDrawer } from '../components/PlanningDrawer';
 import { PostWorkspace } from '../components/PostWorkspace';
+import {
+  SkySurveyBackdropController,
+  SkySurveyMeshBackdrop
+} from '../components/SkySurveyMeshBackdrop';
 import { SkyWorkspace } from '../components/SkyWorkspace';
 import { TaskWorkspace } from '../components/TaskWorkspace';
 import { WorkspaceNavigationDock } from '../components/WorkspaceNavigationDock';
@@ -153,8 +156,6 @@ import {
   SimulationEntryDecision,
   SimulationEntryState,
   SkyBackdropMode,
-  SkySurveyBackdropFrame,
-  SkySurveyBackdropService,
   SkySurveyBackdropStatus,
   TaskSessionStore,
   TaskSessionPresentationService,
@@ -221,7 +222,11 @@ function emptyNormalSkyScene(): NormalSkyScene {
   };
 }
 
-const NORMAL_SCENE_MIN_FRAME_INTERVAL_NS: number = 10000000.0;
+/*
+ * 完整目录场景在交互期间最多约 30fps。摄影底图拥有独立的显示帧快照，可继续按 VSync
+ * 跟手；恒星筛选、星座线、标签和地平遮罩不再抢占每一个 60/120Hz 显示帧。
+ */
+const NORMAL_SCENE_MIN_FRAME_INTERVAL_NS: number = 33333333.0;
 
 /**
  * 普通星图交互更新跟随 ArkUI 下一显示帧执行，避免固定 16ms 定时器等待时间与场景构建耗时相加。
@@ -276,15 +281,12 @@ struct Index {
   @State private normalScene: NormalSkyScene = emptyNormalSkyScene();
   @State private normalLayers: SkyLayerVisibility = DEFAULT_SKY_LAYERS;
   @State private normalBackdropMode: SkyBackdropMode = SkyBackdropMode.NAVIGATION;
-  @State private skySurveyBackdropFrame: SkySurveyBackdropFrame =
-    SkySurveyBackdropService.emptyFrame();
   /**
-   * PixelMap 必须作为页面直属状态绑定 Image。
-   *
-   * API 23 真机不能可靠渲染封装在 SkySurveyBackdropFrame 后再传入子组件的原生纹理句柄；
-   * 独立状态与官方 PixelMap 示例一致，同时让普通星图 Canvas 保持纯透明叠加层。
+   * 全天摄影纹理由独立 Drawing Canvas 组件持有，页面只保留真实绘制状态。
+   * READY 表示网格已经成功提交，NormalSkyMap 此时才隐藏重复星点并保持背景透明。
    */
-  @State private skySurveyBackdropPixelMap: image.PixelMap | undefined = undefined;
+  @State private skySurveyBackdropStatus: SkySurveyBackdropStatus =
+    SkySurveyBackdropStatus.DISABLED;
   @State private normalTimeState: NormalSkyTimeState = NormalSkyTimeService.realtime();
   @State private normalLayerPanelOpen: boolean = false;
   @State private skyViewportWidth: number = 600;
@@ -421,11 +423,6 @@ struct Index {
   private readonly normalSkyCatalog: NormalSkyCatalogService = new NormalSkyCatalogService();
   private readonly normalSkySceneService: NormalSkySceneService =
     new NormalSkySceneService(this.visibleStarCatalog, this.normalSkyCatalog);
-  /**
-   * 摄影底图与目录场景分离：停止交互后才异步重投影纹理，不能进入每个触摸帧的场景构建。
-   */
-  private readonly skySurveyBackdropService: SkySurveyBackdropService =
-    new SkySurveyBackdropService();
   private readonly skyDomeSceneService: SkyDomeSceneService = new SkyDomeSceneService();
   private readonly gestureInterpreter: GestureInterpreter = new GestureInterpreter();
   private readonly normalSkyGestureController: NormalSkyGestureController = new NormalSkyGestureController();
@@ -450,16 +447,17 @@ struct Index {
   private normalSceneUpdateTimer: number = -1;
   private normalSceneFramePending: boolean = false;
   private lastNormalSceneFrameTimeNs: number = 0.0;
+  private normalViewportGeneration: number = 0;
+  private lastBackdropViewportGeneration: number = -1;
+  private lastBackdropInteractive: boolean = false;
+  private readonly skySurveyBackdropController: SkySurveyBackdropController =
+    new SkySurveyBackdropController();
   private readonly normalSceneFrameCallback: NormalSceneFrameCallback =
     new NormalSceneFrameCallback((frameTimeInNano: number): void => {
       this.flushNormalSceneFrame(frameTimeInNano);
     });
   private normalSceneSettleTimer: number = -1;
   private normalSceneInteractive: boolean = false;
-  private skySurveyBackdropGeneration: number = 0;
-  private skySurveyBackdropTimer: number = -1;
-  private skySurveyBackdropRenderedKey: string = '';
-  private skySurveyBackdropPendingKey: string = '';
   private normalInertiaTimer: number = -1;
   private normalFlyTimer: number = -1;
   private lastPanOffsetX: number = 0.0;
@@ -527,7 +525,6 @@ struct Index {
     this.clearTaskPolling();
     this.clearNormalMotion();
     this.clearNormalSceneTimer();
-    this.clearSkySurveyBackdrop(true);
     this.visibleStarCatalog.clear();
     this.normalSkyCatalog.clear();
     this.domeCatalogStars = [];
@@ -984,23 +981,29 @@ struct Index {
         .transition(TransitionEffect.OPACITY.animation(MotionTokens.standard()))
       } else {
         Stack() {
-          if (this.skySurveyBackdropPixelMap !== undefined &&
-            (this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.READY ||
-              this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.LOADING) &&
-            this.skySurveyBackdropFrame.opacity > 0.0) {
-            Image(this.skySurveyBackdropPixelMap)
-              .width('100%')
-              .height('100%')
-              .objectFit(ImageFit.Fill)
-              .opacity(this.skySurveyBackdropFrame.opacity)
-              .hitTestBehavior(HitTestMode.None)
-          }
+          SkySurveyMeshBackdrop({
+            controller: this.skySurveyBackdropController,
+            widthPixels: this.skyViewportWidth,
+            heightPixels: this.skyViewportHeight,
+            backdropActive: this.normalBackdropMode === SkyBackdropMode.VISIBLE_PHOTOGRAPHY,
+            onStatusChange: (status: SkySurveyBackdropStatus, message: string): void => {
+              this.applySkySurveyBackdropStatus(status, message);
+            }
+          })
           NormalSkyMap({
             scene: this.normalScene,
             widthPixels: this.skyViewportWidth,
             heightPixels: this.skyViewportHeight,
             photographyBackdropVisible: this.hasVisibleSkySurveyBackdrop(),
             onObjectSelected: (objectId: string): void => {
+              /*
+               * 摄影层按显示帧跟手，而目录对象为控制负载最多约 30fps 更新。交互尚未
+               * 收敛时两层可能短暂相差一两帧，此时忽略点击比使用旧屏幕坐标误选更安全。
+               * 停手后的精确场景重建完成后，正常点击会立即恢复。
+               */
+              if (this.normalSceneInteractive) {
+                return;
+              }
               this.selectNormalSkyObject(objectId);
             }
           })
@@ -1090,7 +1093,7 @@ struct Index {
       viewport: this.normalViewport,
       layers: this.normalLayers,
       backdropMode: this.normalBackdropMode,
-      backdropStatus: this.skySurveyBackdropFrame.status,
+      backdropStatus: this.skySurveyBackdropStatus,
       panelOpen: this.normalLayerPanelOpen,
       viewportWidth: this.skyViewportWidth,
       viewportHeight: this.skyViewportHeight,
@@ -1593,7 +1596,11 @@ struct Index {
       this.skyChromeVisible = true;
       this.updateGestureCameraActivity();
       if (this.skyMode === 0) this.updateProjectedTargets(true);
-      if (this.skyMode === 1) this.prewarmGestureModel();
+      if (this.skyMode === 1) {
+        this.prewarmGestureModel();
+        // 从其他工作区返回时立即恢复精确目录与摄影底图，不能等待下一次触摸或分钟定时器。
+        this.updateNormalScene();
+      }
     }
   }
 
@@ -1670,7 +1677,7 @@ struct Index {
     });
     if (mode === 0) {
       this.clearNormalMotion();
-      this.clearSkySurveyBackdrop(false);
+      this.finishNormalSceneInteraction();
       this.setGestureEnabled(false);
       this.updateProjectedTargets(true);
     } else {
@@ -1691,6 +1698,10 @@ struct Index {
   /** 工作区顺序只决定视觉方向；硬件连接、轮询和任务生命周期不进入动画事务。 */
   private changeActiveSection(section: number): void {
     if (section === this.activeSection) return;
+    if (this.activeSection === 0 && section !== 0 && this.skyMode === 1) {
+      this.clearNormalMotion();
+      this.finishNormalSceneInteraction();
+    }
     this.workspaceDirection = section > this.activeSection ? 1 : -1;
     this.getUIContext().animateTo(MotionTokens.standard(), () => {
       this.activeSection = section;
@@ -2611,6 +2622,7 @@ struct Index {
   private applyNormalViewState(viewState: NormalSkyViewState): void {
     this.normalViewState = NormalSkyViewStateService.normalizeState(viewState);
     this.normalViewport = NormalSkyViewStateService.snapshot(this.normalViewState);
+    this.normalViewportGeneration++;
   }
 
   private normalObserver(timestampMs: number): ObserverState | undefined {
@@ -2627,6 +2639,7 @@ struct Index {
 
   private updateNormalScene(): void {
     this.clearScheduledNormalSceneUpdate();
+    this.syncNormalBackdropViewport();
     this.rebuildNormalScene();
   }
 
@@ -2646,6 +2659,7 @@ struct Index {
     if (this.normalSceneUpdateTimer >= 0) return;
     this.normalSceneUpdateTimer = setTimeout(() => {
       this.normalSceneUpdateTimer = -1;
+      this.syncNormalBackdropViewport();
       this.rebuildNormalScene();
     }, 16);
   }
@@ -2654,27 +2668,31 @@ struct Index {
     if (!this.normalSceneFramePending) {
       return;
     }
+    this.normalSceneFramePending = false;
+    if (this.activeSection !== 0 || this.skyMode !== 1) {
+      return;
+    }
+
+    /*
+     * 摄影层先消费最新四元数快照，目录层是否达到重建间隔不会阻塞它。
+     * 这样拖动、旋转和缩放的视觉反馈不再等待恒星查询及标签避让完成。
+     */
+    this.syncNormalBackdropViewport();
     if (this.lastNormalSceneFrameTimeNs > 0.0 &&
       frameTimeInNano - this.lastNormalSceneFrameTimeNs < NORMAL_SCENE_MIN_FRAME_INTERVAL_NS) {
-      // 120 Hz 屏幕在相邻 VSync 间只有约 8.3 ms；场景构建限制为隔帧一次，
-      // 避免追逐 120 Hz 触摸事件造成高低帧交替，60 Hz 屏幕仍会逐帧更新。
+      // 未达到目录层重建间隔时继续等待下一 VSync，但摄影背景已经完成本帧更新。
+      this.normalSceneFramePending = true;
       this.getUIContext().postFrameCallback(this.normalSceneFrameCallback);
       return;
     }
-    this.normalSceneFramePending = false;
     this.lastNormalSceneFrameTimeNs = frameTimeInNano;
-    if (this.activeSection === 0 && this.skyMode === 1) {
-      this.rebuildNormalScene();
-    }
+    this.rebuildNormalScene();
   }
 
   private markNormalSceneInteractive(): void {
     if (!this.normalSceneInteractive) {
-      // 已在后台排队的像素重投影不能在手指刚接触屏幕时抢占主线程；
-      // 代次失效后仍会安全释放过期 PixelMap，当前可见底图保持不动。
-      this.invalidateSkySurveyBackdropRequest();
+      this.normalSceneInteractive = true;
     }
-    this.normalSceneInteractive = true;
     if (this.normalSceneSettleTimer >= 0) {
       clearTimeout(this.normalSceneSettleTimer);
     }
@@ -2698,6 +2716,18 @@ struct Index {
     }
   }
 
+  private syncNormalBackdropViewport(force: boolean = false): void {
+    if (!force &&
+      this.lastBackdropViewportGeneration === this.normalViewportGeneration &&
+      this.lastBackdropInteractive === this.normalSceneInteractive) {
+      return;
+    }
+    this.skySurveyBackdropController.update(
+      this.normalViewport, this.normalSceneInteractive);
+    this.lastBackdropViewportGeneration = this.normalViewportGeneration;
+    this.lastBackdropInteractive = this.normalSceneInteractive;
+  }
+
   private rebuildNormalScene(): void {
     const timestampMs: number = this.normalTimeState.timestampMs;
     this.normalScene = this.normalSkySceneService.build({
@@ -2711,88 +2741,7 @@ struct Index {
       interactive: this.normalSceneInteractive,
       showDirectionMarkers: NormalSkyLayoutService.showDirectionMarkers(
         this.useSkyBottomSheet(), this.skyOverlayPanel)
-      });
-    this.scheduleSkySurveyBackdropRefresh();
-  }
-
-  /**
-   * 摄影纹理只在普通星图稳定后刷新。交互时保留上一帧正确纹理，目录对象仍以实时
-   * 球面投影响应触控；因此不会把昂贵像素反投影塞进拖动、缩放或旋转的显示帧。
-   */
-  private scheduleSkySurveyBackdropRefresh(): void {
-    if (!this.isPhotographyBackdropActive() || this.normalSceneInteractive) {
-      return;
-    }
-    const requestKey: string = this.skySurveyBackdropKey();
-    if (this.normalViewport.fieldOfViewDegrees <= 20.0) {
-      if (requestKey === this.skySurveyBackdropRenderedKey &&
-        this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.DISABLED) {
-        return;
-      }
-      this.invalidateSkySurveyBackdropRequest();
-      this.skySurveyBackdropRenderedKey = requestKey;
-      this.replaceSkySurveyBackdropFrame(SkySurveyBackdropService.emptyFrame(
-        '摄影底图仅在 20° 以上视场显示'));
-      return;
-    }
-    if (requestKey === this.skySurveyBackdropRenderedKey &&
-      (this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.READY ||
-        this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.FAILED)) {
-      return;
-    }
-    if (requestKey === this.skySurveyBackdropPendingKey) {
-      return;
-    }
-    this.invalidateSkySurveyBackdropRequest();
-    const generation: number = this.skySurveyBackdropGeneration;
-    this.skySurveyBackdropPendingKey = requestKey;
-    const previousFrame: SkySurveyBackdropFrame = this.skySurveyBackdropFrame;
-    // 保留上一张有效 PixelMap，直到同一代次的精确投影完成，避免底图在停手后闪黑。
-    this.skySurveyBackdropFrame = {
-      status: SkySurveyBackdropStatus.LOADING,
-      pixelMap: previousFrame.pixelMap,
-      widthPixels: previousFrame.widthPixels,
-      heightPixels: previousFrame.heightPixels,
-      opacity: previousFrame.opacity,
-      generation: generation,
-      message: '正在校准摄影底图'
-    };
-    this.skySurveyBackdropTimer = setTimeout(() => {
-      this.skySurveyBackdropTimer = -1;
-      this.renderSkySurveyBackdrop(generation, requestKey);
-    }, 150);
-  }
-
-  private async renderSkySurveyBackdrop(generation: number, requestKey: string): Promise<void> {
-    const context: common.UIAbilityContext | undefined =
-      AppStorage.get<common.UIAbilityContext>('uiAbilityContext');
-    let frame: SkySurveyBackdropFrame;
-    if (context === undefined) {
-      frame = {
-        status: SkySurveyBackdropStatus.FAILED,
-        pixelMap: undefined,
-        widthPixels: 0,
-        heightPixels: 0,
-        opacity: 0.0,
-        generation: generation,
-        message: '应用上下文未就绪'
-      };
-    } else {
-      frame = await this.skySurveyBackdropService.render(
-        context, this.normalViewport, this.normalSkySize(), generation);
-    }
-    /*
-     * 新一次拖动、模式切换或离开页面都会递增 generation。过期结果即使已创建
-     * PixelMap 也只能释放，绝不能覆盖当前视口对应的纹理。
-     */
-    if (generation !== this.skySurveyBackdropGeneration || requestKey !== this.skySurveyBackdropKey() ||
-      !this.isPhotographyBackdropActive()) {
-      this.skySurveyBackdropService.release(frame);
-      return;
-    }
-    this.skySurveyBackdropPendingKey = '';
-    this.skySurveyBackdropRenderedKey = requestKey;
-    this.replaceSkySurveyBackdropFrame(frame);
+    });
   }
 
   private isPhotographyBackdropActive(): boolean {
@@ -2801,55 +2750,21 @@ struct Index {
   }
 
   /**
-   * 子 Canvas 只需要知道是否应保持透明和隐藏重复 HYG 星点，不能接收 PixelMap。
-   * API 23 的原生纹理句柄始终由页面直属 Image 持有，避免经过对象 @Prop 再次封装。
+   * 只有 Drawing Canvas 已经成功提交全天网格时，才隐藏导航背景和重复 HYG 星点。
+   * 首次解码期间继续显示完整导航星图，避免摄影层尚未就绪时出现黑屏。
    */
   private hasVisibleSkySurveyBackdrop(): boolean {
-    return this.skySurveyBackdropPixelMap !== undefined &&
-      (this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.READY ||
-        this.skySurveyBackdropFrame.status === SkySurveyBackdropStatus.LOADING) &&
-      this.skySurveyBackdropFrame.opacity > 0.0;
+    return this.isPhotographyBackdropActive() &&
+      this.skySurveyBackdropStatus === SkySurveyBackdropStatus.READY;
   }
 
-  /**
-   * 纹理的重投影键只包含真正影响球面采样的几何状态；模拟时间、标签和动态行星变化
-   * 不会触发重算，因为可见光银河参考图固定在 ICRS/Galactic 坐标中。
-   */
-  private skySurveyBackdropKey(): string {
-    return `${this.normalViewport.centerRaHours.toFixed(4)}|` +
-      `${this.normalViewport.centerDecDegrees.toFixed(4)}|` +
-      `${this.normalViewport.fieldOfViewDegrees.toFixed(3)}|` +
-      `${this.normalViewport.rotationDegrees.toFixed(3)}|` +
-      `${Math.round(this.skyViewportWidth)}|${Math.round(this.skyViewportHeight)}`;
-  }
-
-  private invalidateSkySurveyBackdropRequest(): void {
-    this.skySurveyBackdropGeneration++;
-    this.skySurveyBackdropPendingKey = '';
-    if (this.skySurveyBackdropTimer >= 0) {
-      clearTimeout(this.skySurveyBackdropTimer);
-      this.skySurveyBackdropTimer = -1;
+  private applySkySurveyBackdropStatus(status: SkySurveyBackdropStatus, message: string): void {
+    if (status === this.skySurveyBackdropStatus) {
+      return;
     }
-  }
-
-  private clearSkySurveyBackdrop(releaseSource: boolean): void {
-    this.invalidateSkySurveyBackdropRequest();
-    this.skySurveyBackdropRenderedKey = '';
-    const previousFrame: SkySurveyBackdropFrame = this.skySurveyBackdropFrame;
-    this.skySurveyBackdropPixelMap = undefined;
-    this.skySurveyBackdropFrame = SkySurveyBackdropService.emptyFrame();
-    this.skySurveyBackdropService.release(previousFrame);
-    if (releaseSource) {
-      this.skySurveyBackdropService.clear();
-    }
-  }
-
-  private replaceSkySurveyBackdropFrame(frame: SkySurveyBackdropFrame): void {
-    const previousFrame: SkySurveyBackdropFrame = this.skySurveyBackdropFrame;
-    this.skySurveyBackdropPixelMap = frame.pixelMap;
-    this.skySurveyBackdropFrame = frame;
-    if (previousFrame.pixelMap !== undefined) {
-      this.skySurveyBackdropService.release(previousFrame);
+    this.skySurveyBackdropStatus = status;
+    if (status === SkySurveyBackdropStatus.FAILED && message.length > 0) {
+      this.operationMessage = message;
     }
   }
 
@@ -2925,7 +2840,7 @@ struct Index {
     }
     this.normalBackdropMode = mode;
     if (mode === SkyBackdropMode.NAVIGATION) {
-      this.clearSkySurveyBackdrop(false);
+      this.skySurveyBackdropStatus = SkySurveyBackdropStatus.DISABLED;
       this.operationMessage = '已切换为导航星图';
     } else {
       this.operationMessage = '已切换为摄影底图；仅作视觉参考，不参与定位或设备控制';
@@ -3020,7 +2935,8 @@ struct Index {
     const scale: number = this.normalViewState.fieldOfViewDegrees / Math.max(0.001, target);
     this.applyNormalViewState(NormalSkyViewStateService.zoomAt(this.normalViewState,
       this.normalSkySize(), scale, this.skyViewportWidth / 2.0, this.skyViewportHeight / 2.0));
-    this.scheduleNormalSceneUpdate();
+    // 视场滑块会连续回调，必须走交互帧限流；停手 140ms 后再恢复完整目录精度。
+    this.scheduleNormalSceneUpdate(true);
   }
 
   private selectNormalSkyObject(objectId: string): void {
@@ -3162,17 +3078,28 @@ struct Index {
   }
 
   private clearNormalSceneTimer(): void {
+    this.finishNormalSceneInteraction();
+    if (this.normalSceneTimer >= 0) {
+      clearInterval(this.normalSceneTimer);
+      this.normalSceneTimer = -1;
+    }
+    this.normalTimeLastTickMs = 0;
+  }
+
+  /**
+   * 统一结束普通星图的高频交互事务。
+   *
+   * 页面切换、模式切换和 Ability 退出都必须清除待处理帧、惯性收敛定时器，并把摄影
+   * 控制器恢复为精细网格；否则返回星图后可能长期停留在上一段交互的粗网格和旧命中场景。
+   */
+  private finishNormalSceneInteraction(): void {
     this.clearScheduledNormalSceneUpdate();
     if (this.normalSceneSettleTimer >= 0) {
       clearTimeout(this.normalSceneSettleTimer);
       this.normalSceneSettleTimer = -1;
     }
     this.normalSceneInteractive = false;
-    if (this.normalSceneTimer >= 0) {
-      clearInterval(this.normalSceneTimer);
-      this.normalSceneTimer = -1;
-    }
-    this.normalTimeLastTickMs = 0;
+    this.syncNormalBackdropViewport(true);
   }
 
   private applyHandLandmarks(result: HandLandmarkAnalysisResult): void {

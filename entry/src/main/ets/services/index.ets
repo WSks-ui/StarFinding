@@ -44,3 +44,4 @@ export * from './ObservationShareService';
 export * from './LiveObservationService';
 export * from './SkySurveyBackdropMath';
 export * from './SkySurveyBackdropService';
+export * from './SkySurveyMeshProjectionService';
